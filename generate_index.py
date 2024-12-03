@@ -18,3 +18,4 @@ ctx_input = tokenizer(contexts, padding=True, truncation=True, return_tensors='p
 query_emb = query_encoder(**query_input).last_hidden_state[:, 0, :]
 ctx_emb = context_encoder(**ctx_input).last_hidden_state[:, 0, :]
 # %%
+temporary_variable = 0
