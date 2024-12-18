@@ -232,6 +232,19 @@ class ExplainableAutoModelForRAG(torch.nn.Module):
 
         return rag
     
+    @property
+    def in_tokens(self):
+        if hasattr(self, '_in_tokens'): return self._in_tokens
+        else: return None
+    
+    @property
+    def special_tokens_mask(self):
+        if hasattr(self, '_special_tokens_mask'): return {key:
+            ~self._special_tokens_mask[key].astype(bool)
+            for key in self._special_tokens_mask
+        }
+        else: return None
+
     def grad(self, layer:int=0, filter_special_tokens:bool=True):
         '''Gradients towards the inputs of the last batch.
 
@@ -249,7 +262,7 @@ class ExplainableAutoModelForRAG(torch.nn.Module):
     
         if filter_special_tokens:
             # set the importance of special tokens to 0.
-            grad = {key: grad[key] * self.special_tokens_mask[key][:,:,None] for key in grad}
+            grad = {key: grad[key] * self._special_tokens_mask[key][:,:,None] for key in grad}
 
         return grad
 
@@ -271,7 +284,7 @@ class ExplainableAutoModelForRAG(torch.nn.Module):
 
         if filter_special_tokens:
             # set the importance of special tokens to 0.
-            aGrad = {key: aGrad[key] * self.special_tokens_mask[key][:,None,:] for key in aGrad}
+            aGrad = {key: aGrad[key] * self._special_tokens_mask[key][:,None,:] for key in aGrad}
 
         return aGrad
 

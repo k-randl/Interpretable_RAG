@@ -1,5 +1,6 @@
 #%%
 import torch
+import numpy as np
 import matplotlib.pyplot as plt
 from resources.modelling import ExplainableAutoModelForRAG
 
@@ -18,56 +19,104 @@ rag = ExplainableAutoModelForRAG.from_pretrained(
 # Create RAG model:
 rag(query, contexts, output_attentions=True, output_hidden_states=True)
 
-#%% aGrad:
-fig, axs = plt.subplots(3,1)
+#%%
+def plot_importance(ax, scores, tokens, title):
+    assert len(scores) == len(tokens)
+    y = np.arange(len(scores))[::-1]
+    ax.barh(y, scores)
+    ax.set_yticks(y, labels=tokens)
+    ax.set_title(title)
 
-tokens = rag.in_tokens['query'][0]
-axs[0].imshow(rag.aGrad()['query'].mean(axis=1).abs())
-axs[0].set_xticks(range(len(tokens)), labels=tokens)
-axs[0].set_yticks([])
-axs[0].set_title('Query:')
+#%% aGrad:
+fig, axs = plt.subplots(1, 3)
+
+plot_importance(axs[0], 
+    scores = rag.aGrad()['query'][0].mean(axis=0), 
+    tokens = rag.in_tokens['query'][0],
+    title  = 'Query:'
+)
 
 for i in range(len(contexts)):
-    tokens = rag.in_tokens['context'][i]
-    axs[i+1].imshow(rag.aGrad()['context'].mean(axis=1).abs()[i].reshape(1,-1))
-    axs[i+1].set_xticks(range(len(tokens)), labels=tokens, rotation=90)
-    axs[i+1].set_yticks([])
-    axs[i+1].set_title(f'Context {i+1:d}:')
+    plot_importance(axs[1+i], 
+        scores = rag.aGrad()['context'][i].mean(axis=0), 
+        tokens = rag.in_tokens['context'][i],
+        title  = f'Context {i+1:d}:'
+    )
 
+plt.tight_layout()
 plt.show()
 
 #%% Grad x In:
-fig, axs = plt.subplots(3,1)
+fig, axs = plt.subplots(1, 3)
 
-tokens = rag.in_tokens['query'][0]
-axs[0].imshow(rag.gradIn()['query'].abs())
-axs[0].set_xticks(range(len(tokens)), labels=tokens)
-axs[0].set_yticks([])
-axs[0].set_title('Query:')
+plot_importance(axs[0], 
+    scores = rag.gradIn()['query'][0], 
+    tokens = rag.in_tokens['query'][0],
+    title  = 'Query:'
+)
 
 for i in range(len(contexts)):
-    tokens = rag.in_tokens['context'][i]
-    axs[i+1].imshow(rag.gradIn()['context'][i].abs().reshape(1,-1))
-    axs[i+1].set_xticks(range(len(tokens)), labels=tokens, rotation=90)
-    axs[i+1].set_yticks([])
-    axs[i+1].set_title(f'Context {i+1:d}:')
+    plot_importance(axs[1+i], 
+        scores = rag.gradIn()['context'][i], 
+        tokens = rag.in_tokens['context'][i],
+        title  = f'Context {i+1:d}:'
+    )
 
+plt.tight_layout()
 plt.show()
 
 #%% Grad:
-fig, axs = plt.subplots(3,1)
+fig, axs = plt.subplots(1, 3)
 
-tokens = rag.in_tokens['query'][0]
-axs[0].imshow(rag.grad()['query'].mean(axis=-1).abs())
-axs[0].set_xticks(range(len(tokens)), labels=tokens)
-axs[0].set_yticks([])
-axs[0].set_title('Query:')
+plot_importance(axs[0], 
+    scores = rag.grad()['query'][0].mean(axis=-1), 
+    tokens = rag.in_tokens['query'][0],
+    title  = 'Query:'
+)
 
 for i in range(len(contexts)):
-    tokens = rag.in_tokens['context'][i]
-    axs[i+1].imshow(rag.grad()['context'][i].mean(axis=-1).abs().reshape(1,-1))
-    axs[i+1].set_xticks(range(len(tokens)), labels=tokens, rotation=90)
-    axs[i+1].set_yticks([])
-    axs[i+1].set_title(f'Context {i+1:d}:')
+    plot_importance(axs[1+i], 
+        scores = rag.grad()['context'][i].mean(axis=-1), 
+        tokens = rag.in_tokens['context'][i],
+        title  = f'Context {i+1:d}:'
+    )
 
+plt.tight_layout()
 plt.show()
+
+#%% Shap:
+import shap
+
+SEPARATOR = rag.tokenizer.sep_token
+
+# create text masker:
+class InvariantTextMasker(shap.maskers.Text):
+    def __call__(self, mask, s, **kwargs):
+        mask = np.bitwise_or(mask, self.invariants(s)[0])
+        return super().__call__(mask, s, **kwargs)
+
+def predict_shap(inputs):
+    return [rag(*s.split(SEPARATOR))[0][0].detach().numpy() for s in inputs]
+
+def create_data_shap(query:str, contexts:list):
+    return [query + SEPARATOR + context for context in contexts]
+
+masker = InvariantTextMasker(rag.tokenizer, collapse_mask_token=True)
+explainer = shap.Explainer(predict_shap, masker)
+shap_values = explainer(create_data_shap(query, contexts))
+
+#%%
+fig, axs = plt.subplots(1,2)
+
+for i in range(len(shap_values.values)):
+    plot_importance(axs[i], 
+        scores = shap_values.values[i], 
+        tokens = shap_values.data[i],
+        title  = f'Context {i+1:d}:'
+    )
+
+plt.tight_layout()
+plt.show()
+
+#%%
+shap.plots.text(shap_values)
