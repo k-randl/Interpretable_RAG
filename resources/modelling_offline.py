@@ -79,7 +79,7 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
         )
 
         return encoder
-    
+
     def forward(self, contexts:List[str], **kwargs):
         # control gradient computation:
         prev_grad = torch.is_grad_enabled()
@@ -87,18 +87,18 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
 
         # Apply tokenizer
         ctx_input = self.tokenizer(contexts, padding=True, truncation=True, return_special_tokens_mask=True, return_tensors='pt')
+        token_mask = ctx_input.pop('special_tokens_mask') == 0.
         output = {
             'texts':                contexts,
-            'input_ids':            ctx_input.input_ids.detach().cpu(),
-            'special_tokens_mask':  ctx_input.pop('special_tokens_mask').detach().cpu(),
-            'in_tokens':            [[self.tokenizer.decode(token) for token in text] for text in ctx_input.input_ids]
+            'input_ids':            [ctx_input.input_ids[i, m].detach().cpu() for i, m in enumerate(token_mask)],
+            'in_tokens':            [[self.tokenizer.decode(token) for token in t[m]] for t, m in zip(ctx_input.input_ids, token_mask)]
         }
 
         # register gradient computation:
         self.context_encoder.get_input_embeddings().requires_grad_(True)
 
         # Compute embeddings: take the last-layer hidden state of the [CLS] token
-        ctx_output = self.context_encoder(**ctx_input, **kwargs)
+        ctx_output = self.context_encoder(**ctx_input.to(self.context_encoder.device), **kwargs)
         output['embedding'] = ctx_output.last_hidden_state[:, 0, :].detach().cpu()
         embedding_size = output['embedding'].shape[-1]
 
@@ -107,31 +107,31 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
 
         # register gradient computation for attention weights:
         if has_attentions:
-            # Tensor of shape (bs x n_heads x n_outputs x n_inputs)
+            # tensor of shape (bs x n_heads x n_outputs x n_inputs)
             a = ctx_output.attentions[-1]
 
-            # Tensor of shape (bs x n_heads x n_inputs)
-            output['a'] = a[:,:,0,:].detach().clone().cpu()
+            # list of tensors of shape (n_heads x n_inputs)
+            output['a'] = [a[i,:,0,m].detach().bfloat16().cpu() for i, m in enumerate(token_mask)]
 
             # register retain_grad:
             a.retain_grad()
 
-            # Tensor of shape (bs x n_heads x n_inputs x embedding_size)
-            output['da'] = torch.FloatTensor(a[:,:,0,:].shape + (embedding_size,), device='cpu')
+            # list of tensors of shape (n_heads x n_inputs x embedding_size)
+            output['da'] = [torch.BFloat16Tensor(item.shape + (embedding_size,), device='cpu') for item in output['a']]
 
         # register gradient computation for hidden states:
         if has_hidden_states:
-            # Tensor of shape (bs x n_inputs x embedding_size)
+            # tensor of shape (bs x n_inputs x embedding_size)
             h0 = ctx_output.hidden_states[0]
 
-            # Tensor of shape (bs x n_inputs x embedding_size)
-            output['h0'] = h0.detach().clone().cpu()
+            # list of tensors of shape (n_inputs x embedding_size)
+            output['h0'] = [h0[i,m,:].detach().bfloat16().cpu() for i, m in enumerate(token_mask)]
 
             # register retain_grad:
             h0.retain_grad()
 
-            # Tensor of shape (bs x n_inputs x embedding_size x embedding_size)
-            output['dh0'] = torch.FloatTensor(h0.shape + (embedding_size,), device='cpu')
+            # list of tensors of shape (n_inputs x embedding_size x embedding_size)
+            output['dh0'] = [torch.BFloat16Tensor(item.shape + (embedding_size,), device='cpu') for item in output['h0']]
 
         for i in tqdm(range(embedding_size), total=embedding_size):
             # reset old gradients:
@@ -143,12 +143,14 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
             # save gradients with regard to attention weights:
             if has_attentions:
                 a = ctx_output.attentions[-1]
-                output['da'][:,:,:,i] = a.grad[:,:,0,:].detach().clone().cpu()
+                for j, m in enumerate(token_mask):
+                    output['da'][j][:,:,i] = a.grad[j,:,0,m].detach().bfloat16().cpu()
 
             # save gradients with regard to hidden states:
             if has_hidden_states:
                 h0 = ctx_output.hidden_states[0]
-                output['dh0'][:,:,:,i] = h0.grad.detach().clone().cpu()
+                for j, m in enumerate(token_mask):
+                    output['dh0'][j][:,:,i] = h0.grad[j,m,:].detach().bfloat16().cpu()
 
         # reset gradient computation:
         torch.set_grad_enabled(prev_grad)
@@ -201,14 +203,6 @@ class ExplainableAutoModelForRAG(torch.nn.Module):
     @property
     def in_tokens(self):
         if hasattr(self, '_in_tokens'): return self._in_tokens
-        else: return None
-
-    @property
-    def special_tokens_mask(self):
-        if hasattr(self, '_special_tokens_mask'): return {key:
-            ~self._special_tokens_mask[key].astype(bool)
-            for key in self._special_tokens_mask
-        }
         else: return None
 
     def grad(self, filter_special_tokens:bool=True):
@@ -299,10 +293,10 @@ class ExplainableAutoModelForRAG(torch.nn.Module):
 
         # Apply tokenizer
         qry_input = self.tokenizer(query, return_special_tokens_mask=True, return_tensors='pt')
-
-        self._x = {'query': qry_input.input_ids.detach().cpu().numpy()}
-        self._special_tokens_mask = {'query':   1. - qry_input.pop('special_tokens_mask').detach().cpu().numpy()}
-        self._in_tokens = {'query': [[self.tokenizer.decode(token) for token in text] for text in qry_input.input_ids]}
+        token_mask = qry_input.pop('special_tokens_mask') == 0.
+        
+        self._x = {'query': [qry_input.input_ids[i, m].detach().cpu() for i, m in enumerate(token_mask)]}
+        self._in_tokens = {'query': [[self.tokenizer.decode(token) for token in t[m]] for t, m in zip(qry_input.input_ids, token_mask)]}
 
         # register gradient computation:
         self.query_encoder.get_input_embeddings().requires_grad_(True)
@@ -313,7 +307,7 @@ class ExplainableAutoModelForRAG(torch.nn.Module):
         index.grad = None
 
         # Compute embeddings: take the last-layer hidden state of the [CLS] token
-        qry_output = self.query_encoder(**qry_input, **kwargs)
+        qry_output = self.query_encoder(**qry_input.to(self.query_encoder.device), **kwargs)
 
         has_attentions    = checkattr(qry_output, 'attentions')
         has_hidden_states = checkattr(qry_output, 'hidden_states')
@@ -338,8 +332,7 @@ class ExplainableAutoModelForRAG(torch.nn.Module):
         # load retrieved docs (for first query):
         retrieved = metadata_from_json(dir, retrieved_ids[0])
 
-        self._x['context'] = np.array(retrieved['input_ids'])
-        self._special_tokens_mask['context'] = 1 - np.array(retrieved['special_tokens_mask'])
+        self._x['context'] = retrieved['input_ids']
         self._in_tokens['context'] = retrieved['in_tokens']
 
         # save gradients with regard to attention weights:
@@ -350,17 +343,17 @@ class ExplainableAutoModelForRAG(torch.nn.Module):
             a = qry_output.attentions[-1]
             # Tensor of shape (bs x n_heads x n_inputs)
             self._a = {
-                'query': a[:,:,0,:].detach().clone().cpu(),
-                'context': torch.stack(retrieved['a'])
+                'query': [a[i,:,0,m].detach().clone().cpu() for i, m in enumerate(token_mask)],
+                'context': retrieved['a']
             }
             # Tensor of shape (bs x n_heads x n_outputs x n_inputs)
             self._da = {
-                'query': a.grad[:,:,0,:].detach().clone().cpu(),
-                'context': torch.stack([
+                'query': [a.grad[i,:,0,m].detach().clone().cpu() for i, m in enumerate(token_mask)],
+                'context': [
                     ctx.to(qry)@qry.T
                     for ctx, qry
                     in zip(retrieved['da'], index.grad[retrieved_ids[0]])
-                ])
+                ]
             }
 
         # save gradients with regard to hidden states:
@@ -371,17 +364,17 @@ class ExplainableAutoModelForRAG(torch.nn.Module):
             h0 = qry_output.hidden_states[0]
             # Tensor of shape (bs x n_inputs x encoding_size)
             self._h0 = {
-                'query': h0.detach().clone().cpu(),
+                'query': [h0[i,m,:].detach().clone().cpu()  for i, m in enumerate(token_mask)],
                 'context': retrieved['h0']
             }
             # Tensor of shape (bs x n_inputs x encoding_size)
             self._dh0 = {
-                'query': h0.grad.detach().clone().cpu(),
-                'context': torch.stack([
+                'query': [h0.grad[i,m,:].detach().clone().cpu() for i, m in enumerate(token_mask)],
+                'context': [
                     ctx.to(qry)@qry.T
                     for ctx, qry
                     in zip(retrieved['dh0'], index.grad[retrieved_ids[0]])
-                ])
+                ]
             }
 
         # reset gradient computation:

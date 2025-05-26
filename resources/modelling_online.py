@@ -170,8 +170,8 @@ class ExplainableAutoModelForRAG(torch.nn.Module):
         }
 
         # Compute embeddings: take the last-layer hidden state of the [CLS] token
-        qry_output = self.query_encoder(**qry_input, **kwargs)
-        ctx_output = self.context_encoder(**ctx_input, **kwargs)
+        qry_output = self.query_encoder(**qry_input.to(self.query_encoder.device), **kwargs)
+        ctx_output = self.context_encoder(**ctx_input.to(self.context_encoder.device), **kwargs)
 
         # Compute dot product:
         similarity = qry_output.last_hidden_state[:, 0, :] @ ctx_output.last_hidden_state[:, 0, :].T

@@ -1,1 +1,0 @@
-{"facebook/dragon-plus-query-encoder": ["transformers.models.bert.modeling_bert", "BertModel"], "facebook/dragon-plus-context-encoder": ["transformers.models.bert.modeling_bert", "BertModel"]}

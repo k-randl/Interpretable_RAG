@@ -16,7 +16,7 @@ contexts = [
 enc = ExplainableAutoModelForContextEncoding.from_pretrained(
     'Snowflake/snowflake-arctic-embed-l-v2.0',
     add_pooling_layer = False
-)
+).to('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Calculate similarity:
 enc.save_index(contexts, 8, dir='index_snowflake', output_attentions=True, output_hidden_states=True)
@@ -25,7 +25,7 @@ enc.save_index(contexts, 8, dir='index_snowflake', output_attentions=True, outpu
 rag = ExplainableAutoModelForRAG.from_pretrained(
     'Snowflake/snowflake-arctic-embed-l-v2.0',
     add_pooling_layer = False
-)
+).to('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Calculate similarity:
 rag('query: ' + query, 2, dir='index_snowflake', output_attentions=True, output_hidden_states=True)

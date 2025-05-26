@@ -14,7 +14,7 @@ contexts = [
 rag = ExplainableAutoModelForRAG.from_pretrained(
     'facebook/dragon-plus-query-encoder',
     'facebook/dragon-plus-context-encoder'
-)
+).to('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Create RAG model:
 rag(query, contexts, output_attentions=True, output_hidden_states=True)

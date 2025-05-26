@@ -14,7 +14,7 @@ contexts = [
 rag = ExplainableAutoModelForRAG.from_pretrained(
     'Snowflake/snowflake-arctic-embed-l-v2.0',
     add_pooling_layer = False
-)
+).to('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Create RAG model:
 rag('query: ' + query, contexts, output_attentions=True, output_hidden_states=True)
