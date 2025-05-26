@@ -2,7 +2,7 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from resources.modelling import ExplainableAutoModelForRAG
+from resources.modelling_online import ExplainableAutoModelForRAG
 
 # We use msmarco query and passages as an example
 query =  "Where was Marie Curie born?"
@@ -12,12 +12,12 @@ contexts = [
 ]
 
 rag = ExplainableAutoModelForRAG.from_pretrained(
-    'facebook/dragon-plus-query-encoder',
-    'facebook/dragon-plus-context-encoder'
+    'Snowflake/snowflake-arctic-embed-l-v2.0',
+    add_pooling_layer = False
 )
 
 # Create RAG model:
-rag(query, contexts, output_attentions=True, output_hidden_states=True)
+rag('query: ' + query, contexts, output_attentions=True, output_hidden_states=True)
 
 #%%
 def plot_importance(ax, scores, tokens, title):
