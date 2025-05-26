@@ -1,8 +1,11 @@
 #%%
+import sys
+sys.path.insert(0, "..")
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from resources.modelling_offline import ExplainableAutoModelForContextEncoding, ExplainableAutoModelForRAG
+from resources.retrieval_offline import ExplainableAutoModelForContextEncoding, ExplainableAutoModelForRAG
 
 # %%
 # We use msmarco query and passages as an example

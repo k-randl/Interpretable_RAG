@@ -1,8 +1,11 @@
 #%%
+import sys
+sys.path.insert(0, "..")
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from resources.modelling_online import ExplainableAutoModelForRAG
+from resources.retrieval_online import ExplainableAutoModelForRAG
 
 # We use msmarco query and passages as an example
 query =  "Where was Marie Curie born?"
