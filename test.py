@@ -1,7 +1,7 @@
 # %%
 import os
 os.environ['TRANSFORMERS_CACHE'] = '/home/francomaria.nardini/raid/guidorocchietti/.cache/huggingface'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,4,5'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4'
 import torch
 import pandas as pd
 from transformers import LlamaForCausalLM
@@ -86,7 +86,7 @@ output = model.generate(
 # %%
 first_doc_removed_prompt = create_rag_prompt(query, contexts[1:])
 output_first_doc_removed = model.compare(
-    first_doc_removed_prompt,output
+    [first_doc_removed_prompt],output if type(output) is list else [output],
 )
 # %%
 exp_probs = model._exp_probs
