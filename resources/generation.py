@@ -25,13 +25,16 @@ def ExplainableGenerator(T:type):
             p = super().forward(*args, **kwargs)
 
             # save token probabilities:
-            if self._explain: self._exp_probs.append(softmax(p, dim=-1))
-            else:             self._gen_probs.append(softmax(p, dim=-1))
+            if self._explain: self._exp_probs.append(softmax(p.logits[:,-1:,:].detach(), dim=-1))
+            else:             self._gen_probs.append(softmax(p.logits[:,-1:,:].detach(), dim=-1))
 
             # return token probabilities:
             return p
         
-        def generate(self, *args, **kwargs):
+        def generate(self,inputs, **kwargs):
+            
+            inputs = self.tokenizer(inputs, truncation=True, return_tensors='pt')
+
             # deactivate explanation mode:
             self._explain    = False
 
@@ -39,7 +42,8 @@ def ExplainableGenerator(T:type):
             self._gen_probs  = []
 
             # generate:
-            return super().generate(*args, **kwargs)
+            output = super().generate(**inputs,**kwargs)
+            return self.tokenizer.batch_decode(output.sequences[:, inputs.input_ids.shape[-1]:], skip_special_tokens=True)
 
         def compare(self, inputs:List[str], outputs:Union[List[str], torch.LongTensor], **kwargs):
             '''Calculates the probability `p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_n|t_0...t_(n-1))` of
