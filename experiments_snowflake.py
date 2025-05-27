@@ -1,8 +1,7 @@
 #%%
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
-from resources.modelling_online import ExplainableAutoModelForRAG
+from resources.retrieval_online import ExplainableAutoModelForRAG
 import pandas as pd
 import pickle
 import tqdm
@@ -14,9 +13,9 @@ retrieval_results = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/
 rag = ExplainableAutoModelForRAG.from_pretrained(
     'Snowflake/snowflake-arctic-embed-l-v2.0',
     add_pooling_layer = False
-)
-rag.to('cuda' if torch.cuda.is_available() else 'cpu')
+).to('cuda' if torch.cuda.is_available() else 'cpu')
 queries = topics['query'].tolist()
+
 #%%
 # Create RAG model:
 list_of_importance_scores = []

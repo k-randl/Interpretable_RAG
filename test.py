@@ -6,7 +6,7 @@ import torch
 import pandas as pd
 from transformers import LlamaForCausalLM
 
-from resources.generation import ExplainableGenerator
+from resources.generation import ExplainableAutoModelForGeneration
 
 # %%
 from huggingface_hub import login
@@ -29,7 +29,7 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DEVICE
 
 # %% Load Pipeline:
-model = ExplainableGenerator(LlamaForCausalLM).from_pretrained(
+model = ExplainableAutoModelForGeneration(LlamaForCausalLM).from_pretrained(
     MODEL_ID,
     #max_seq_len = MAX_SEQ_LEN,
     #max_gen_len = MAX_GEN_LEN,
