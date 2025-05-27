@@ -2,22 +2,41 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from resources.modelling_online import ExplainableAutoModelForRAG
-
+from resources.modelling_offline import ExplainableAutoModelForContextEncoding, ExplainableAutoModelForRAG
+import pandas as pd
+# %%
 # We use msmarco query and passages as an example
-query =  "Where was Marie Curie born?"
-contexts = [
-    "Maria Sklodowska, later known as Marie Curie, was born on November 7, 1867.",
-    "Born in Paris on 15 May 1859, Pierre Curie was the son of Eugène Curie, a doctor of French Catholic origin from Alsace."
-]
+df_for_testing = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/code/efra_retrieval/validation_Dataset_with_chunks_ids.csv')
+contexts = df_for_testing['text'].unique().tolist()
+df_for_testing_first_ten_queries = df_for_testing[df_for_testing['query'].isin(df_for_testing['query'].unique()[:10])]
+unique_contexts = df_for_testing_first_ten_queries['text'].unique().tolist()
+# %%
+enc = ExplainableAutoModelForContextEncoding.from_pretrained(
+    'Snowflake/snowflake-arctic-embed-l-v2.0',
+    add_pooling_layer = False,
 
+)
+enc.to('cuda' if torch.cuda.is_available() else 'cpu')
+### use data parallelism
+#%%
+#from torch.nn.parallel import DataParallel
+#enc = DataParallel(enc, device_ids=[0, 1, 2, 3])  # Adjust device_ids based on your setup
+
+
+# Calculate similarity:
+enc.save_index(unique_contexts, 32, dir='index_snowflake', output_attentions=True, output_hidden_states=True, max_length=1024)
+
+# %%
+do_evaluate = False
+if not do_evaluate: exit()
+#%%
 rag = ExplainableAutoModelForRAG.from_pretrained(
     'Snowflake/snowflake-arctic-embed-l-v2.0',
     add_pooling_layer = False
 )
 
-# Create RAG model:
-rag('query: ' + query, contexts, output_attentions=True, output_hidden_states=True)
+# Calculate similarity:
+rag('query: ' + query, 2, dir='index_snowflake', output_attentions=True, output_hidden_states=True)
 
 #%%
 def plot_importance(ax, scores, tokens, title):
@@ -68,14 +87,14 @@ plt.show()
 #%% Grad:
 fig, axs = plt.subplots(1, 3)
 
-plot_importance(axs[0], 
+plot_importance(axs[0],
     scores = rag.grad()['query'][0].mean(axis=-1), 
     tokens = rag.in_tokens['query'][0],
     title  = 'Query:'
 )
 
 for i in range(len(contexts)):
-    plot_importance(axs[1+i], 
+    plot_importance(axs[1+i],
         scores = rag.grad()['context'][i].mean(axis=-1), 
         tokens = rag.in_tokens['context'][i],
         title  = f'Context {i+1:d}:'
@@ -83,40 +102,4 @@ for i in range(len(contexts)):
 
 plt.tight_layout()
 plt.show()
-
-#%% Shap:
-import shap
-
-SEPARATOR = rag.tokenizer.sep_token
-
-# create text masker:
-class InvariantTextMasker(shap.maskers.Text):
-    def __call__(self, mask, s, **kwargs):
-        mask = np.bitwise_or(mask, self.invariants(s)[0])
-        return super().__call__(mask, s, **kwargs)
-
-def predict_shap(inputs):
-    return [rag(*s.split(SEPARATOR))[0][0].detach().numpy() for s in inputs]
-
-def create_data_shap(query:str, contexts:list):
-    return [query + SEPARATOR + context for context in contexts]
-
-masker = InvariantTextMasker(rag.tokenizer, collapse_mask_token=True)
-explainer = shap.Explainer(predict_shap, masker)
-shap_values = explainer(create_data_shap(query, contexts))
-
-#%%
-fig, axs = plt.subplots(1,2)
-
-for i in range(len(shap_values.values)):
-    plot_importance(axs[i], 
-        scores = shap_values.values[i], 
-        tokens = shap_values.data[i],
-        title  = f'Context {i+1:d}:'
-    )
-
-plt.tight_layout()
-plt.show()
-
-#%%
-shap.plots.text(shap_values)
+# %%
