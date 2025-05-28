@@ -1,7 +1,8 @@
 import torch
+import numpy as np
 from torch.nn.functional import softmax
 from transformers import PreTrainedModel, AutoTokenizer
-from typing import Union, List, Tuple
+from typing import Union, List, Tuple, Optional
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -48,8 +49,73 @@ def ExplainableAutoModelForGeneration(T:type):
             self._explain    = False
             self._exp_probs  = []
             self._gen_probs  = []
-            self._exp_output = None
             self._gen_output = None
+
+        @property
+        def gen_token_probs(self):
+            '''Probability of each token in the original generation.'''
+            # generate(...) needs to be run first:
+            if len(self._gen_probs) == 0: return None
+
+            # return probability of each token in the original generation:
+            return np.array([ 
+                [float(self._gen_probs[i, j, id]) for j, id  in enumerate(seq)]
+                for i, seq in enumerate(self._gen_output)
+            ])
+
+        @property
+        def cmp_token_probs(self):
+            '''Probability of each token in the original generation given the compared input.'''
+            # compare(...) needs to be run first:
+            if len(self._exp_probs) == 0: return None
+
+            # return probability of each token in the original generation:
+            return np.array([ 
+                [float(self._exp_probs[i, j, id]) for j, id  in enumerate(seq)]
+                for i, seq in enumerate(self._gen_output)
+            ])
+
+        @property
+        def gen_sequence_prob(self):
+            '''Total probability of generating the original sequence.'''
+            # generate(...) needs to be run first:
+            if len(self._gen_probs) == 0: return None
+
+            # return the multiplied probability of each token in the original generation:
+            return np.prod([ 
+                [float(self._gen_probs[i, j, id]) for j, id  in enumerate(seq)]
+                for i, seq in enumerate(self._gen_output)
+            ], axis=-1)
+
+        @property
+        def cmp_sequence_prob(self):
+            '''Total probability of generating the original sequence given the compared input.'''
+            # compare(...) needs to be run first:
+            if len(self._exp_probs) == 0: return None
+
+            # return the multiplied probability of each token in the original generation:
+            return np.prod([ 
+                [float(self._exp_probs[i, j, id]) for j, id  in enumerate(seq)]
+                for i, seq in enumerate(self._gen_output)
+            ], axis=-1)
+
+        @property
+        def gen_bow_probs(self):
+            '''Accumulated probability of each token in the vocabualry of being generated given the original input.'''
+            # generate(...) needs to be run first:
+            if len(self._gen_probs) == 0: return None
+
+            # return accumulated probability of each token in the vocabualry:
+            return self._gen_probs.mean(dim=1).numpy()
+
+        @property
+        def cmp_bow_probs(self):
+            '''Accumulated probability of each token in the vocabualry of being generated given the compared input.'''
+            # compare(...) needs to be run first:
+            if len(self._exp_probs) == 0: return None
+
+            # return accumulated probability of each token in the vocabualry:
+            return self._exp_probs.mean(dim=1).numpy()
 
         def forward(self, *args, **kwargs):
             # get token probabilities:
@@ -83,7 +149,7 @@ def ExplainableAutoModelForGeneration(T:type):
             self._gen_probs  = []
 
             # generate:
-            self._gen_output = super().generate(**inputs,**kwargs).sequences[:, inputs.input_ids.shape[-1]:]
+            self._gen_output = super().generate(**inputs, **kwargs).sequences[:, inputs.input_ids.shape[-1]:]
 
             # finalize probabilities:
             self._gen_probs  = torch.concatenate(self._gen_probs, dim=1)
@@ -91,14 +157,33 @@ def ExplainableAutoModelForGeneration(T:type):
             # return generated text:
             return self.tokenizer.batch_decode(self._gen_output)
 
-        def compare_unconditional(self, inputs:List[str]) -> List[str]:
-            '''Generates continuatiations of the passed input prompts.
+        def compare(self, inputs:List[str], outputs:Optional[Union[List[str], torch.LongTensor]]=None, batch_size:int=1, **kwargs) -> torch.LongTensor:
+            '''Calculates the probability `p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_n|t_0...t_(n-1))` of
+            a specific output `outputs = [t_0, t_1, ..., t_n]` to happen given an input prompt `inputs`.
 
             Args:
-                inputs:     List of input propmts.
+                inputs:     List of input propmts. If `outputs` is specified, `compare(...)` calculates the
+                            probability `p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_n|t_0...t_(n-1))` for each
+                            token in `outputs = [t_0, t_1, ..., t_n]` given ``. Otherwise, it calculates the
+                            unconditional probability (similar to `generate(...)`).
+                outputs:    List of tokens `t_i` or (strings containing those) for which to compute the probability
+                            (optional).
+                batch_size: Batch size. Ignored if `len(inputs) > 1` or `outputs` not specified (optional).
 
-            Returns:        List of generated strings.
-            '''
+            Returns:        Tensor of generated token ids .'''
+
+            if batch_size < 1:
+                raise ValueError(f'Parameter batch_size must be a positive integer but got {batch_size:d}.')
+
+            if outputs is None:
+                if batch_size > 1:
+                    print('WARNING: when outputs is not specified the parameter batch_size is ignored.')
+
+                return self.__compare_unconditional(inputs=inputs, **kwargs)
+            
+            else: return self.__compare_conditional(inputs=inputs, outputs=outputs, batch_size=batch_size, **kwargs)
+
+        def __compare_unconditional(self, inputs:List[str], **kwargs) -> torch.LongTensor:
             # tokenize inputs:
             inputs = self.tokenizer(inputs, truncation=True, return_tensors='pt')
 
@@ -109,25 +194,15 @@ def ExplainableAutoModelForGeneration(T:type):
             self._exp_probs  = []
 
             # generate:
-            self._exp_output = super().generate(**inputs).sequences[:, inputs.input_ids.shape[-1]:]
+            output = super().generate(**inputs, **kwargs).sequences[:, inputs.input_ids.shape[-1]:]
 
             # finalize probabilities:
             self._exp_probs  = torch.concatenate(self._exp_probs, dim=1)
 
-            # return generated text:
-            return self.tokenizer.batch_decode(self._exp_output)
+            # return generated tokens:
+            return output
 
-        def compare_conditional(self, inputs:List[str], outputs:Union[List[str], torch.LongTensor], batch_size:int=1, **kwargs) -> List[str]:
-            '''Calculates the probability `p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_n|t_0...t_(n-1))` of
-            a specific output `outputs = [t_0, t_1, ..., t_n]` to happen given an input prompt `inputs`.
-
-            Args:
-                inputs:     List of input propmts.
-                outputs:    List of tokens `t_i` or (strings containing those) for which to compute the probability.
-                batch_size: Batch size. Ignored if `len(inputs) > 1`.
-
-            Returns:        List of generated strings .'''
-
+        def __compare_conditional(self, inputs:List[str], outputs:Union[List[str], torch.LongTensor], batch_size:int=1, **kwargs) -> torch.LongTensor:
             # get batch size:
             single_input  = len(inputs) == 1
             single_output = len(outputs) == 1
@@ -180,10 +255,9 @@ def ExplainableAutoModelForGeneration(T:type):
                     attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, 1), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
 
             # finalize probabilities:
-            self._exp_probs = torch.concatenate(self._exp_probs, dim=1)
+            self._exp_probs = torch.concatenate(self._exp_probs, dim=0 if single_input else 1)
 
             # return generated tokens:
-            self._exp_output = torch.argmax(self._exp_probs, dim=-1)
-            return self.tokenizer.batch_decode(self._exp_output)
+            return torch.argmax(self._exp_probs, dim=-1)
 
     return _ExplainableAutoModelForGeneration
