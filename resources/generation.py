@@ -9,12 +9,12 @@ import tqdm
 #=======================================================================#
 
 def _to_batch(input_ids:torch.Tensor,
+              output_ids:torch.Tensor,
               pad_token_id:int,
-              batch_size:int,
-              output_ids:Union[List[int],torch.Tensor]=[]) -> Tuple[torch.Tensor, torch.Tensor]:
+              batch_size:int) -> Tuple[torch.Tensor, torch.Tensor]:
     
     input_size = input_ids.shape[1]
-    output_size = len(output_ids)
+    output_size = output_ids.shape[1]
 
     batched_inputs_ids = torch.full(
         (batch_size, input_size + output_size),
@@ -22,16 +22,17 @@ def _to_batch(input_ids:torch.Tensor,
         device=input_ids.device,
         dtype=input_ids.dtype
     )
-    #batched_inputs_ids[0,-input_size:] = input_ids[0]
+
+    batched_inputs_ids[-1,-input_size-output_size:-output_size] = input_ids[0]
+    batched_inputs_ids[-1,-output_size:] = output_ids[0]
 
     for i in range(1,batch_size):
-        batched_inputs_ids[i,-input_size-output_size+i:-output_size+i] = input_ids[0]
-        batched_inputs_ids[i,-output_size+i:] = output_ids[:-i]
-    batched_inputs_ids[0,-input_size-output_size:-output_size] = input_ids[0]
-    batched_inputs_ids[0,-output_size:] = output_ids
+        batched_inputs_ids[-i-1,-input_size-output_size+i:-output_size+i] = input_ids[0]
+        batched_inputs_ids[-i-1,-output_size+i:] = output_ids[0,:-i]
+
     return (
-        batched_inputs_ids[:,:input_size + batch_size].flip(0),
-        batched_inputs_ids[:,input_size + batch_size:].flip(0)
+        batched_inputs_ids[:,:input_size + batch_size - 1],
+        batched_inputs_ids[:,input_size + batch_size - 1:]
     )
 
 #=======================================================================#
@@ -108,7 +109,7 @@ def ExplainableAutoModelForGeneration(T:type):
             if len(self._gen_probs) == 0: return None
 
             # return accumulated probability of each token in the vocabualry:
-            return self._gen_probs.mean(dim=1).numpy()
+            return self._gen_probs.mean(dim=1).float().numpy()
 
         @property
         def cmp_bow_probs(self):
@@ -117,7 +118,7 @@ def ExplainableAutoModelForGeneration(T:type):
             if len(self._exp_probs) == 0: return None
 
             # return accumulated probability of each token in the vocabualry:
-            return self._exp_probs.mean(dim=1).numpy()
+            return self._exp_probs.mean(dim=1).float().numpy()
 
         def forward(self, *args, **kwargs):
             # get token probabilities:
@@ -230,10 +231,10 @@ def ExplainableAutoModelForGeneration(T:type):
             if single_input:
                 if single_output:
                     input_ids, outputs = _to_batch(
-                        input_ids, self.tokenizer.pad_token_id, batch_size, outputs[0]
+                        input_ids, outputs, self.tokenizer.pad_token_id, batch_size
                     )
                     attention_mask, _ = _to_batch(
-                        attention_mask, 0, batch_size, torch.ones(batch_size)
+                        attention_mask, torch.ones((1, batch_size)), 0, batch_size
                     )
 
                 else: raise NotImplementedError()
@@ -264,7 +265,8 @@ def ExplainableAutoModelForGeneration(T:type):
                     attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, nxt.shape[1]), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
 
             # finalize probabilities:
-            self._exp_probs = torch.concatenate(self._exp_probs, dim=1 if single_input else 1)
+            if single_output: self._exp_probs = torch.concatenate(self._exp_probs, dim=0).transpose(0,1)
+            else:             self._exp_probs = torch.concatenate(self._exp_probs, dim=1)
             
             # return generated tokens:
             return torch.argmax(self._exp_probs, dim=-1)

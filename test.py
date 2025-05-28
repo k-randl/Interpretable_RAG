@@ -3,10 +3,11 @@ import os
 os.environ['TRANSFORMERS_CACHE'] = '/home/francomaria.nardini/raid/guidorocchietti/.cache/huggingface'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
 import torch
+import numpy as np
 import pandas as pd
 from transformers import LlamaForCausalLM
 
-from resources.generation import ExplainableAutoModelForGeneration, _to_batch
+from resources.generation import ExplainableAutoModelForGeneration
 '''
 from huggingface_hub import login
 from getpass import getpass
@@ -88,3 +89,11 @@ output_first_doc_removed = model.compare(
 # %%
 exp_probs = model._exp_probs
 gen_probs = model._gen_probs
+
+# %%
+idx = np.argsort(model.gen_bow_probs)[0,::-1]
+model.tokenizer.convert_ids_to_tokens(idx[:10])
+
+# %%
+idx = np.argsort(model.cmp_bow_probs)[0,::-1]
+model.tokenizer.convert_ids_to_tokens(idx[:10])
