@@ -1,19 +1,18 @@
 # %%
 import os
 os.environ['TRANSFORMERS_CACHE'] = '/home/francomaria.nardini/raid/guidorocchietti/.cache/huggingface'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
 import torch
 import pandas as pd
 from transformers import LlamaForCausalLM
 
-from resources.generation import ExplainableAutoModelForGeneration
-
-# %%
+from resources.generation import ExplainableAutoModelForGeneration, _to_batch
+'''
 from huggingface_hub import login
 from getpass import getpass
 
 torch.manual_seed(42)
-'''
+
 if os.path.exists('.huggingface.token'):
     with open('.huggingface.token', 'r') as file:
         login(token=file.read())
@@ -21,13 +20,11 @@ if os.path.exists('.huggingface.token'):
 else: login(token=getpass(prompt='Huggingface login  token: '))
 '''
 #%%
-MODEL_ID = 'meta-llama/Llama-3.3-70B-Instruct'
-
+MODEL_ID = 'meta-llama/Llama-3.1-8B-Instruct'
 MAX_SEQ_LEN = 1024
 MAX_GEN_LEN = 256
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DEVICE
-
 # %% Load Pipeline:
 model = ExplainableAutoModelForGeneration(LlamaForCausalLM).from_pretrained(
     MODEL_ID,
@@ -64,7 +61,7 @@ query = topics.iloc[0]['query']  # Assuming the first query for example
 contexts = ranked_chunks[ranked_chunks['query_id'] == 0]['retrieved_text'].tolist() # Assuming query_id 0 for example
 #%%
 rag_prompt = create_rag_prompt(query, contexts)
-print(rag_prompt)
+#   print(rag_prompt)
 
 # You would then tokenize this prompt and pass it to the model for generation
 # input_ids = model.tokenizer(rag_prompt, return_tensors="pt").input_ids.to(DEVICE)
@@ -86,7 +83,7 @@ output = model.generate(
 # %%
 first_doc_removed_prompt = create_rag_prompt(query, contexts[1:])
 output_first_doc_removed = model.compare(
-    [first_doc_removed_prompt],output if type(output) is list else [output],
+    [first_doc_removed_prompt],output if type(output) is list else [output],batch_size = 4
 )
 # %%
 exp_probs = model._exp_probs

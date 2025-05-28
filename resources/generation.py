@@ -3,7 +3,7 @@ import numpy as np
 from torch.nn.functional import softmax
 from transformers import PreTrainedModel, AutoTokenizer
 from typing import Union, List, Tuple, Optional
-
+import tqdm
 #=======================================================================#
 # Helper Functions:                                                     #
 #=======================================================================#
@@ -22,14 +22,16 @@ def _to_batch(input_ids:torch.Tensor,
         device=input_ids.device,
         dtype=input_ids.dtype
     )
+    #batched_inputs_ids[0,-input_size:] = input_ids[0]
 
-    for i in (np.arange(batch_size) + 1):
-        batched_inputs_ids[-input_size-i:-i] = input_ids
-        batched_inputs_ids[-i:] = output_ids[:-i]
-
+    for i in range(1,batch_size):
+        batched_inputs_ids[i,-input_size-output_size+i:-output_size+i] = input_ids[0]
+        batched_inputs_ids[i,-output_size+i:] = output_ids[:-i]
+    batched_inputs_ids[0,-input_size-output_size:-output_size] = input_ids[0]
+    batched_inputs_ids[0,-output_size:] = output_ids
     return (
-        batched_inputs_ids[:,:input_size + batch_size],
-        batched_inputs_ids[:,input_size + batch_size:]
+        batched_inputs_ids[:,:input_size + batch_size].flip(0),
+        batched_inputs_ids[:,input_size + batch_size:].flip(0)
     )
 
 #=======================================================================#
@@ -45,6 +47,7 @@ def ExplainableAutoModelForGeneration(T:type):
         def __init__(self, config, *inputs, **kwargs):
             super().__init__(config, *inputs, **kwargs)
             self.tokenizer   = AutoTokenizer.from_pretrained(config.name_or_path)
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
             self._explain    = False
             self._exp_probs  = []
             self._gen_probs  = []
@@ -227,10 +230,10 @@ def ExplainableAutoModelForGeneration(T:type):
             if single_input:
                 if single_output:
                     input_ids, outputs = _to_batch(
-                        input_ids, self.tokenizer.pad_token_id, batch_size, outputs
+                        input_ids, self.tokenizer.pad_token_id, batch_size, outputs[0]
                     )
                     attention_mask, _ = _to_batch(
-                        attention_mask, 1, batch_size
+                        attention_mask, 0, batch_size, torch.ones(batch_size)
                     )
 
                 else: raise NotImplementedError()
@@ -246,23 +249,23 @@ def ExplainableAutoModelForGeneration(T:type):
                 else:               nxt = torch.unsqueeze(outputs[:,0], dim=1).to(input_ids)
 
                 input_ids = torch.concatenate((input_ids, nxt), dim=-1)
-                attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, 1), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
+                attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, nxt.shape[1]), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
 
                 # p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_1|t_0...t_(j-1)):
-                for i in range(1, outputs.shape[1]):
+                for i in tqdm.tqdm(range(1, outputs.shape[1],batch_size if single_input else 1),total=int(outputs.shape[1]/batch_size), desc='Calculating probabilities'):
                     self.forward(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
-
+                    torch.cuda.empty_cache()
                     # update inputs:
                     if single_input:    nxt = outputs[:,(i*batch_size):((i+1)*batch_size)].to(input_ids)
                     elif single_output: nxt = torch.full((batch_size, 1), outputs[0,i], device=input_ids.device, dtype=input_ids.dtype)
                     else:               nxt = torch.unsqueeze(outputs[:,i], dim=1).to(input_ids)
 
                     input_ids = torch.concatenate((input_ids, nxt), dim=-1)
-                    attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, 1), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
+                    attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, nxt.shape[1]), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
 
             # finalize probabilities:
-            self._exp_probs = torch.concatenate(self._exp_probs, dim=0 if single_input else 1)
-
+            self._exp_probs = torch.concatenate(self._exp_probs, dim=1 if single_input else 1)
+            
             # return generated tokens:
             return torch.argmax(self._exp_probs, dim=-1)
 
