@@ -9,29 +9,28 @@ from typing import Union, List, Tuple, Optional
 #=======================================================================#
 
 def _to_batch(input_ids:torch.Tensor,
-              attention_mask:torch.Tensor,
-              output_ids:Union[List[int],torch.Tensor],
               pad_token_id:int,
-              batch_size:int) -> Tuple[torch.Tensor, torch.Tensor]:
+              batch_size:int,
+              output_ids:Union[List[int],torch.Tensor]=[]) -> Tuple[torch.Tensor, torch.Tensor]:
     
     input_size = input_ids.shape[1]
+    output_size = len(output_ids)
 
     batched_inputs_ids = torch.full(
-        (batch_size, input_size + batch_size),
+        (batch_size, input_size + output_size),
         pad_token_id,
         device=input_ids.device,
         dtype=input_ids.dtype
     )
-    batched_attention_mask = torch.zeros_like(batched_inputs_ids)
 
-    for i in range(batch_size):
-        batched_inputs_ids[-input_size-i-1:-i-1] = input_ids
-        batched_inputs_ids[-i-1:] = output_ids[:i]
+    for i in (np.arange(batch_size) + 1):
+        batched_inputs_ids[-input_size-i:-i] = input_ids
+        batched_inputs_ids[-i:] = output_ids[:-i]
 
-        batched_attention_mask[-input_size-i-1:-i-1] = attention_mask
-        batched_attention_mask[-i-1:] = 1
-
-    return batched_inputs_ids, batched_attention_mask
+    return (
+        batched_inputs_ids[:,:input_size + batch_size],
+        batched_inputs_ids[:,input_size + batch_size:]
+    )
 
 #=======================================================================#
 # Generic Model Class:                                                  #
@@ -225,9 +224,16 @@ def ExplainableAutoModelForGeneration(T:type):
             attention_mask = inputs.attention_mask.to(self.device)
 
             # batch processing in case of single input:
-            if single_input: input_ids, attention_mask = _to_batch(
-                input_ids, attention_mask, outputs, self.tokenizer.pad_token_id, batch_size
-            )
+            if single_input:
+                if single_output:
+                    input_ids, outputs = _to_batch(
+                        input_ids, self.tokenizer.pad_token_id, batch_size, outputs
+                    )
+                    attention_mask, _ = _to_batch(
+                        attention_mask, 1, batch_size
+                    )
+
+                else: raise NotImplementedError()
 
             with torch.no_grad():
 
@@ -235,7 +241,7 @@ def ExplainableAutoModelForGeneration(T:type):
                 self.forward(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
 
                 # update inputs:
-                if single_input:    nxt = torch.unsqueeze(outputs[0,:batch_size], dim=1).to(input_ids)
+                if single_input:    nxt = outputs[:,:batch_size].to(input_ids)
                 elif single_output: nxt = torch.full((batch_size, 1), outputs[0,0], device=input_ids.device, dtype=input_ids.dtype)
                 else:               nxt = torch.unsqueeze(outputs[:,0], dim=1).to(input_ids)
 
@@ -247,7 +253,7 @@ def ExplainableAutoModelForGeneration(T:type):
                     self.forward(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
 
                     # update inputs:
-                    if single_input:    nxt = torch.unsqueeze(outputs[0,(i*batch_size):((i+1)*batch_size)], dim=1).to(input_ids)
+                    if single_input:    nxt = outputs[:,(i*batch_size):((i+1)*batch_size)].to(input_ids)
                     elif single_output: nxt = torch.full((batch_size, 1), outputs[0,i], device=input_ids.device, dtype=input_ids.dtype)
                     else:               nxt = torch.unsqueeze(outputs[:,i], dim=1).to(input_ids)
 
