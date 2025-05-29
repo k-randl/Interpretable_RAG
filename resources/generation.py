@@ -35,6 +35,38 @@ def _to_batch(input_ids:torch.Tensor,
         batched_inputs_ids[:,input_size + batch_size - 1:]
     )
 
+def _nucleus_sampling(probs, p=0.9):
+    """
+    Applies nucleus (top-p) sampling to logits while preserving original order.
+
+    Args:
+        logits (torch.Tensor): shape [1, seq_len, vocab_size]
+        p (float): cumulative probability threshold
+
+    Returns:
+        torch.Tensor: same shape as logits, with only top-p probs kept per token
+    """
+    #probs = torch.softmax(logits, dim=-1)  # Convert logits to probabilities
+    sorted_probs, sorted_indices = torch.sort(probs, dim=-1, descending=True)
+    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+    # Create a mask for tokens to keep (top-p)
+    sorted_mask = cumulative_probs <= p
+    # Ensure at least one token is always included
+    sorted_mask[..., 0] = 1
+
+    # Map back to original indices
+    unsorted_mask = torch.zeros_like(sorted_mask, dtype=torch.bool)
+    batch_size, seq_len, vocab_size = probs.shape
+
+    for i in range(seq_len):
+        unsorted_mask[0, i].scatter_(0, sorted_indices[0, i], sorted_mask[0, i])
+
+    # Zero out the rest
+    probs_filtered = probs * unsorted_mask
+
+    return probs_filtered
+
 #=======================================================================#
 # Generic Model Class:                                                  #
 #=======================================================================#
@@ -110,7 +142,7 @@ def ExplainableAutoModelForGeneration(T:type):
 
             # return accumulated probability of each token in the vocabualry:
             return self._gen_probs.mean(dim=1).float().numpy()
-
+        
         @property
         def cmp_bow_probs(self):
             '''Accumulated probability of each token in the vocabualry of being generated given the compared input.'''
@@ -119,6 +151,24 @@ def ExplainableAutoModelForGeneration(T:type):
 
             # return accumulated probability of each token in the vocabualry:
             return self._exp_probs.mean(dim=1).float().numpy()
+        
+        #@property
+        def gen_nucleus_probs(self, p:float=0.9):
+            '''Accumulated probability of each token in the vocabualry of being generated given the original input.'''
+            # generate(...) needs to be run first:
+            if len(self._gen_probs) == 0: return None
+
+            # return accumulated probability of each token in the vocabualry:
+            return _nucleus_sampling(self._gen_probs.float(),p=p).mean(dim=1)
+
+        #@property
+        def cmp_nucleus_probs(self, p:float=0.9):
+            '''Accumulated probability of each token in the vocabualry of being generated given the compared input.'''
+            # compare(...) needs to be run first:
+            if len(self._exp_probs) == 0: return None
+
+            # return accumulated probability of each token in the vocabualry:
+            return _nucleus_sampling(self._exp_probs.float(),p=p).mean(dim=1)
 
         def forward(self, *args, **kwargs):
             # get token probabilities:
@@ -243,7 +293,7 @@ def ExplainableAutoModelForGeneration(T:type):
 
                 # calculate p(t_0):
                 self.forward(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
-
+                torch.cuda.empty_cache()
                 # update inputs:
                 if single_input:    nxt = outputs[:,:batch_size].to(input_ids)
                 elif single_output: nxt = torch.full((batch_size, 1), outputs[0,0], device=input_ids.device, dtype=input_ids.dtype)

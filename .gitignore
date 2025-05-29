@@ -8,3 +8,4 @@ results/**
 summaries/**
 resources/ldfacts.py**
 index_snowflake/**
+perturbed_outputs.pkl
