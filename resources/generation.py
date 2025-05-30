@@ -292,8 +292,10 @@ def ExplainableAutoModelForGeneration(T:type):
             with torch.no_grad():
 
                 # calculate p(t_0):
-                self.forward(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+                model_kwargs = kwargs
+                model_outputs = self.forward(input_ids=input_ids, attention_mask=attention_mask, return_dict=True, **model_kwargs)
                 torch.cuda.empty_cache()
+
                 # update inputs:
                 if single_input:    nxt = outputs[:,:batch_size].to(input_ids)
                 elif single_output: nxt = torch.full((batch_size, 1), outputs[0,0], device=input_ids.device, dtype=input_ids.dtype)
@@ -304,8 +306,15 @@ def ExplainableAutoModelForGeneration(T:type):
 
                 # p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_1|t_0...t_(j-1)):
                 for i in tqdm.tqdm(range(1, outputs.shape[1],batch_size if single_input else 1),total=int(outputs.shape[1]/batch_size), desc='Calculating probabilities'):
-                    self.forward(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+                    model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs, num_new_tokens=nxt.shape[1])
+                    model_inputs = self.prepare_inputs_for_generation(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        **model_kwargs
+                    )
+                    model_outputs = self.forward(**model_inputs, return_dict=True)
                     torch.cuda.empty_cache()
+
                     # update inputs:
                     if single_input:    nxt = outputs[:,(i*batch_size):((i+1)*batch_size)].to(input_ids)
                     elif single_output: nxt = torch.full((batch_size, 1), outputs[0,i], device=input_ids.device, dtype=input_ids.dtype)
