@@ -5,26 +5,70 @@ import pickle
 pickle_path = 'perturbed_outputs.pkl'
 with open(pickle_path, 'rb') as f:
     perturbed_outputs = pickle.load(f)
-
-
+    
 #%%
+import pandas as pd
+ranked_chunks = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/code/efra_retrieval/results/ir_results_chunks.csv')
+topics = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/data/EFRA/Evaluation Dataset/topics.tsv', sep='\t')
+evaluation_dataset = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/code/efra_retrieval/validation_Dataset_with_chunks_ids.csv')    
+#%%
+import nltk
+from nltk.corpus import stopwords
+def clean_tokens(tokens):
+    stop_words = list(stopwords.words('english'))
+    stop_words += ['', '\n', '.', ',', '(', ')', '[', ']', '{', '}', ':', ';', '?', '!', '"', "'", '-', '_', '/', '\\', '*', '&', '^', '%', '$', '#', '@', '~']
+    tokens_filtered = [token.strip() for token in tokens if token.strip(' \n') not in stop_words + ['']]
+    return tokens_filtered
+
+def clean_tokens_mask(tokens):
+    """
+    Returns a boolean mask for filtering out stopwords and punctuation.
+
+    Args:
+        tokens (list of str): The list of tokens.
+
+    Returns:
+        List[bool]: Mask with True for tokens to keep.
+    """
+    stop_words = set(stopwords.words('english'))
+    stop_symbols = {'', '\n', '.', ',', '(', ')', '[', ']', '{', '}', ':', ';',
+                    '?', '!', '"', "'", '-', '_', '/', '\\', '*', '&', '^', '%',
+                    '$', '#', '@', '~'}
+    combined_stops = stop_words.union(stop_symbols)
+
+    mask = [(token.strip() not in combined_stops) for token in tokens]
+    return mask
+#%%
+from transformers import AutoTokenizer
 from collections import defaultdict
 import matplotlib.pyplot as plt
-
+import torch
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B-Instruct")
 # Collect all token sets and map probabilities
 token_sets = {}
 token_probs = {}
+topk= 100
+top_tokens = []
+
 
 for desc, data in perturbed_outputs.items():
-    tokens = data['gen_tokens']
-    probs = data['gen_probs']
-    token_sets[desc] = set(tokens)
-    token_probs[desc] = dict(zip(tokens, probs))
+    if 'complete' in  desc:
+        probs = data['gen_probs'].mean(dim=1)  # Average probabilities across all samples
+    else:
+        probs  = data['exp_probs'].mean(dim=1)  # Average probabilities across all samples
+    topk_indices = torch.topk(probs, topk+len(list(stopwords.words('english')))).indices.tolist()[0]
+    topk_proabilities = torch.topk(probs, topk+len(list(stopwords.words('english')))).values.tolist()[0]
+    topk_tokens = [tokenizer.decode([idx]) for idx in topk_indices]
+    mask = clean_tokens_mask(topk_tokens)
+    filtered_tokens = [t.strip() for t, keep in zip(topk_tokens, mask) if keep][:topk]
+    filtered_probs = [p for p, keep in zip(topk_proabilities, mask) if keep][:topk]
+    token_sets[desc] = filtered_tokens
+    token_probs[desc] = {token: prob for token, prob in zip(filtered_tokens, filtered_probs)}
 
-# Intersect tokens
-all_descriptions = list(token_sets.keys())
-intersection = set.intersection(*token_sets.values())
-print(f"Shared tokens across all variants: {intersection}")
+#%%
+### Find intersection of tokens across all descriptions
+intersection = set.intersection(*[set(tokens) for tokens in token_sets.values()])
+
 #%%
 
 def plot_token_probabilities(shared_tokens, token_probs, title="Token Probabilities Across Variants"):
@@ -46,7 +90,8 @@ def plot_token_probabilities(shared_tokens, token_probs, title="Token Probabilit
     plt.show()
 
 # Only plot a subset to avoid clutter
-plot_token_probabilities(list(intersection)[:5], token_probs)
+plot_token_probabilities(list(intersection)[:5], {key: token_probs[key] for key in [key for key in token_probs if 'constrained' in key or 'complete' in key]}, title="Token Probabilities for Constrained Prompt Variants")
+plot_token_probabilities(list(intersection)[:5], {key: token_probs[key] for key in [key for key in token_probs if 'constrained' not in key]}, title="Token Probabilities for Prompt Variants")
 
 #%%
 for i, desc1 in enumerate(all_descriptions):
