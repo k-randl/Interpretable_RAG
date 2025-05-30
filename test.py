@@ -163,9 +163,10 @@ perturbed_outputs['complete'] = {
 #%%
 ### Save the perturbed outputs to a file
 import pickle
+import datetime
 if not os.path.exists('perturbed_outputs.pkl'):
     with open('perturbed_outputs.pkl', 'wb') as f:
         pickle.dump(perturbed_outputs, f)
-    
-
-
+else:
+    with open(str(datetime.datetime.now().strftime('%Y%m%d_%H%M'))+'perturbed_outputs.pkl', 'wb') as f:
+        pickle.dump(perturbed_outputs, f)
