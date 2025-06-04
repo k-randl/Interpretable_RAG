@@ -175,8 +175,10 @@ def ExplainableAutoModelForGeneration(T:type):
             p = super().forward(*args, **kwargs)
 
             # save token probabilities:
-            if self._explain: self._exp_probs.append(softmax(p.logits[:,-1:,:].detach().cpu(), dim=-1))
-            else:             self._gen_probs.append(softmax(p.logits[:,-1:,:].detach().cpu(), dim=-1))
+            #if self._explain: self._exp_probs.append(softmax(p.logits[:,-1:,:].detach().cpu(), dim=-1))
+            #else:             self._gen_probs.append(softmax(p.logits[:,-1:,:].detach().cpu(), dim=-1))
+            if self._explain: self._exp_probs.append(p.logits[:,-1:,:].detach().cpu(), dim=-1)
+            else:             self._gen_probs.append(p.logits[:,-1:,:].detach().cpu(), dim=-1)
 
             # return token probabilities:
             return p
@@ -293,7 +295,8 @@ def ExplainableAutoModelForGeneration(T:type):
 
                 # calculate p(t_0):
                 model_kwargs = kwargs
-                model_outputs = self.forward(input_ids=input_ids, attention_mask=attention_mask, return_dict=True, **model_kwargs)
+                #model_outputs = self.forward(input_ids=input_ids, attention_mask=attention_mask, return_dict=True, **model_kwargs)
+                self.forward(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
                 torch.cuda.empty_cache()
 
                 # update inputs:
@@ -306,13 +309,17 @@ def ExplainableAutoModelForGeneration(T:type):
 
                 # p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_1|t_0...t_(j-1)):
                 for i in tqdm.tqdm(range(1, outputs.shape[1],batch_size if single_input else 1),total=int(outputs.shape[1]/batch_size), desc='Calculating probabilities'):
-                    model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs, num_new_tokens=nxt.shape[1])
-                    model_inputs = self.prepare_inputs_for_generation(
+                    #model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs, num_new_tokens=nxt.shape[1])
+                    #model_inputs = self.forward(
+                    #    input_ids=input_ids,
+                    #    attention_mask=attention_mask,
+                    #    **model_kwargs
+                    #)
+                    self.forward(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
-                        **model_kwargs
-                    )
-                    model_outputs = self.forward(**model_inputs, return_dict=True)
+                        **model_kwargs)
+                    #model_outputs = self.forward(**model_inputs, return_dict=True)
                     torch.cuda.empty_cache()
 
                     # update inputs:

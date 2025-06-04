@@ -1,7 +1,7 @@
 # %%
 import os
 os.environ['TRANSFORMERS_CACHE'] = '/home/francomaria.nardini/raid/guidorocchietti/.cache/huggingface'
-os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '3,4,5'
 import torch
 import numpy as np
 import pandas as pd
@@ -57,7 +57,7 @@ def create_rag_messages(query, contexts):
     )
 
     # Format the context into a single message
-    context_text = "\n\n".join([f"Document {i+1}:\n{doc}" for i, doc in enumerate(contexts[:10])])
+    context_text = "\n\n".join([f"Document {i+1}:\n{doc}" for i, doc in enumerate(contexts)])
 
     # Construct messages
     messages = [
@@ -98,12 +98,16 @@ model = ExplainableAutoModelForGeneration(LlamaForCausalLM).from_pretrained(
 )
 # %%
 ranked_chunks = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/code/efra_retrieval/results/ir_results_chunks.csv')
-
+evaluation_dataset = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/code/efra_retrieval/validation_Dataset_with_chunks_ids.csv')    
 topics = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/data/EFRA/Evaluation Dataset/topics.tsv', sep='\t')
-for i in range(len(topics)):
-    query = topics.iloc[i]['query']
-    query_id = topics.iloc[i]['query_id']
-    contexts = ranked_chunks[ranked_chunks['query_id'] == query_id]['retrieved_text'].tolist()
+do_evalualuation = True
+#%%
+for qid in tqdm(range(len(topics)), desc='Processing queries',total=len(topics)):
+    query = topics.iloc[qid]['query']
+    if do_evalualuation: 
+        contexts = evaluation_dataset[evaluation_dataset['query'] == query]['text'].tolist()
+    else:
+        contexts = ranked_chunks[ranked_chunks['query_id'] == qid]['retrieved_text'].tolist()
     complete_rag_prompt = create_rag_messages(query, contexts)
     complete_rag_prompt = model.tokenizer.apply_chat_template(complete_rag_prompt, tokenize=False, add_generation_prompt=True)
     perturbed_prompts = []
@@ -157,11 +161,11 @@ for i in range(len(topics)):
     ### Save the perturbed outputs to a file
     import pickle
     import datetime
-    output_folder = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/outputs/'
+    output_folder = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/outputs_evaluation/'
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
-    if not os.path.exists(os.path.join(output_folder,f'perturbed_outputs_query_{i}.pkl')):
-        with open(os.path.join(output_folder,f'perturbed_outputs_query_{i}.pkl'), 'wb') as f:
+    if not os.path.exists(os.path.join(output_folder,f'perturbed_outputs_query_{qid}.pkl')):
+        with open(os.path.join(output_folder,f'perturbed_outputs_query_{qid}.pkl'), 'wb') as f:
             pickle.dump(perturbed_outputs, f)
     else:
         with open(os.path.join(output_folder,str(datetime.datetime.now().strftime('%Y%m%d_%H%M'))+'perturbed_outputs.pkl'), 'wb') as f:
