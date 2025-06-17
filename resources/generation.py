@@ -175,8 +175,10 @@ def ExplainableAutoModelForGeneration(T:type):
             outputs = super().forward(*args, **kwargs)
 
             # save token probabilities:
-            if self._explain: self._exp_probs.append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
-            else:             self._gen_probs.append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
+            #if self._explain: self._exp_probs.append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
+            #else:             self._gen_probs.append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
+            if self._explain: self._exp_probs.append(outputs.logits[:,-1:,:].detach().cpu(), dim=-1)
+            else:             self._gen_probs.append(outputs.logits[:,-1:,:].detach().cpu(), dim=-1)
 
             # return token probabilities:
             return outputs

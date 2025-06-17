@@ -1,18 +1,28 @@
 #%%
 import pickle
-
-
-pickle_path = 'perturbed_outputs.pkl'
-with open(pickle_path, 'rb') as f:
+import os
+importance_score_retrieval = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/index_snowflake/importance_scores/importance_scores_122.pkl'
+with open(importance_score_retrieval, 'rb') as f:
+    importance_scores = pickle.load(f)
+pickle_path = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/outputs_evaluation/'
+i= 1
+filename = f'perturbed_outputs_query_{str(i)}.pkl'
+#for filename in os.listdir(pickle_path):
+with open(os.path.join(pickle_path, filename), 'rb') as f:
     perturbed_outputs = pickle.load(f)
-    
+#%%
+#with open('/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/outputs/perturbed_outputs_query_0.pkl', 'rb') as f:
+#    perturbed_outputs = pickle.load(f)
 #%%
 import pandas as pd
 ranked_chunks = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/code/efra_retrieval/results/ir_results_chunks.csv')
 topics = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/data/EFRA/Evaluation Dataset/topics.tsv', sep='\t')
 evaluation_dataset = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/code/efra_retrieval/validation_Dataset_with_chunks_ids.csv')    
+query = topics[topics['query_id'] == i]['query'].values[0]
+manual_rank = evaluation_dataset[evaluation_dataset['query'] == query]
+
+evaluation_for_extracted =ranked_chunks[ranked_chunks.query_id == i].merge(manual_rank[['Relevancy','chunks_id']], left_on='doc_id', right_on='chunks_id', how='left', suffixes=('', '_manual'))
 #%%
-import nltk
 from nltk.corpus import stopwords
 def clean_tokens(tokens):
     stop_words = list(stopwords.words('english'))
@@ -33,7 +43,7 @@ def clean_tokens_mask(tokens):
     stop_words = set(stopwords.words('english'))
     stop_symbols = {'', '\n', '.', ',', '(', ')', '[', ']', '{', '}', ':', ';',
                     '?', '!', '"', "'", '-', '_', '/', '\\', '*', '&', '^', '%',
-                    '$', '#', '@', '~'}
+                    '$', '#', '@', '~','**', '**:'}
     combined_stops = stop_words.union(stop_symbols)
 
     mask = [(token.strip() not in combined_stops) for token in tokens]
@@ -64,6 +74,8 @@ for desc, data in perturbed_outputs.items():
     filtered_probs = [p for p, keep in zip(topk_proabilities, mask) if keep][:topk]
     token_sets[desc] = filtered_tokens
     token_probs[desc] = {token: prob for token, prob in zip(filtered_tokens, filtered_probs)}
+#%%
+### Calculate the same but for the max and not the average
 
 #%%
 ### Find intersection of tokens across all descriptions
@@ -77,7 +89,7 @@ def plot_token_probabilities(shared_tokens, token_probs, title="Token Probabilit
         labels = []
         for desc in token_probs:
             prob = token_probs[desc].get(token, 0.0)
-            values.append(prob)
+            values.append(prob - token_probs['complete'].get(token, 0.0))
             labels.append(desc)
         plt.plot(labels, values, marker='o', label=f"Token: {token}")
 
@@ -90,8 +102,8 @@ def plot_token_probabilities(shared_tokens, token_probs, title="Token Probabilit
     plt.show()
 
 # Only plot a subset to avoid clutter
-plot_token_probabilities(list(intersection)[:5], {key: token_probs[key] for key in [key for key in token_probs if 'constrained' in key or 'complete' in key]}, title="Token Probabilities for Constrained Prompt Variants")
-plot_token_probabilities(list(intersection)[:5], {key: token_probs[key] for key in [key for key in token_probs if 'constrained' not in key]}, title="Token Probabilities for Prompt Variants")
+plot_token_probabilities(list(intersection)[:10], {key: token_probs[key] for key in [key for key in token_probs if 'constrained' in key or 'complete' in key]}, title="Token Probabilities for Constrained Prompt Variants")
+plot_token_probabilities(list(intersection)[:10], {key: token_probs[key] for key in [key for key in token_probs if 'constrained' not in key]}, title="Token Probabilities for Prompt Variants")
 
 #%%
 for i, desc1 in enumerate(all_descriptions):
