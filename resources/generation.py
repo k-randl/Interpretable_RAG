@@ -172,14 +172,14 @@ def ExplainableAutoModelForGeneration(T:type):
 
         def forward(self, *args, **kwargs):
             # get token probabilities:
-            p = super().forward(*args, **kwargs)
+            outputs = super().forward(*args, **kwargs)
 
             # save token probabilities:
-            if self._explain: self._exp_probs.append(softmax(p.logits[:,-1:,:].detach().cpu(), dim=-1))
-            else:             self._gen_probs.append(softmax(p.logits[:,-1:,:].detach().cpu(), dim=-1))
+            if self._explain: self._exp_probs.append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
+            else:             self._gen_probs.append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
 
             # return token probabilities:
-            return p
+            return outputs
         
         def generate(self, inputs:Union[List[str], str], **kwargs) -> List[str]:
             '''Generates continuatiations of the passed input prompt(s).
@@ -289,11 +289,20 @@ def ExplainableAutoModelForGeneration(T:type):
 
                 else: raise NotImplementedError()
 
+            # prepare model_kwargs:
+            input_ids, _, model_kwargs = self._prepare_model_inputs(input_ids, self.tokenizer.bos_token_id, kwargs)
+            model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
+                
             with torch.no_grad():
 
                 # calculate p(t_0):
-                model_kwargs = kwargs
-                model_outputs = self.forward(input_ids=input_ids, attention_mask=attention_mask, return_dict=True, **model_kwargs)
+                model_inputs = self.prepare_inputs_for_generation(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    **model_kwargs
+                )
+                model_outputs = self.forward(input_ids=input_ids, attention_mask=attention_mask, return_dict=True, use_cache=True, **model_kwargs)
+                model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs, num_new_tokens=input_ids.shape[1])
                 torch.cuda.empty_cache()
 
                 # update inputs:
@@ -306,13 +315,13 @@ def ExplainableAutoModelForGeneration(T:type):
 
                 # p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_1|t_0...t_(j-1)):
                 for i in tqdm.tqdm(range(1, outputs.shape[1],batch_size if single_input else 1),total=int(outputs.shape[1]/batch_size), desc='Calculating probabilities'):
-                    model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs, num_new_tokens=nxt.shape[1])
                     model_inputs = self.prepare_inputs_for_generation(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         **model_kwargs
                     )
                     model_outputs = self.forward(**model_inputs, return_dict=True)
+                    model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs, num_new_tokens=nxt.shape[1])
                     torch.cuda.empty_cache()
 
                     # update inputs:
