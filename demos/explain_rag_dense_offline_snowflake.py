@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from resources.retrieval_offline import ExplainableAutoModelForContextEncoding, ExplainableAutoModelForRAG
+from resources.retrieval_offline import ExplainableAutoModelForContextEncoding, ExplainableAutoModelForRetrieval
 
 # %%
 # We use msmarco query and passages as an example
@@ -29,7 +29,7 @@ enc.save_index(contexts, 32, dir='index_snowflake', output_attentions=True, outp
 do_evaluate = False
 if not do_evaluate: exit()
 #%%
-rag = ExplainableAutoModelForRAG.from_pretrained(
+rag = ExplainableAutoModelForRetrieval.from_pretrained(
     'Snowflake/snowflake-arctic-embed-l-v2.0',
     add_pooling_layer = False
 ).to('cuda' if torch.cuda.is_available() else 'cpu')

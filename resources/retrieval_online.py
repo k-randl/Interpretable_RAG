@@ -27,33 +27,33 @@ def embedding_backward(model:PreTrainedModel, dh:torch.Tensor):
 # Generic Model Class:                                                  #
 #=======================================================================#
 
-class ExplainableAutoModelForRAG(torch.nn.Module):
+class ExplainableAutoModelForRetrieval(torch.nn.Module):
     @classmethod
     def from_pretrained(cls, query_encoder_name_or_path:str, context_encoder_name_or_path:Optional[str]=None, tokenizer_name_or_path:Optional[str]=None, *args, **kwargs):
-        rag = cls()
+        retriever = cls()
         
         # load tokenizer:
         if tokenizer_name_or_path is None:
             tokenizer_name_or_path = query_encoder_name_or_path
-        rag.tokenizer = AutoTokenizer.from_pretrained(
+        retriever.tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name_or_path, *args, **kwargs
         )
 
         # load query encoder:
-        rag.query_encoder = AutoModel.from_pretrained(
+        retriever.query_encoder = AutoModel.from_pretrained(
             query_encoder_name_or_path, *args, **kwargs
         )
 
         # load context encoder (if specified):
         if context_encoder_name_or_path is None:
-            rag.context_encoder = rag.query_encoder
+            retriever.context_encoder = retriever.query_encoder
 
         else:
-            rag.context_encoder = AutoModel.from_pretrained(
+            retriever.context_encoder = AutoModel.from_pretrained(
                 context_encoder_name_or_path, *args, **kwargs
             )
 
-        return rag
+        return retriever
     
     @property
     def in_tokens(self):
