@@ -1,8 +1,7 @@
 import torch
 import numpy as np
-from torch.nn.functional import softmax
-from transformers import PreTrainedModel, AutoTokenizer
-from typing import Union, List, Tuple, Optional
+from transformers import PreTrainedModel, PreTrainedTokenizer , AutoTokenizer
+from typing import Union, List, Dict, Tuple, Optional
 import tqdm
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -67,6 +66,34 @@ def _nucleus_sampling(probs, p=0.9):
 
     return probs_filtered
 
+def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=None) -> List[Dict[str,str]]:
+    """
+    Creates chat-style messages for RAG using LLaMA-style chat template.
+
+    Args:
+        query (str):        The user's query.
+        contexts (list):    A list of strings representing the retrieved documents.
+        system (str):       An optional system prompt.
+
+    Returns:                A list of messages in chat format suitable for tokenizer.apply_chat_template().
+    """
+
+    # System prompt that sets the assistant behavior
+    if system is None:
+        system = (
+            "Use the following retrieved documents, ranked from highest "
+            "to lowest relevance, to answer the user's query. "
+            "Be thorough and accurate, and cite documents when useful."
+        )
+
+    # Format the context into a single message
+    context_text = "\n\n".join([f"Document {i+1}:\n{doc}" for i, doc in enumerate(contexts)])
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"{context_text}\n\nQuery: {query}"}
+    ]
+
 #=======================================================================#
 # Generic Model Class:                                                  #
 #=======================================================================#
@@ -79,11 +106,11 @@ def ExplainableAutoModelForGeneration(T:type):
     class _ExplainableAutoModelForGeneration(T):
         def __init__(self, config, *inputs, **kwargs):
             super().__init__(config, *inputs, **kwargs)
-            self.tokenizer   = AutoTokenizer.from_pretrained(config.name_or_path)
+            self.tokenizer:PreTrainedTokenizer = AutoTokenizer.from_pretrained(config.name_or_path)
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-            self._explain    = False
-            self._exp_probs  = []
-            self._gen_probs  = []
+            self._explain:bool = False
+            self._exp_probs:List[torch.Tensor] = []
+            self._gen_probs:torch.Tensor = []
             self._gen_output = None
 
         @property
@@ -105,10 +132,10 @@ def ExplainableAutoModelForGeneration(T:type):
             if len(self._exp_probs) == 0: return None
 
             # return probability of each token in the original generation:
-            return np.array([ 
-                [float(self._exp_probs[i, j, id]) for j, id  in enumerate(seq)]
+            return [np.array([ 
+                [float(t[i, j, id]) for j, id  in enumerate(seq)]
                 for i, seq in enumerate(self._gen_output)
-            ])
+            ]) for t in self._exp_probs]
 
         @property
         def gen_sequence_prob(self):
@@ -129,10 +156,10 @@ def ExplainableAutoModelForGeneration(T:type):
             if len(self._exp_probs) == 0: return None
 
             # return the multiplied probability of each token in the original generation:
-            return np.prod([ 
-                [float(self._exp_probs[i, j, id]) for j, id  in enumerate(seq)]
+            return [np.prod([ 
+                [float(t[i, j, id]) for j, id  in enumerate(seq)]
                 for i, seq in enumerate(self._gen_output)
-            ], axis=-1)
+            ], axis=-1) for t in self._exp_probs]
 
         @property
         def gen_bow_probs(self):
@@ -150,7 +177,7 @@ def ExplainableAutoModelForGeneration(T:type):
             if len(self._exp_probs) == 0: return None
 
             # return accumulated probability of each token in the vocabualry:
-            return self._exp_probs.mean(dim=1).float().numpy()
+            return [t.mean(dim=1).float().numpy() for t in self._exp_probs]
         
         #@property
         def gen_nucleus_probs(self, p:float=0.9):
@@ -168,23 +195,23 @@ def ExplainableAutoModelForGeneration(T:type):
             if len(self._exp_probs) == 0: return None
 
             # return accumulated probability of each token in the vocabualry:
-            return _nucleus_sampling(self._exp_probs.float(),p=p).mean(dim=1)
+            return [_nucleus_sampling(t.float(),p=p).mean(dim=1) for t in self._exp_probs]
 
         def forward(self, *args, **kwargs):
             # get token probabilities:
             outputs = super().forward(*args, **kwargs)
 
             # save token probabilities:
-            #if self._explain: self._exp_probs.append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
+            #if self._explain: self._exp_probs[-1].append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
             #else:             self._gen_probs.append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
-            if self._explain: self._exp_probs.append(outputs.logits[:,-1:,:].detach().cpu(), dim=-1)
-            else:             self._gen_probs.append(outputs.logits[:,-1:,:].detach().cpu(), dim=-1)
+            if self._explain: self._exp_probs[-1].append(outputs.logits[:,-1:,:].detach().cpu())
+            else:             self._gen_probs.append(outputs.logits[:,-1:,:].detach().cpu())
 
             # return token probabilities:
             return outputs
         
-        def generate(self, inputs:Union[List[str], str], **kwargs) -> List[str]:
-            '''Generates continuatiations of the passed input prompt(s).
+        def generate(self, inputs:List[str], **kwargs) -> List[str]:
+            '''Generates continuations of the passed input prompt(s).
 
             Args:
                 inputs:             The string(s) used as a prompt for the generation.
@@ -202,6 +229,7 @@ def ExplainableAutoModelForGeneration(T:type):
 
             # reset token probabilities:
             self._gen_probs  = []
+            self._exp_probs  = []
 
             # generate:
             self._gen_output = super().generate(**inputs, **kwargs).sequences[:, inputs.input_ids.shape[-1]:]
@@ -246,13 +274,13 @@ def ExplainableAutoModelForGeneration(T:type):
             self._explain    = True
 
             # reset token probabilities:
-            self._exp_probs  = []
+            self._exp_probs.append([])
 
             # generate:
             output = super().generate(**inputs, **kwargs).sequences[:, inputs.input_ids.shape[-1]:]
 
             # finalize probabilities:
-            self._exp_probs  = torch.concatenate(self._exp_probs, dim=1)
+            self._exp_probs[-1] = torch.concatenate(self._exp_probs[-1], dim=1)
 
             # return generated tokens:
             return output
@@ -268,14 +296,14 @@ def ExplainableAutoModelForGeneration(T:type):
             self._explain = True
 
             # reset token probabilities:
-            self._exp_probs = []
+            self._exp_probs.append([])
 
             # convert string to Iterable of tokens:
             if isinstance(outputs[0], str):
-                outputs = self.tokenizer(outputs, add_special_tokens=False, return_attention_mask=False,return_tensors='pt').input_ids
+                outputs = self.tokenizer(outputs, add_special_tokens=False, return_attention_mask=False, return_tensors='pt').input_ids
 
             # tokenize input:
-            inputs = self.tokenizer(inputs, truncation=True, return_tensors='pt')
+            inputs = self.tokenizer(inputs, padding=True, truncation=True, return_tensors='pt')
             input_ids = inputs.input_ids.to(self.device)
             attention_mask = inputs.attention_mask.to(self.device)
 
@@ -316,7 +344,8 @@ def ExplainableAutoModelForGeneration(T:type):
                 attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, nxt.shape[1]), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
 
                 # p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_1|t_0...t_(j-1)):
-                for i in tqdm.tqdm(range(1, outputs.shape[1],batch_size if single_input else 1),total=int(outputs.shape[1]/batch_size), desc='Calculating probabilities'):
+                step = batch_size if single_input else 1
+                for i in tqdm.tqdm(range(1, outputs.shape[1], step),total=int(outputs.shape[1]/step), desc='Calculating probabilities'):
                     model_inputs = self.prepare_inputs_for_generation(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
@@ -335,10 +364,54 @@ def ExplainableAutoModelForGeneration(T:type):
                     attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, nxt.shape[1]), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
 
             # finalize probabilities:
-            if single_output: self._exp_probs = torch.concatenate(self._exp_probs, dim=0).transpose(0,1)
-            else:             self._exp_probs = torch.concatenate(self._exp_probs, dim=1)
-            
+            if single_input and single_output:
+                self._exp_probs[-1] = torch.concatenate(self._exp_probs[-1], dim=0).transpose(0,1)
+
+            else: self._exp_probs[-1] = torch.concatenate(self._exp_probs[-1], dim=1)
+
+            # split batch in elements if multiple inputs for the same output.
+            if not single_input and single_output:
+                self._exp_probs.extend([t.unsqueeze(0) for t in self._exp_probs.pop(-1)])
+
             # return generated tokens:
-            return torch.argmax(self._exp_probs, dim=-1)
+            return torch.argmax(self._exp_probs[-1], dim=-1)
+
+        def explain_generate(self, query:str, contexts:List[str], *, system:Optional[str]=None, **kwargs):
+            """
+            Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
+
+            Args:
+                query (str):        The user's query.
+                contexts (list):    A list of strings representing the retrieved documents.
+                system (str):       An optional system prompt.
+
+            Returns:                A list of generated chats.
+            """
+
+            # update / override kwargs:
+            kwargs['return_dict_in_generate'] = True
+            kwargs['output_scores'] = True
+
+            # generate output:
+            complete_rag_prompt = create_rag_prompt(query, contexts, system=system)
+            output = self.generate(
+                [self.tokenizer.apply_chat_template(complete_rag_prompt, tokenize=False)],
+                **kwargs
+            )
+
+            # generate perturbed inputs:
+            perturbed_rag_prompts = [create_rag_prompt(query, [], system=system)]
+            for i, ctx in enumerate(contexts):
+                prmpt = create_rag_prompt(query, contexts[:i]+contexts[i+1:], system=system)
+                perturbed_rag_prompts.append(prmpt)
+
+            # generate comparison output:
+            self.compare(
+                [self.tokenizer.apply_chat_template(prmpt, tokenize=False) for prmpt in perturbed_rag_prompts],
+                output,
+                **kwargs
+            )
+
+            return output
 
     return _ExplainableAutoModelForGeneration
