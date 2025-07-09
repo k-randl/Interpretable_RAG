@@ -177,8 +177,8 @@ def ExplainableAutoModelForGeneration(T:type):
             # save token probabilities:
             #if self._explain: self._exp_probs.append(softmax(p.logits[:,-1:,:].detach().cpu(), dim=-1))
             #else:             self._gen_probs.append(softmax(p.logits[:,-1:,:].detach().cpu(), dim=-1))
-            if self._explain: self._exp_probs.append(p.logits[:,-1:,:].detach().cpu(), dim=-1)
-            else:             self._gen_probs.append(p.logits[:,-1:,:].detach().cpu(), dim=-1)
+            if self._explain: self._exp_probs.append(p.logits[:,-1:,:].detach().cpu())
+            else:             self._gen_probs.append(p.logits[:,-1:,:].detach().cpu())
 
             # return token probabilities:
             return p

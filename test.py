@@ -1,7 +1,7 @@
 # %%
 import os
 os.environ['TRANSFORMERS_CACHE'] = '/home/francomaria.nardini/raid/guidorocchietti/.cache/huggingface'
-os.environ['CUDA_VISIBLE_DEVICES'] = '3,4,5'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3,4,5,6'
 import torch
 import numpy as np
 import pandas as pd
