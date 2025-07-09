@@ -181,7 +181,7 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
         with open(os.path.join(dir, 'embeddings.pt'), 'wb') as file:
             torch.save(torch.concatenate(embeddings, dim=0), file)
 
-class ExplainableAutoModelForRAG(torch.nn.Module):
+class ExplainableAutoModelForRetrieval(torch.nn.Module):
     @classmethod
     def from_pretrained(cls, query_encoder_name_or_path:str, tokenizer_name_or_path:Optional[str]=None, *args, **kwargs):
         encoder = cls()

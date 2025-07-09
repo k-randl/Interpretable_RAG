@@ -1,10 +1,10 @@
 #%%
 import torch
 from transformers import AutoTokenizer
-from resources.modelling import ExplainableAutoModel, ExplainableAutoModelForRAG
+from resources.retrieval_offline import ExplainableAutoModelForContextEncoding, ExplainableAutoModelForRetrieval
 tokenizer = AutoTokenizer.from_pretrained('facebook/dragon-plus-query-encoder')
-query_encoder = ExplainableAutoModel.from_pretrained('facebook/dragon-plus-query-encoder')
-context_encoder = ExplainableAutoModel.from_pretrained('facebook/dragon-plus-context-encoder')
+query_encoder = ExplainableAutoModelForContextEncoding.from_pretrained('facebook/dragon-plus-query-encoder')
+context_encoder = ExplainableAutoModelForRetrieval.from_pretrained('facebook/dragon-plus-context-encoder')
 
 # We use msmarco query and passages as an example
 query =  "Where was Marie Curie born?"

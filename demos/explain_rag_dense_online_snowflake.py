@@ -5,7 +5,7 @@ sys.path.insert(0, "..")
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from resources.retrieval_online import ExplainableAutoModelForRAG
+from resources.retrieval_online import ExplainableAutoModelForRetrieval
 
 # We use msmarco query and passages as an example
 query =  "Where was Marie Curie born?"
@@ -14,7 +14,7 @@ contexts = [
     "Born in Paris on 15 May 1859, Pierre Curie was the son of Eugène Curie, a doctor of French Catholic origin from Alsace."
 ]
 
-rag = ExplainableAutoModelForRAG.from_pretrained(
+rag = ExplainableAutoModelForRetrieval.from_pretrained(
     'Snowflake/snowflake-arctic-embed-l-v2.0',
     add_pooling_layer = False
 ).to('cuda' if torch.cuda.is_available() else 'cpu')
