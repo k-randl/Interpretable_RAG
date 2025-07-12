@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+from scipy.special import comb
+from sklearn.linear_model import LinearRegression
 from transformers import PreTrainedModel, PreTrainedTokenizer , AutoTokenizer
 from numpy.typing import NDArray
 from typing import Union, List, Dict, Tuple, Optional, Literal
@@ -133,6 +135,13 @@ def ExplainableAutoModelForGeneration(T:type):
             self._gen_probs:torch.Tensor = []
             self._gen_output = None
 
+        #===============================================================#
+        # Properties:                                                   #
+        #===============================================================#
+        #>> Pairs of properties named `gen_[name]_probs` and
+        #>> `cmp_[name]_probs` will be automatically used by the
+        #>> `get_shapley_values(...)` method!
+
         @property
         def gen_token_probs(self):
             '''Probability of each token in the original generation.'''
@@ -156,6 +165,7 @@ def ExplainableAutoModelForGeneration(T:type):
                 [float(t[i, j, id]) for j, id  in enumerate(seq)]
                 for i, seq in enumerate(self._gen_output)
             ]) for t in self._exp_probs]
+
 
         @property
         def gen_sequence_prob(self):
@@ -181,6 +191,7 @@ def ExplainableAutoModelForGeneration(T:type):
                 for i, seq in enumerate(self._gen_output)
             ], axis=-1) for t in self._exp_probs]
 
+
         @property
         def gen_bow_probs(self):
             '''Accumulated probability of each token in the vocabualry of being generated given the original input.'''
@@ -199,6 +210,7 @@ def ExplainableAutoModelForGeneration(T:type):
             # return accumulated probability of each token in the vocabualry:
             return [t.mean(dim=1).float().numpy() for t in self._exp_probs]
         
+
         #@property
         def gen_nucleus_probs(self, p:float=0.9):
             '''Accumulated probability of each token in the vocabualry of being generated given the original input.'''
@@ -217,6 +229,10 @@ def ExplainableAutoModelForGeneration(T:type):
             # return accumulated probability of each token in the vocabualry:
             return [_nucleus_sampling(t.float(),p=p).mean(dim=1).numpy() for t in self._exp_probs]
 
+        #===============================================================#
+        # Methods:                                                      #
+        #===============================================================#
+
         def forward(self, *args, **kwargs):
             # get token probabilities:
             outputs = super().forward(*args, **kwargs)
@@ -229,7 +245,7 @@ def ExplainableAutoModelForGeneration(T:type):
 
             # return token probabilities:
             return outputs
-        
+
         def generate(self, inputs:List[str], **kwargs) -> List[str]:
             '''Generates continuations of the passed input prompt(s).
 
@@ -399,16 +415,20 @@ def ExplainableAutoModelForGeneration(T:type):
             # return generated tokens:
             return torch.argmax(self._exp_probs[-1], dim=-1)
 
-        def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, precise:Optional[bool]=None, system:Optional[str]=None, **kwargs):
+
+        def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', system:Optional[str]=None, **kwargs):
             """
             Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
 
             Args:
-                query (str):        The user's query.
-                contexts (list):    A list of strings representing the retrieved documents.
-                batch_size (int):   The batch size for generating perturbations (default: `32`).
-                precise (bool):     Whether to compute precise or kernel SHAP atribution values. If undefined, computes the precise values for up to `log2(batch_size)` contexts and kernel values otherwise. 
-                system (str):       An optional system prompt.
+                query (str):       The user's query.
+                contexts (list):   A list of strings representing the retrieved documents.
+                batch_size (int):  The batch size for generating perturbations (default: `32`).
+                max_samples (int): Maximum number of samples used for computing SHAP atribution values.
+                                   If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
+                                   If `inf` is passed, always computes the precise SHAP values.
+                                   If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).  
+                system (str):      An optional system prompt.
 
             Returns:
                 A list of generated chats.
@@ -430,16 +450,25 @@ def ExplainableAutoModelForGeneration(T:type):
                 **kwargs
             )
 
-            # initialize index (interpreted as a bitmask):
+            # calculate number of samples needed for precise calculation:
             n = 2 ** len(contexts)
-            index = n - 1
-            perturbed_rag_prompts = [None] * n
-            perturbed_rag_prompts[index] = complete_rag_prompt
+            if   max_samples == 'auto': max_samples = batch_size
+            elif max_samples == 'inf':  max_samples = n
+            perturbed_rag_prompts = [None] * min(n, max_samples)
 
-            # generate perturbed inputs:
-            if (precise is None) and n > batch_size: print(f'!!!Warning: Kernel-SHAP approximation not yet implemented. Explaining more than {int(np.log2(batch_size)):d} contexts may take some time!!!')
-            if (not precise) and not precise is None: raise NotImplementedError()
-            self._permutations = np.array(self.__generate_permutations(query, contexts, perturbed_rag_prompts, index, system=system))
+            # generate prompts:
+            if max_samples >= n:
+                # generate prompts for perturbed inputs (precise SHAP values):
+                perturbed_rag_prompts[-1] = complete_rag_prompt
+                self.__shap_cache   = np.array(self.__generate_permutations(query, contexts, perturbed_rag_prompts, n-1, system=system))
+                self.__shap_precise = True
+
+            elif max_samples < n:
+                # sample prompts for kernel SHAP:
+                self.__shap_cache   = self.__generate_sample(query, contexts, perturbed_rag_prompts, max_samples, n-1, system=system)
+                self.__shap_precise = False
+
+            else: raise ValueError(f'Unknown value for parameter `max_samples`: {max_samples}')
 
             # generate comparison output:
             num_batches = int(np.ceil(len(perturbed_rag_prompts[:-1]) / batch_size))
@@ -487,6 +516,32 @@ def ExplainableAutoModelForGeneration(T:type):
 
             return permutations
 
+        def __generate_sample(self, query:str, contexts:List[str], perturbed_rag_prompts:List[str], num_samples:int, num_perturbations:int, *, system:Optional[str]=None):
+            # take sample of `num_samples` unique sets of documents (including empty and full):
+            sample = np.empty(num_samples, dtype=int)
+            sample[0]    = 0
+            sample[-1]   = num_perturbations-1
+            sample[1:-1] = np.random.choice(np.arange(1,num_perturbations-1), size=(num_samples-2), replace=False)
+
+            # generate corresponding prompts:
+            features = np.zeros((num_samples, len(contexts)), dtype=float)
+            for i, index in enumerate(sample[:-1]):
+                # translate index to set:
+                j, m = 0, 1
+                current_contexts = []
+                while j < len(contexts):
+                    if index & m:
+                        current_contexts.append(contexts[j])
+                        features[i, j] = 1.
+                    j += 1
+                    m = m << 1
+
+                # generate prompt:
+                perturbed_rag_prompts[i] = create_rag_prompt(query, current_contexts, system=system)
+
+            return features
+            
+
         def get_shapley_values(self, aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token', **kwargs) -> NDArray[np.float_]:
             """
             Generates Shapley feature attribution values for the chose aggregation method.
@@ -526,36 +581,37 @@ def ExplainableAutoModelForGeneration(T:type):
             else: raise ValueError(f'Unknown value for parameter `aggregation`: "{aggregation}"')
 
             # Call actual method:
-            return self._get_shapley_values(probs)
+            if self.__shap_precise: return self._get_shapley_values_precise(probs)
+            else: return self._get_shapley_values_kernel(probs)
 
-        def _get_shapley_values(self, probs:NDArray[np.float_]) -> NDArray[np.float_]:
+        def _get_shapley_values_precise(self, probs:NDArray[np.float_]) -> NDArray[np.float_]:
             # Get the shape of the permutations matrix: (num_permutations, num_documents)
-            num_permutations, num_docs = self._permutations.shape
+            num_permutations, num_docs = self.__shap_cache.shape
 
             # Initialize array to store marginal contributions for each permutation step
-            p_marginal = np.empty(self._permutations.shape + probs[0].shape, dtype=probs[0].dtype)
+            p_marginal = np.empty(self.__shap_cache.shape + probs[0].shape, dtype=probs[0].dtype)
 
             # For each permutation, calculate the marginal contributions
             for i in range(num_permutations):
                 # First document's contribution is its raw probability
-                p_marginal[i, 0] = probs[self._permutations[i, 0]]
+                p_marginal[i, 0] = probs[self.__shap_cache[i, 0]]
 
                 for j in range(1, num_docs):
                     # Difference in output probability when adding the j-th document
-                    prev = probs[self._permutations[i, j - 1]]
-                    curr = probs[self._permutations[i, j]]
+                    prev = probs[self.__shap_cache[i, j - 1]]
+                    curr = probs[self.__shap_cache[i, j]]
                     p_marginal[i, j] = curr - prev
 
             # Encode the permutation transitions using bitwise operations
-            new_doc = np.empty(self._permutations.shape, dtype=np.int16)
+            new_doc = np.empty(self.__shap_cache.shape, dtype=np.int16)
 
             # First position is zeroed (i.e., no document yet included)
             new_doc[:, 0] = 0
 
             for j in range(1, num_docs):
                 # Bitwise difference to capture which bit changed, then take log2
-                prev = self._permutations[:, j - 1]
-                curr = self._permutations[:, j]
+                prev = self.__shap_cache[:, j - 1]
+                curr = self.__shap_cache[:, j]
                 new_doc[:, j] = np.log2(curr & ~prev) + 1
 
             # Initialize SHAP value container: one entry per document
@@ -568,5 +624,17 @@ def ExplainableAutoModelForGeneration(T:type):
 
             # Return SHAP values for all but the baseline (first one)
             return p_shap[1:]
+
+        def _get_shapley_values_kernel(self, probs:NDArray[np.float_]) -> NDArray[np.float_]:
+            # fit a linear regressor using the SHAP kernel:
+            lr = LinearRegression()
+            x = self.__shap_cache[1:-1]
+            y = np.stack(probs[1:-1])
+            w = [(len(z)-1) / (comb(len(z), sum(z)) * z.sum() * (-(z-1)).sum())
+                for z in x]
+            lr.fit(x, y, w)
+
+            return lr.coef_.T
+
 
     return _ExplainableAutoModelForGeneration
