@@ -78,7 +78,8 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
         contexts (list):    A list of strings representing the retrieved documents.
         system (str):       An optional system prompt.
 
-    Returns:                A list of messages in chat format suitable for tokenizer.apply_chat_template().
+    Returns:
+        A list of messages in chat format suitable for tokenizer.apply_chat_template().
     """
 
     # System prompt that sets the assistant behavior
@@ -97,24 +98,124 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
         {"role": "user", "content": f"{context_text}\n\nQuery: {query}"}
     ]
 
-def plot_shap_attributions(shap_values:NDArray[np.float_], tokens:List[str]) -> None:
+def plot_shap_attributions(shap_values:NDArray[np.float_], tokens:List[str], *, normalize:bool=True, cmap:str='tab10') -> None:
+    """
+    Plot stacked SHAP attributions for multiple documents as positive and negative bar segments.
+
+    Args:
+        shap_values (NDArray[np.float_]): A 2D array of SHAP values with shape `(num_documents, num_tokens)`, where each row represents a document and each column corresponds to a token's attribution score.
+        tokens (List[str]):               A list of token strings corresponding to the SHAP values. Length must match the number of columns in `shap_values`.
+        normalize (bool):                 If `True`, normalizes the SHAP values across tokens so that the sum of absolute values equals 1 (default=`True`).
+        cmap (str):                       The name of a matplotlib colormap used for highlighting.
+    """
     import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+
+    # Normalize so that values sum to 1 (if enabled):
+    if normalize:
+        shap_values = shap_values / np.abs(shap_values).sum(axis=0)
+
+    # Get colormap:
+    num_docs, num_tokens = shap_values.shape
+    colors = cm.get_cmap(cmap)
 
     p_pos = 0.
     p_neg = 0.
     for i, p_doc in enumerate(shap_values):
         p_doc_pos = np.maximum(p_doc, 0)
-        plt.bar(range(len(p_doc)), p_doc_pos, bottom=p_pos, label=f'Document {i+1:d} (pos)')
+        plt.bar(range(len(p_doc)), p_doc_pos, bottom=p_pos, color=colors(i), label=f'Document {i+1:d}')
         p_pos += p_doc_pos
 
-        p_avg_neg = np.minimum(p_doc, 0)
-        plt.bar(range(len(p_doc)), p_avg_neg, bottom=p_neg, label=f'Document {i+1:d} (neg)')
-        p_neg += p_avg_neg
+        p_doc_neg = np.minimum(p_doc, 0)
+        plt.bar(range(len(p_doc)), p_doc_neg, bottom=p_neg, color=colors(i))
+        p_neg += p_doc_neg
+
+    # Tick and axis settings:
+    plt.xticks(range(len(tokens)), tokens, rotation=90)
+    if normalize:
+        plt.ylim(-1, 1)
+
+    # Clean frame (keep only left spine):
+    ax = plt.gca()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+
+    # Add horizontal grid line at zero:
+    plt.axhline(y=0, color='black', linewidth=0.5)
+
+    # Add vertical grid lines at each tick:
+    for tick_loc in range(len(tokens)):
+        plt.axvline(x=tick_loc, color='lightgray', linewidth=0.5, zorder=0)
 
     plt.legend()
-    plt.xticks(range(len(p_pos)), tokens, rotation=90)
     plt.tight_layout()
     plt.show()
+
+def highlight_dominant_passages(shap_values:NDArray[np.float_], tokens:List[str], *, threshold:float=.5, cmap:str='tab10') -> str:
+    """
+    Highlights tokens in a text sequence where a single document contributes
+    at least `threshold` of the total positive SHAP value at that token.
+
+    Args:
+        shap_values (NDArray[np.float_]): A 2D array of SHAP values with shape `(num_documents, num_tokens)`,
+                                          where each row represents a document and each column corresponds to a token's attribution score.
+        tokens (List[str]):               A list of token strings corresponding to the SHAP values.
+                                          Length must match the number of columns in `shap_values`.
+        threshold (float):                Minimum attribution for highlighting in the intervall `[0., 1.]` (default: `0.5`).
+        cmap (str):                       The name of a matplotlib colormap used for highlighting.
+
+    Returns:
+        An HTML-formatted string with spans highlighting dominant SHAP regions.
+    """
+    import matplotlib.cm as cm
+    import matplotlib.colors as mcolors
+    from IPython.display import display, HTML
+
+    # extract only on positive contributions:
+    shap_values_pos = np.maximum(shap_values, 0)
+    num_docs, num_tokens = shap_values_pos.shape
+    token_docs = -np.ones(num_tokens, dtype=int)
+
+    for t in range(num_tokens):
+        column = shap_values_pos[:, t]
+        total = column.sum()
+        if total > 0:
+            dominant_doc = np.argmax(column)
+            if column[dominant_doc] / total >= threshold:
+                token_docs[t] = dominant_doc
+
+    # Prepare color map
+    cmap = cm.get_cmap(cmap)
+    rgb_colors = [mcolors.to_hex(cmap(i)) for i in range(num_docs)]
+
+    # Build highlighed HTML:
+    html_tokens = []
+    for tok, doc in zip(tokens, token_docs):
+        if doc >= 0: html_tok = f'<span style="background-color:{rgb_colors[doc]}; padding:2px; border-radius:3px;">{tok}</span>'
+        else:        html_tok = tok
+        html_tokens.append(html_tok)
+
+    html_response = ' '.join(html_tokens)
+
+    # Build legend:
+    html_legend   = ' '.join([f'<i style="background-color:{c}; padding:2px; border-radius:3px;">Document {i:d}</i>' for i, c in enumerate(rgb_colors)])
+    
+    # Build, display, and return final HTML:
+    html_str = (
+        '<table>\n' +
+        '<tr style="border-top: 1px solid">\n' +
+        '<td style="text-align:right; vertical-align:top"><b style="line-height:2">Response:</b></td>\n' +
+        '<td style="text-align:left; vertical-align:top"><div style="line-height:2">' + html_response + '</div></td>\n' +
+        '</tr>\n' +
+        '<tr style="border-top: 1px solid">\n' +
+        '<td style="text-align:right; vertical-align:top"><i style="line-height:2">Legend:</i></td>\n' +
+        '<td style="text-align:left; vertical-align:top"><div style="line-height:2">' + html_legend + '</div></td>\n' +
+        '</tr>\n' +
+        '</table>\n'
+    )
+    display(HTML(html_str))
+    return html_str
 
 #=======================================================================#
 # Generic Model Class:                                                  #
@@ -630,11 +731,14 @@ def ExplainableAutoModelForGeneration(T:type):
             lr = LinearRegression()
             x = self.__shap_cache[1:-1]
             y = np.stack(probs[1:-1])
-            w = [(len(z)-1) / (comb(len(z), sum(z)) * z.sum() * (-(z-1)).sum())
+            w = [(len(z)-1) / (comb(len(z), sum(z)) * sum(z) * -sum(z-1))
                 for z in x]
             lr.fit(x, y, w)
 
-            return lr.coef_.T
+            # attributions are estimated SHAP values:
+            attributions = lr.coef_.T
 
+            # rescale attributions to fit prediction:
+            return attributions / np.abs(attributions.sum(axis=0)) * (probs[-1] - probs[0])
 
     return _ExplainableAutoModelForGeneration
