@@ -235,6 +235,9 @@ def ExplainableAutoModelForGeneration(T:type):
             self._exp_probs:List[torch.Tensor] = []
             self._gen_probs:torch.Tensor = []
             self._gen_output = None
+            self._shap_cache = None
+            self._shap_precise = None
+            
 
         #===============================================================#
         # Properties:                                                   #
@@ -461,7 +464,13 @@ def ExplainableAutoModelForGeneration(T:type):
 
             # prepare model_kwargs:
             input_ids, _, model_kwargs = self._prepare_model_inputs(input_ids, self.tokenizer.bos_token_id, kwargs)
-            model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
+            cur_len = input_ids.shape[1]
+            #model_kwargs = self._get_initial_cache_position(input_ids, **model_kwargs)
+            model_kwargs = self._get_initial_cache_position(
+                            seq_length=input_ids.shape[1],          # length of the prompt
+                            device=input_ids.device,               # usually cuda:0 / cpu
+                            model_kwargs=model_kwargs,             # the whole dict, **not** unpacked
+                                )
                 
             with torch.no_grad():
 
@@ -561,13 +570,13 @@ def ExplainableAutoModelForGeneration(T:type):
             if max_samples >= n:
                 # generate prompts for perturbed inputs (precise SHAP values):
                 perturbed_rag_prompts[-1] = complete_rag_prompt
-                self.__shap_cache   = np.array(self.__generate_permutations(query, contexts, perturbed_rag_prompts, n-1, system=system))
-                self.__shap_precise = True
+                self._shap_cache   = np.array(self.__generate_permutations(query, contexts, perturbed_rag_prompts, n-1, system=system))
+                self._shap_precise = True
 
             elif max_samples < n:
                 # sample prompts for kernel SHAP:
-                self.__shap_cache   = self.__generate_sample(query, contexts, perturbed_rag_prompts, max_samples, n-1, system=system)
-                self.__shap_precise = False
+                self._shap_cache   = self.__generate_sample(query, contexts, perturbed_rag_prompts, max_samples, n-1, system=system)
+                self._shap_precise = False
 
             else: raise ValueError(f'Unknown value for parameter `max_samples`: {max_samples}')
 
@@ -682,37 +691,37 @@ def ExplainableAutoModelForGeneration(T:type):
             else: raise ValueError(f'Unknown value for parameter `aggregation`: "{aggregation}"')
 
             # Call actual method:
-            if self.__shap_precise: return self._get_shapley_values_precise(probs)
+            if self._shap_precise: return self._get_shapley_values_precise(probs)
             else: return self._get_shapley_values_kernel(probs)
 
         def _get_shapley_values_precise(self, probs:NDArray[np.float_]) -> NDArray[np.float_]:
             # Get the shape of the permutations matrix: (num_permutations, num_documents)
-            num_permutations, num_docs = self.__shap_cache.shape
+            num_permutations, num_docs = self._shap_cache.shape
 
             # Initialize array to store marginal contributions for each permutation step
-            p_marginal = np.empty(self.__shap_cache.shape + probs[0].shape, dtype=probs[0].dtype)
+            p_marginal = np.empty(self._shap_cache.shape + probs[0].shape, dtype=probs[0].dtype)
 
             # For each permutation, calculate the marginal contributions
             for i in range(num_permutations):
                 # First document's contribution is its raw probability
-                p_marginal[i, 0] = probs[self.__shap_cache[i, 0]]
+                p_marginal[i, 0] = probs[self._shap_cache[i, 0]]
 
                 for j in range(1, num_docs):
                     # Difference in output probability when adding the j-th document
-                    prev = probs[self.__shap_cache[i, j - 1]]
-                    curr = probs[self.__shap_cache[i, j]]
+                    prev = probs[self._shap_cache[i, j - 1]]
+                    curr = probs[self._shap_cache[i, j]]
                     p_marginal[i, j] = curr - prev
 
             # Encode the permutation transitions using bitwise operations
-            new_doc = np.empty(self.__shap_cache.shape, dtype=np.int16)
+            new_doc = np.empty(self._shap_cache.shape, dtype=np.int16)
 
             # First position is zeroed (i.e., no document yet included)
             new_doc[:, 0] = 0
 
             for j in range(1, num_docs):
                 # Bitwise difference to capture which bit changed, then take log2
-                prev = self.__shap_cache[:, j - 1]
-                curr = self.__shap_cache[:, j]
+                prev = self._shap_cache[:, j - 1]
+                curr = self._shap_cache[:, j]
                 new_doc[:, j] = np.log2(curr & ~prev) + 1
 
             # Initialize SHAP value container: one entry per document
@@ -729,7 +738,7 @@ def ExplainableAutoModelForGeneration(T:type):
         def _get_shapley_values_kernel(self, probs:NDArray[np.float_]) -> NDArray[np.float_]:
             # fit a linear regressor using the SHAP kernel:
             lr = LinearRegression()
-            x = self.__shap_cache[1:-1]
+            x = self._shap_cache[1:-1]
             y = np.stack(probs[1:-1])
             w = [(len(z)-1) / (comb(len(z), sum(z)) * sum(z) * -sum(z-1))
                 for z in x]
@@ -741,4 +750,28 @@ def ExplainableAutoModelForGeneration(T:type):
             # rescale attributions to fit prediction:
             return attributions / np.abs(attributions.sum(axis=0)) * (probs[-1] - probs[0])
 
+        def save_values(self,path: str):
+            """
+            Saves the SHAP values and exp_probs and gen_probs to a file.
+
+            Args:
+                path (str): The path where the SHAP values should be saved.
+            """
+            import pickle
+            data_to_save = {
+                'shap_cache': self._shap_cache,
+                'shap_precise': self._shap_precise,
+                'exp_probs': self._exp_probs,
+                'gen_probs': self._gen_probs,
+                'gen_tokens': self._gen_tokens,
+                #'nucleus_probs': {
+                #    'gen': self.gen_nucleus_probs,
+                #    'cmp': self.cmp_nucleus_probs
+                #},
+                #'bow_probs': {'gen': self.gen_bow_probs,    'cmp': self.cmp_bow_probs                },
+                #'sequence_probs': {'gen': self.gen_sequence_prob, 'cmp': self.cmp_sequence_probs }
+            }
+            with open(path, 'wb') as f:
+                pickle.dump(data_to_save, f)        
+            return data_to_save
     return _ExplainableAutoModelForGeneration
