@@ -6,6 +6,8 @@ from transformers import PreTrainedModel, PreTrainedTokenizer , AutoTokenizer
 from numpy.typing import NDArray
 from typing import Union, List, Dict, Tuple, Optional, Literal
 import tqdm
+import pickle
+
 #=======================================================================#
 # Helper Functions:                                                     #
 #=======================================================================#
@@ -237,6 +239,8 @@ def ExplainableAutoModelForGeneration(T:type):
             self._gen_output = None
             self._shap_cache = None
             self._shap_precise = None
+            self.all_top_scores = None
+            self.all_top_tokens = None
             
 
         #===============================================================#
@@ -749,6 +753,37 @@ def ExplainableAutoModelForGeneration(T:type):
 
             # rescale attributions to fit prediction:
             return attributions / np.abs(attributions.sum(axis=0)) * (probs[-1] - probs[0])
+        
+        def _extract_top_exp_prob(self, top_k = 50):
+            """
+            Extracts the top-k probabilities and their corresponding tokens from the generated tensors.
+
+            Args:
+                top_k (int): The number of top probabilities to extract (default: 50).
+
+            Returns:
+                A tuple containing two tensors:
+                - `permutation_top_vals`: A tensor of shape (n_perm, top_k) containing the top-k scores.
+                - `permutation_top_tokens`: A tensor of shape (n_perm, top_k, 2) containing the step and token indices.
+            """
+            # ensure that we have at least one tensor to process:
+            if len(self._exp_probs) == 0: return None, None
+
+            # get the list of tensors:
+            tensor_list = self._exp_probs
+            all_top_scores = []           # list of (max_new_tokens, top_k)
+            all_top_tokens = []           # list of (max_new_tokens, top_k)
+
+            for scores in tensor_list:    # scores: (max_new_tokens, vocab_size)
+                # torch.topk along the *token* dimension (dim=-1)
+                vals, idx = torch.topk(scores, k=top_k, dim=-1)   # both (max_new_tokens, top_k)
+
+                all_top_scores.append(vals)   # keep the scores
+                all_top_tokens.append(idx)    # keep the token IDs
+
+            # (optional) stack into big tensors: (n_perm, max_new_tokens, top_k)
+            self.all_top_scores = torch.stack(all_top_scores).squeeze(1)
+            self.all_top_tokens = torch.stack(all_top_tokens).squeeze(1)
 
         def save_values(self,path: str):
             """
@@ -757,19 +792,16 @@ def ExplainableAutoModelForGeneration(T:type):
             Args:
                 path (str): The path where the SHAP values should be saved.
             """
-            import pickle
+            if self.all_top_scores is None or self.all_top_tokens is None:
+                self._extract_top_exp_prob()
+            top_exp_probs, top_exp_tokens = self._extract_top_exp_prob() 
+            
             data_to_save = {
+                'generated_output': self._gen_output,
                 'shap_cache': self._shap_cache,
                 'shap_precise': self._shap_precise,
-                'exp_probs': self._exp_probs,
+                'top_exp_probs': (self.all_top_scores, self.all_top_tokens),
                 'gen_probs': self._gen_probs,
-                'gen_tokens': self._gen_tokens,
-                #'nucleus_probs': {
-                #    'gen': self.gen_nucleus_probs,
-                #    'cmp': self.cmp_nucleus_probs
-                #},
-                #'bow_probs': {'gen': self.gen_bow_probs,    'cmp': self.cmp_bow_probs                },
-                #'sequence_probs': {'gen': self.gen_sequence_prob, 'cmp': self.cmp_sequence_probs }
             }
             with open(path, 'wb') as f:
                 pickle.dump(data_to_save, f)        
