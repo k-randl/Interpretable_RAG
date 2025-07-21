@@ -89,7 +89,8 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
         system = (
             "Use the following retrieved documents, ranked from highest "
             "to lowest relevance, to answer the user's query. "
-            "Be thorough and accurate, and cite documents when useful."
+            "Be thorough and accurate, and cite documents when useful. "
+            "Keep the answer under 200 words."
         )
 
     # Format the context into a single message
@@ -119,6 +120,7 @@ def plot_shap_attributions(shap_values:NDArray[np.float_], tokens:List[str], *, 
 
     # Get colormap:
     num_docs, num_tokens = shap_values.shape
+    
     colors = cm.get_cmap(cmap)
 
     p_pos = 0.
@@ -172,6 +174,7 @@ def highlight_dominant_passages(shap_values:NDArray[np.float_], tokens:List[str]
     """
     import matplotlib.cm as cm
     import matplotlib.colors as mcolors
+    #import matplotlib.colormaps as cm
     from IPython.display import display, HTML
 
     # extract only on positive contributions:
@@ -754,7 +757,7 @@ def ExplainableAutoModelForGeneration(T:type):
             # rescale attributions to fit prediction:
             return attributions / np.abs(attributions.sum(axis=0)) * (probs[-1] - probs[0])
         
-        def _extract_top_exp_prob(self, top_k = 50):
+        def _extract_top_exp_prob(self, top_k = 200):
             """
             Extracts the top-k probabilities and their corresponding tokens from the generated tensors.
 
@@ -792,16 +795,17 @@ def ExplainableAutoModelForGeneration(T:type):
             Args:
                 path (str): The path where the SHAP values should be saved.
             """
-            if self.all_top_scores is None or self.all_top_tokens is None:
-                self._extract_top_exp_prob()
-            top_exp_probs, top_exp_tokens = self._extract_top_exp_prob() 
+            #if self.all_top_scores is None or self.all_top_tokens is None:
+            #    self._extract_top_exp_prob()
+            #top_exp_probs, top_exp_tokens = self.all_top_scores, self.all_top_tokens
             
             data_to_save = {
                 'generated_output': self._gen_output,
-                'shap_cache': self._shap_cache,
                 'shap_precise': self._shap_precise,
-                'top_exp_probs': (self.all_top_scores, self.all_top_tokens),
-                'gen_probs': self._gen_probs,
+                'shapley_values_tokens': self.get_shapley_values('token'),
+                'shapley_values_passages' : self.get_shapley_values('sequence'),
+                'shapley_values_bow': self.get_shapley_values('bow'),
+                'shapley_values_nucleus': self.get_shapley_values('nucleus'),
             }
             with open(path, 'wb') as f:
                 pickle.dump(data_to_save, f)        

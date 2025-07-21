@@ -1,134 +1,75 @@
 #%%
-import pickle
-import os
-importance_score_retrieval = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/index_snowflake/importance_scores/importance_scores_122.pkl'
-with open(importance_score_retrieval, 'rb') as f:
-    importance_scores = pickle.load(f)
-pickle_path = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/outputs_evaluation/'
-i= 1
-filename = f'perturbed_outputs_query_{str(i)}.pkl'
-#for filename in os.listdir(pickle_path):
-with open(os.path.join(pickle_path, filename), 'rb') as f:
-    perturbed_outputs = pickle.load(f)
-#%%
-#with open('/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/outputs/perturbed_outputs_query_0.pkl', 'rb') as f:
-#    perturbed_outputs = pickle.load(f)
-#%%
+import os, pickle
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
+os.environ['TRANSFORMERS_CACHE'] = '/home/francomaria.nardini/raid/guidorocchietti/.cache/huggingface'
+os.environ['HF_TOKEN'] = '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'
+
+import torch
 import pandas as pd
+from transformers import AutoTokenizer
+from methods import *
+from resources.generation import ExplainableAutoModelForGeneration, plot_shap_attributions, highlight_dominant_passages
+
+MODEL_ID = 'meta-llama/Llama-3.1-8B-Instruct'
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+tokenizer.pad_token_id = tokenizer.eos_token_id
+#%%
+results_files = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/results_with_shap/'
+files = os.listdir(results_files)
+
+file = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/results_with_shap/Llama-3.1-8B-Instruct_top6_input_5.pkl'
+#%%
+with open(os.path.join(results_files, file), 'rb') as f:
+    results = pickle.load(f)
+
+# %%
+## read a xlsx with multiple sheets
 ranked_chunks = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/code/efra_retrieval/results/ir_results_chunks.csv')
 topics = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/data/EFRA/Evaluation Dataset/topics.tsv', sep='\t')
-evaluation_dataset = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/code/efra_retrieval/validation_Dataset_with_chunks_ids.csv')    
-query = topics[topics['query_id'] == i]['query'].values[0]
-manual_rank = evaluation_dataset[evaluation_dataset['query'] == query]
-
-evaluation_for_extracted =ranked_chunks[ranked_chunks.query_id == i].merge(manual_rank[['Relevancy','chunks_id']], left_on='doc_id', right_on='chunks_id', how='left', suffixes=('', '_manual'))
+#topics = pd.read_csv('/home/francomaria.nardini/raid/guidoroc
 #%%
-from nltk.corpus import stopwords
-def clean_tokens(tokens):
-    stop_words = list(stopwords.words('english'))
-    stop_words += ['', '\n', '.', ',', '(', ')', '[', ']', '{', '}', ':', ';', '?', '!', '"', "'", '-', '_', '/', '\\', '*', '&', '^', '%', '$', '#', '@', '~']
-    tokens_filtered = [token.strip() for token in tokens if token.strip(' \n') not in stop_words + ['']]
-    return tokens_filtered
-
-def clean_tokens_mask(tokens):
-    """
-    Returns a boolean mask for filtering out stopwords and punctuation.
-
-    Args:
-        tokens (list of str): The list of tokens.
-
-    Returns:
-        List[bool]: Mask with True for tokens to keep.
-    """
-    stop_words = set(stopwords.words('english'))
-    stop_symbols = {'', '\n', '.', ',', '(', ')', '[', ']', '{', '}', ':', ';',
-                    '?', '!', '"', "'", '-', '_', '/', '\\', '*', '&', '^', '%',
-                    '$', '#', '@', '~','**', '**:'}
-    combined_stops = stop_words.union(stop_symbols)
-
-    mask = [(token.strip() not in combined_stops) for token in tokens]
-    return mask
+validation = pd.read_excel('/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/evaluation_dataset_v2.xlsx')
+### join validation with ranked_chunks
+validation = validation.merge(topics, on='query',how='left')
+### merge the ranked_chunks 'score' column with validation on retrieved_text and query_id
+validation = validation.merge(ranked_chunks[['retrieved_text', 'query_id', 'score']],
+                              left_on=['retrieved_text', 'query_id'],
+                              right_on=['retrieved_text', 'query_id'],
+                              how='inner')
 #%%
-from transformers import AutoTokenizer
-from collections import defaultdict
-import matplotlib.pyplot as plt
-import torch
-tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B-Instruct")
-# Collect all token sets and map probabilities
-token_sets = {}
-token_probs = {}
-topk= 100
-top_tokens = []
-
-
-for desc, data in perturbed_outputs.items():
-    if 'complete' in  desc:
-        probs = data['gen_probs'].mean(dim=1)  # Average probabilities across all samples
-    else:
-        probs  = data['exp_probs'].mean(dim=1)  # Average probabilities across all samples
-    topk_indices = torch.topk(probs, topk+len(list(stopwords.words('english')))).indices.tolist()[0]
-    topk_proabilities = torch.topk(probs, topk+len(list(stopwords.words('english')))).values.tolist()[0]
-    topk_tokens = [tokenizer.decode([idx]) for idx in topk_indices]
-    mask = clean_tokens_mask(topk_tokens)
-    filtered_tokens = [t.strip() for t, keep in zip(topk_tokens, mask) if keep][:topk]
-    filtered_probs = [p for p, keep in zip(topk_proabilities, mask) if keep][:topk]
-    token_sets[desc] = filtered_tokens
-    token_probs[desc] = {token: prob for token, prob in zip(filtered_tokens, filtered_probs)}
-#%%
-### Calculate the same but for the max and not the average
-
-#%%
-### Find intersection of tokens across all descriptions
-intersection = set.intersection(*[set(tokens) for tokens in token_sets.values()])
+#calculate  rouge score between validation['retrieved_text'] and ranked_chunks['retrieved_text'
+# using the rouge_score package
+from rouge_score import rouge_scorer
+scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
+validation['rouge_score'] = validation.apply(lambda x: scorer.score(x['retrieved_text'], x['retrieved_text'])['rouge1'].fmeasure, axis=1)
 
 #%%
 
-def plot_token_probabilities(shared_tokens, token_probs, title="Token Probabilities Across Variants"):
-    for token in shared_tokens:
-        values = []
-        labels = []
-        for desc in token_probs:
-            prob = token_probs[desc].get(token, 0.0)
-            values.append(prob - token_probs['complete'].get(token, 0.0))
-            labels.append(desc)
-        plt.plot(labels, values, marker='o', label=f"Token: {token}")
-
-    plt.xticks(rotation=45, ha='right')
-    plt.title(title)
-    plt.ylabel("Probability")
-    plt.xlabel("Prompt Variant")
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-# Only plot a subset to avoid clutter
-plot_token_probabilities(list(intersection)[:10], {key: token_probs[key] for key in [key for key in token_probs if 'constrained' in key or 'complete' in key]}, title="Token Probabilities for Constrained Prompt Variants")
-plot_token_probabilities(list(intersection)[:10], {key: token_probs[key] for key in [key for key in token_probs if 'constrained' not in key]}, title="Token Probabilities for Prompt Variants")
-
-#%%
-for i, desc1 in enumerate(all_descriptions):
-    for j, desc2 in enumerate(all_descriptions):
-        if i < j:
-            diff = token_sets[desc1] ^ token_sets[desc2]
-            print(f"Token difference between '{desc1}' and '{desc2}': {diff}")
-            
+tokens= [x.lstrip("Ġ").lstrip('Ċ') for x in tokenizer.convert_ids_to_tokens(results['generated_output'][0])]
 #%%
 
-import seaborn as sns
-import pandas as pd
+# Imposta la dimensione della figura prima di fare il plot
+plt.figure(figsize=(20, 8))
 
-def build_token_prob_df(shared_tokens, token_probs):
-    data = {desc: [token_probs[desc].get(token, 0.0) for token in shared_tokens]
-            for desc in token_probs}
-    df = pd.DataFrame(data, index=shared_tokens)
-    return df
+# Plot con rotazione dei token e maggiore spazio
+plot_shap_attributions(results['shapley_values_tokens'], tokens, normalize=True)
 
-df = build_token_prob_df(list(intersection)[:10], token_probs)
-
-plt.figure(figsize=(10, 6))
-sns.heatmap(df, annot=True, cmap='Blues')
-plt.title("Probabilities of Shared Tokens Across Prompt Variants")
-plt.ylabel("Token")
-plt.xlabel("Variant")
+# Regola il layout per evitare il taglio delle etichette
 plt.tight_layout()
-plt.show()
+
+#%%
+plt.figure(figsize=(20, 8))
+
+# Plot con rotazione dei token e maggiore spazio
+plot_shap_attributions(results['shapley_values_tokens'], tokens, normalize=False)
+
+# Regola il layout per evitare il taglio delle etichette
+plt.tight_layout()
+# %%
+highlight_dominant_passages(
+    results['shapley_values_tokens'],
+   tokens
+)
+
+# %%
