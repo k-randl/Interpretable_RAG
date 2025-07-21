@@ -119,8 +119,6 @@ def plot_shap_attributions(shap_values:NDArray[np.float_], tokens:List[str], *, 
         shap_values = shap_values / np.abs(shap_values).sum(axis=0)
 
     # Get colormap:
-    num_docs, num_tokens = shap_values.shape
-    
     colors = cm.get_cmap(cmap)
 
     p_pos = 0.
@@ -204,7 +202,7 @@ def highlight_dominant_passages(shap_values:NDArray[np.float_], tokens:List[str]
     html_response = ' '.join(html_tokens)
 
     # Build legend:
-    html_legend   = ' '.join([f'<i style="background-color:{c}; padding:2px; border-radius:3px;">Document {i:d}</i>' for i, c in enumerate(rgb_colors)])
+    html_legend   = ' '.join([f'<i style="background-color:{c}; padding:2px; border-radius:3px;">Document {i+1:d}</i>' for i, c in enumerate(rgb_colors)])
     
     # Build, display, and return final HTML:
     html_str = (
