@@ -2,9 +2,9 @@ import torch
 import numpy as np
 from scipy.special import comb
 from sklearn.linear_model import LinearRegression
-from transformers import PreTrainedModel, PreTrainedTokenizer , AutoTokenizer
 from numpy.typing import NDArray
 from typing import Union, List, Dict, Tuple, Optional, Literal
+import transformers
 import tqdm
 import pickle
 
@@ -194,10 +194,16 @@ def highlight_dominant_passages(shap_values:NDArray[np.float_], tokens:List[str]
 
     # Build highlighed HTML:
     html_tokens = []
+    last_doc = -1
     for tok, doc in zip(tokens, token_docs):
-        if doc >= 0: html_tok = f'<span style="background-color:{rgb_colors[doc]}; padding:2px; border-radius:3px;">{tok}</span>'
-        else:        html_tok = tok
-        html_tokens.append(html_tok)
+        if doc != last_doc: 
+            if doc >= 0: 
+                tok = f'<span style="background-color:{rgb_colors[doc]}; padding:2px; border-radius:3px;">' + tok
+
+            tok = '</span>' + tok
+
+        html_tokens.append(tok)
+        last_doc = doc
 
     html_response = ' '.join(html_tokens)
 
@@ -226,13 +232,13 @@ def highlight_dominant_passages(shap_values:NDArray[np.float_], tokens:List[str]
 
 def ExplainableAutoModelForGeneration(T:type):
     # make sure T is derived from PreTrainedModel:
-    assert issubclass(T, PreTrainedModel)
+    assert issubclass(T, transformers.PreTrainedModel)
 
     # generic class definition:
     class _ExplainableAutoModelForGeneration(T):
         def __init__(self, config, *inputs, **kwargs):
             super().__init__(config, *inputs, **kwargs)
-            self.tokenizer:PreTrainedTokenizer = AutoTokenizer.from_pretrained(config.name_or_path)
+            self.tokenizer:transformers.PreTrainedTokenizer = transformers.AutoTokenizer.from_pretrained(config.name_or_path)
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
             self._explain:bool = False
             self._exp_probs:List[torch.Tensor] = []
@@ -416,7 +422,7 @@ def ExplainableAutoModelForGeneration(T:type):
 
         def __compare_unconditional(self, inputs:List[str], **kwargs) -> torch.LongTensor:
             # tokenize inputs:
-            inputs = self.tokenizer(inputs, truncation=True, return_tensors='pt')
+            inputs = self.tokenizer(inputs, truncation=True, padding=True, return_tensors='pt')
 
             # deactivate explanation mode:
             self._explain    = True
@@ -429,6 +435,10 @@ def ExplainableAutoModelForGeneration(T:type):
 
             # finalize probabilities:
             self._exp_probs[-1] = torch.concatenate(self._exp_probs[-1], dim=1)
+
+            # split batch in elements if multiple inputs:
+            if len(inputs) > 1:
+                self._exp_probs.extend([t.unsqueeze(0) for t in self._exp_probs.pop(-1)])
 
             # return generated tokens:
             return output
@@ -469,13 +479,19 @@ def ExplainableAutoModelForGeneration(T:type):
 
             # prepare model_kwargs:
             input_ids, _, model_kwargs = self._prepare_model_inputs(input_ids, self.tokenizer.bos_token_id, kwargs)
-            cur_len = input_ids.shape[1]
-            #model_kwargs = self._get_initial_cache_position(input_ids, **model_kwargs)
-            model_kwargs = self._get_initial_cache_position(
-                            seq_length=input_ids.shape[1],          # length of the prompt
-                            device=input_ids.device,               # usually cuda:0 / cpu
-                            model_kwargs=model_kwargs,             # the whole dict, **not** unpacked
-                                )
+            v0, v1, _ =  [int(i) for i in transformers.__version__.split('.')]
+            if v0 >= 4 and v1 >= 52:
+                model_kwargs = self._get_initial_cache_position(
+                    seq_length=input_ids.shape[1],
+                    device=input_ids.device,
+                    model_kwargs=model_kwargs,
+                )
+
+            else:
+                model_kwargs = self._get_initial_cache_position(
+                    input_ids=input_ids, 
+                    model_kwargs=model_kwargs
+                )
                 
             with torch.no_grad():
 
@@ -523,7 +539,7 @@ def ExplainableAutoModelForGeneration(T:type):
 
             else: self._exp_probs[-1] = torch.concatenate(self._exp_probs[-1], dim=1)
 
-            # split batch in elements if multiple inputs for the same output.
+            # split batch in elements if multiple inputs for the same output:
             if not single_input and single_output:
                 self._exp_probs.extend([t.unsqueeze(0) for t in self._exp_probs.pop(-1)])
 
@@ -531,19 +547,20 @@ def ExplainableAutoModelForGeneration(T:type):
             return torch.argmax(self._exp_probs[-1], dim=-1)
 
 
-        def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', system:Optional[str]=None, **kwargs):
+        def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', conditional:bool=True, system:Optional[str]=None, **kwargs):
             """
             Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
 
             Args:
-                query (str):       The user's query.
-                contexts (list):   A list of strings representing the retrieved documents.
-                batch_size (int):  The batch size for generating perturbations (default: `32`).
-                max_samples (int): Maximum number of samples used for computing SHAP atribution values.
-                                   If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
-                                   If `inf` is passed, always computes the precise SHAP values.
-                                   If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).  
-                system (str):      An optional system prompt.
+                query (str):        The user's query.
+                contexts (list):    A list of strings representing the retrieved documents.
+                batch_size (int):   The batch size for generating perturbations (default: `32`).
+                max_samples (int):  Maximum number of samples used for computing SHAP atribution values.
+                                    If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
+                                    If `inf` is passed, always computes the precise SHAP values.
+                                    If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
+                conditional (bool): Whether to compute the compared values conditioned on the original generation (default: `True`)
+                system (str):       An optional system prompt.
 
             Returns:
                 A list of generated chats.
@@ -597,7 +614,7 @@ def ExplainableAutoModelForGeneration(T:type):
                 # generate probabilities:
                 self.compare(
                     [self.tokenizer.apply_chat_template(prmpt, tokenize=False) for prmpt in prompts_batch],
-                    output,
+                    output if conditional else None,
                     **kwargs
                 )
 
