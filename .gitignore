@@ -2,15 +2,15 @@
 */.**
 *__pycache__
 *__pycache__/**
+**.xlsx
+**.pkl
 data/*/**
 plots/**
 summaries/**
 index_snowflake/**
-results**
-outputs**
+result**
+output**
 old**
 resources/ldfacts.py**
 
-perturbed_outputs.pkl
-EFRA Validation - Context Relevancy V2.xlsx
 EFRA Validation dataset - Context Relevancy V2_modified.csv
