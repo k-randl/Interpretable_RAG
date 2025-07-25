@@ -10,7 +10,7 @@ from sklearn.linear_model import LinearRegression
 from resources.utils import decode_chat_template, get_model_type
 
 from numpy.typing import NDArray
-from typing import Union, List, Dict, Tuple, Optional, Literal
+from typing import Union, List, Dict, Tuple, Optional, Literal, Set
 
 from abc import ABCMeta, abstractmethod
 
@@ -108,10 +108,10 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
     ]
 
 #=======================================================================#
-# Generator Interface:                                                  #
+# Generator Explanation:                                                #
 #=======================================================================#
 
-class ExplainableGeneratorMixin(metaclass=ABCMeta):
+class GeneratorExplanationBase(metaclass=ABCMeta):
     #===================================================================#
     # Properties:                                                       #
     #===================================================================#
@@ -126,6 +126,18 @@ class ExplainableGeneratorMixin(metaclass=ABCMeta):
     @abstractmethod
     def is_precise(self) -> bool:
         """`True` if the Shapley feature attribution values are not approximated."""
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def tokenizer(self) -> transformers.PreTrainedTokenizer:
+        """The tokenizer used by the generator model."""
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def model_name_or_path(self) -> str:
+        """The huggingface string identifier of the generator model."""
         raise NotImplementedError()
 
     #===================================================================#
@@ -144,13 +156,17 @@ class ExplainableGeneratorMixin(metaclass=ABCMeta):
         """
         raise NotImplementedError()
 
-    def save_values(self, path:str):
-        """Saves the SHAP values and exp_probs and gen_probs to a file.
+    def save_values(self, path:Optional[str]) -> Union[str, None]:
+        """Saves the explanation data to a file.
 
         Args:
-            path (str): The path where the SHAP values should be saved.
+            path (str): The path where the values should be saved.
+
+        Returns:
+            If `path` is not specified, returns the saved data instead.
         """
         data_to_save = {
+            'model_name_or_path': self.model_name_or_path,
             'generated_output': self.gen_tokens,
             'shap_precise': self.is_precise,
             'shapley_values_tokens': self.get_shapley_values('token'),
@@ -159,10 +175,71 @@ class ExplainableGeneratorMixin(metaclass=ABCMeta):
             'shapley_values_nucleus': self.get_shapley_values('nucleus'),
         }
 
-        with open(path, 'wb') as f:
-            pickle.dump(data_to_save, f)  
+        if path is None: return data_to_save
 
-        return data_to_save
+        with open(path, 'wb') as f:
+            pickle.dump(data_to_save, f)
+
+
+class GeneratorExplanation(GeneratorExplanationBase):
+    def __init__(self, saved_data:Union[str, dict]):
+        """Loads the GeneratorExplanation from a file path or dictionary.
+
+        Args:
+            saved_data (str or dict): Path to the saved pickle file or the dictionary itself.
+        """
+        if isinstance(saved_data, str):
+            with open(saved_data, 'rb') as f:
+                data = pickle.load(f)
+
+        elif isinstance(saved_data, dict):
+            data = saved_data
+
+        else: raise ValueError("`saved_data` must be a filepath or a dictionary")
+
+        self._model_name_or_path = data['model_name_or_path']
+        self._gen_tokens = data['generated_output']
+        self._is_precise = data['shap_precise']
+        self._shapley_values = {
+            'token': np.array(data['shapley_values_tokens']),
+            'sequence': np.array(data['shapley_values_passages']),
+            'bow': np.array(data['shapley_values_bow']),
+            'nucleus': np.array(data['shapley_values_nucleus']),
+        }
+
+        self._tokenizer = transformers.AutoTokenizer.from_pretrained(self._model_name_or_path)
+
+    @property
+    def gen_tokens(self) -> List[str]:
+        """The list of generated tokens."""
+        return self._gen_tokens
+
+    @property
+    def is_precise(self) -> bool:
+        """`True` if the Shapley feature attribution values are not approximated."""
+        return self._is_precise
+
+    @property
+    def tokenizer(self) -> transformers.PreTrainedTokenizer:
+        """The tokenizer used by the generator model."""
+        return self._tokenizer
+
+    @property
+    def model_name_or_path(self) -> str:
+        """The huggingface string identifier of the generator model."""
+        return self._model_name_or_path
+
+    def get_shapley_values(self, aggregation: Literal['token', 'sequence', 'bow', 'nucleus'] = 'token', **kwargs) -> NDArray[np.float_]:
+        """Generates Shapley feature attribution values for the chosen aggregation method.
+
+        Args:
+            aggregation (str):  Aggregation method for probabilities (default: `'token'`).
+
+        Returns:
+            A `numpy.ndarray` containing the Shapley values.
+        """
+        return self._shapley_values[aggregation]
+
 
 #=======================================================================#
 # Generic Model Class:                                                  #
@@ -178,11 +255,11 @@ class ExplainableAutoModelForGeneration:
         assert issubclass(T, transformers.PreTrainedModel)
 
         # generic class definition:
-        class _ExplainableAutoModelForGeneration(T, ExplainableGeneratorMixin):
+        class _ExplainableAutoModelForGeneration(T, GeneratorExplanationBase):
             def __init__(self, config, *inputs, **kwargs):
                 super().__init__(config, *inputs, **kwargs)
-                self.tokenizer:transformers.PreTrainedTokenizer = transformers.AutoTokenizer.from_pretrained(config.name_or_path)
-                self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+                self._tokenizer:transformers.PreTrainedTokenizer = transformers.AutoTokenizer.from_pretrained(config.name_or_path)
+                self._tokenizer.pad_token_id = self.tokenizer.eos_token_id
                 self._explain:bool = False
                 self._exp_probs:List[torch.Tensor] = []
                 self._gen_probs:torch.Tensor = []
@@ -221,6 +298,17 @@ class ExplainableAutoModelForGeneration:
 
                 # return probability of each token in the original generation:
                 return self._shap_precise
+
+            @property
+            def tokenizer(self) -> transformers.PreTrainedTokenizer:
+                """The tokenizer used by the generator model."""
+                return self._tokenizer
+
+            @property
+            def model_name_or_path(self) -> str:
+                """The huggingface string identifier of the generator model."""
+                return self.config.name_or_path
+
 
             @property
             def gen_token_probs(self) -> NDArray[np.float_]:

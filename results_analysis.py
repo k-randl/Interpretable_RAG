@@ -8,8 +8,8 @@ import torch
 import pandas as pd
 from transformers import AutoTokenizer
 from methods import *
-from resources.generation import ExplainableAutoModelForGeneration
-from resources.plotting import  higlight_attribution_generator
+from resources.generation import GeneratorExplanation
+from resources.plotting import *
 
 MODEL_ID = 'meta-llama/Llama-3.1-8B-Instruct'
 
@@ -156,38 +156,21 @@ randomized_df.to_csv(os.path.join(randomized_path, 'randomized_with_context_ids.
 #%%
 query_id = 3
 
-with open(os.path.join(randomized_path, randomized_files[query_id]), 'rb') as f:
-    randomized_results = pickle.load(f)
-with open(os.path.join(original_path, original_files[query_id]), 'rb') as f:
-    original_results = pickle.load(f)
-with open(os.path.join(no_duplicates_path, no_duplicates_files[query_id]), 'rb') as f:
-    no_duplicates_results = pickle.load(f)
-    
-tokens_randomized= [x.lstrip("Ġ").lstrip('Ċ') for x in tokenizer.convert_ids_to_tokens(original_results['generated_output'][0])]
-tokens_no_duplicates = [x.lstrip("Ġ").lstrip('Ċ') for x in tokenizer.convert_ids_to_tokens(no_duplicates_results['generated_output'][0])]
-token_original = [x.lstrip("Ġ").lstrip('Ċ') for x in tokenizer.convert_ids_to_tokens(randomized_results['generated_output'][0])]
+randomized_results    = GeneratorExplanation(os.path.join(randomized_path, randomized_files[query_id]))
+original_results      = GeneratorExplanation(os.path.join(original_path, original_files[query_id]))
+no_duplicates_results = GeneratorExplanation(os.path.join(no_duplicates_path, no_duplicates_files[query_id]))
+
 #%%
-# Imposta la dimensione della figura prima di fare il plot
-plt.figure(figsize=(20, 8))
-
 # Plot con rotazione dei token e maggiore spazio
-plot_shap_attributions(original_results['shapley_values_tokens'], token_original, normalize=True)
+plot_attribution_generator(original_results, aggregation='token', normalize=True, figsize=(20, 8))
 
-# Regola il layout per evitare il taglio delle etichette
-plt.tight_layout()
 ### print the contexts
 print(f"Contexts for query_id {query_id}:")
 for i, row in enumerate(aligned_validation[aligned_validation.query_id == query_id].iloc[:6].iterrows()):
     print(f'DOCUMENT {row[1]['context_id']}' + row[1]['context'][:100] + '...')  # Stampa i primi 100 caratteri di ogni contesto
 #%%
-# Imposta la dimensione della figura prima di fare il plot
-plt.figure(figsize=(20, 8))
-
 # Plot con rotazione dei token e maggiore spazio
-plot_shap_attributions(randomized_results['shapley_values_tokens'], tokens_randomized, normalize=True)
-
-# Regola il layout per evitare il taglio delle etichette
-plt.tight_layout()
+plot_attribution_generator(randomized_results, aggregation='token', normalize=True, figsize=(20, 8))
 
 ### print the contexts
 print(f"Contexts for query_id {query_id} Randomized:")
@@ -195,35 +178,21 @@ for i, row in enumerate(randomized_df[randomized_df.query_id == query_id].iloc[:
     print(f'DOCUMENT {row[1]['context_id']}' + row[1]['contexts'][:100] + '...')  # Stampa i primi 100 caratteri di ogni contesto
     
 #%%
-plt.figure(figsize=(20, 8))
-
 # Plot con rotazione dei token e maggiore spazio
-plot_shap_attributions(no_duplicates_results['shapley_values_tokens'], tokens_no_duplicates, normalize=True)
-
-# Regola il layout per evitare il taglio delle etichette
-plt.tight_layout()
+plot_attribution_generator(no_duplicates_results, aggregation='token', normalize=True, figsize=(20, 8))
 
 ### print the contexts
 print(f"Contexts for query_id {query_id} No duplicates:")
 for i, row in enumerate(no_duplicates_df[no_duplicates_df.query_id == query_id].iloc[:6].iterrows()):
     print(f'DOCUMENT {i} : {row[1]['context_id']}' + row[1]['contexts'][:100] + '...')  # Stampa i primi 100 caratteri di ogni contesto
 # %%
-higlight_attribution_generator(
-    original_results['shapley_values_tokens'],
-   token_original
-)
+higlight_attribution_generator(original_results, token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'))
 
 # %%
-higlight_attribution_generator(
-    randomized_results['shapley_values_tokens'],
-   tokens_randomized
-)   
+higlight_attribution_generator(randomized_results, token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'))   
 
 #%%
-higlight_attribution_generator(
-    no_duplicates_results['shapley_values_tokens'],
-   tokens_no_duplicates
-)
+higlight_attribution_generator(no_duplicates_results['shapley_values_tokens'], token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'))
 
 # %%
 aligned_validation[aligned_validation.query_id == query_id].iloc[:6]

@@ -1,12 +1,11 @@
 import os
 import pickle
 import torch
-import numpy as np
-from torch.func import jacrev
-import torch.utils
 from tqdm.autonotebook import tqdm
-from transformers import PreTrainedModel, AutoModel, AutoTokenizer
-from typing import Optional, List, Union, Dict
+from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
+from typing import Optional, List, Literal, Union, Dict
+
+from resources.retrieval import RetrieverExplanationBase
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -70,16 +69,26 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
         # load tokenizer:
         if tokenizer_name_or_path is None:
             tokenizer_name_or_path = model_name_or_path
-        encoder.tokenizer = AutoTokenizer.from_pretrained(
+        encoder._tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name_or_path, *args, **kwargs
         )
 
         # load encoder:
-        encoder.context_encoder = AutoModel.from_pretrained(
+        encoder._context_encoder = AutoModel.from_pretrained(
             model_name_or_path, *args, **kwargs
         )
 
         return encoder
+
+    @property
+    def tokenizer(self) -> PreTrainedTokenizer:
+        """The tokenizer used by the retriever model."""
+        return self._tokenizer
+
+    @property
+    def context_encoder(self) -> PreTrainedModel:
+        """The context encoder used by the retriever model."""
+        return self._context_encoder
 
     def forward(self, contexts:List[str], **kwargs):
         # control gradient computation:
@@ -182,7 +191,7 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
         with open(os.path.join(dir, 'embeddings.pt'), 'wb') as file:
             torch.save(torch.concatenate(embeddings, dim=0), file)
 
-class ExplainableAutoModelForRetrieval(torch.nn.Module):
+class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase):
     @classmethod
     def from_pretrained(cls, query_encoder_name_or_path:str, tokenizer_name_or_path:Optional[str]=None, *args, **kwargs):
         encoder = cls()
@@ -190,21 +199,39 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module):
         # load tokenizer:
         if tokenizer_name_or_path is None:
             tokenizer_name_or_path = query_encoder_name_or_path
-        encoder.tokenizer = AutoTokenizer.from_pretrained(
+        encoder._tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name_or_path, *args, **kwargs
         )
 
         # load encoder:
-        encoder.query_encoder = AutoModel.from_pretrained(
+        encoder._query_encoder = AutoModel.from_pretrained(
             query_encoder_name_or_path, *args, **kwargs
         )
 
         return encoder
 
     @property
-    def in_tokens(self):
+    def in_tokens(self) -> Dict[Literal['query', 'context'], List[List[str]]]:
+        """A dicionary containing the following two keys:
+        - `'query'`: a list containing the tokenized query
+        - `'context'`: a list containing the tokenized contexts"""
         if hasattr(self, '_in_tokens'): return self._in_tokens
         else: return None
+
+    @property
+    def tokenizer(self) -> PreTrainedTokenizer:
+        """The tokenizer used by the retriever model."""
+        return self._tokenizer
+
+    @property
+    def query_encoder(self) -> PreTrainedModel:
+        """The query encoder used by the retriever model."""
+        return self._query_encoder
+
+    @property
+    def query_encoder_name_or_path(self) -> str:
+        """The huggingface string identifier of the query encoder model."""
+        return self._query_encoder.config.name_or_path
 
     def grad(self, filter_special_tokens:bool=True):
         '''Gradients towards the inputs of the last batch.

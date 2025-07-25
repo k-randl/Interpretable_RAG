@@ -1,8 +1,8 @@
-import os
-import json
 import torch
-from transformers import PreTrainedModel, AutoModel, AutoTokenizer
-from typing import Optional, List
+from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
+from typing import Optional, List, Dict, Literal
+
+from resources.retrieval import RetrieverExplanationBase
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -27,7 +27,7 @@ def embedding_backward(model:PreTrainedModel, dh:torch.Tensor):
 # Generic Model Class:                                                  #
 #=======================================================================#
 
-class ExplainableAutoModelForRetrieval(torch.nn.Module):
+class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase):
     @classmethod
     def from_pretrained(cls, query_encoder_name_or_path:str, context_encoder_name_or_path:Optional[str]=None, tokenizer_name_or_path:Optional[str]=None, *args, **kwargs):
         retriever = cls()
@@ -35,30 +35,58 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module):
         # load tokenizer:
         if tokenizer_name_or_path is None:
             tokenizer_name_or_path = query_encoder_name_or_path
-        retriever.tokenizer = AutoTokenizer.from_pretrained(
+        retriever._tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name_or_path, *args, **kwargs
         )
 
         # load query encoder:
-        retriever.query_encoder = AutoModel.from_pretrained(
+        retriever._query_encoder = AutoModel.from_pretrained(
             query_encoder_name_or_path, *args, **kwargs
         )
 
         # load context encoder (if specified):
         if context_encoder_name_or_path is None:
-            retriever.context_encoder = retriever.query_encoder
+            retriever._context_encoder = retriever.query_encoder
 
         else:
-            retriever.context_encoder = AutoModel.from_pretrained(
+            retriever._context_encoder = AutoModel.from_pretrained(
                 context_encoder_name_or_path, *args, **kwargs
             )
 
         return retriever
     
     @property
-    def in_tokens(self):
+    def in_tokens(self) -> Dict[Literal['query', 'context'], List[List[str]]]:
+        """A dicionary containing the following two keys:
+        - `'query'`: a list containing the tokenized query
+        - `'context'`: a list containing the tokenized contexts"""
         if hasattr(self, '_in_tokens'): return self._in_tokens
         else: return None
+
+    @property
+    def tokenizer(self) -> PreTrainedTokenizer:
+        """The tokenizer used by the retriever model."""
+        return self._tokenizer
+
+    @property
+    def query_encoder(self) -> PreTrainedModel:
+        """The query encoder used by the retriever model."""
+        return self._query_encoder
+
+    @property
+    def context_encoder(self) -> PreTrainedModel:
+        """The context encoder used by the retriever model."""
+        return self._context_encoder
+
+    @property
+    def query_encoder_name_or_path(self) -> str:
+        """The huggingface string identifier of the query encoder model."""
+        return self._query_encoder.config.name_or_path
+
+    @property
+    def context_encoder_name_or_path(self) -> str:
+        """The huggingface string identifier of the context encoder model."""
+        return self._context_encoder.config.name_or_path
     
     @property
     def special_tokens_mask(self):

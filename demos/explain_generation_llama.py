@@ -5,7 +5,7 @@ sys.path.insert(0, "..")
 
 import torch
 from resources.generation import ExplainableAutoModelForGeneration
-from resources.plotting import plot_attribution_generator, higlight_attribution_generator
+from resources.plotting import visualize_attribution_generator
 
 from huggingface_hub import login
 from getpass import getpass
@@ -51,14 +51,13 @@ output = generator.explain_generate(
 output
 
 # %%
-plot_attribution_generator(generator, aggregation='token', normalize=True)
-higlight_attribution_generator(generator, token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'))
+visualize_attribution_generator(generator, aggregation='token', token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'))
 
 #%%
-plot_attribution_generator(generator, aggregation='bow', normalize=True)
+visualize_attribution_generator(generator, aggregation='bow')
 
 #%%
-plot_attribution_generator(generator, aggregation='nucleus', normalize=True)
+visualize_attribution_generator(generator, aggregation='nucleus')
 
 #%%
-plot_attribution_generator(generator, aggregation='sequence', normalize=True)
+visualize_attribution_generator(generator, aggregation='sequence')

@@ -12,9 +12,7 @@ from resources.tools import embed_passages
 from argparse import Namespace
 #%%
 def generate_query_embeddings(queries, model_name, max_length=512, device='cuda'):
-    """
-    Generate embeddings for queries using a specified transformer model.
-    """
+    """Generate embeddings for queries using a specified transformer model."""
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModel.from_pretrained(model_name, device_map='auto')
     model.eval()
