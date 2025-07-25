@@ -5,9 +5,8 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '3,4,5,6,7'
 import torch
 import numpy as np
 import pandas as pd
-from transformers import LlamaForCausalLM
 from tqdm import tqdm
-from resources.generation import ExplainableAutoModelForGeneration, plot_shap_attributions, highlight_dominant_passages
+from resources.generation import ExplainableAutoModelForGeneration
 
 import nltk
 from nltk.corpus import stopwords
@@ -21,7 +20,7 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 SAVE_PATH = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/results/new_exp/'
 os.makedirs(SAVE_PATH, exist_ok=True)
 # %% Load Pipeline:
-model = ExplainableAutoModelForGeneration(LlamaForCausalLM).from_pretrained(
+model = ExplainableAutoModelForGeneration.from_pretrained(
     MODEL_ID,
     device_map='auto',
     torch_dtype=torch.bfloat16

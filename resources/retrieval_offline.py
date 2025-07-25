@@ -3,6 +3,7 @@ import pickle
 import torch
 import numpy as np
 from torch.func import jacrev
+import torch.utils
 from tqdm.autonotebook import tqdm
 from transformers import PreTrainedModel, AutoModel, AutoTokenizer
 from typing import Optional, List, Union, Dict
@@ -16,17 +17,17 @@ def checkattr(obj:object, name:str) -> bool:
         return getattr(obj, name) is not None
     return False
 
-def embedding_backward(model:PreTrainedModel, dh:torch.Tensor):
+def embedding_backward(model:PreTrainedModel, dh:List[torch.Tensor]):
     # this is very specific for BERT and may need to be updated to support other models:
     # phi(input_ids, token_type_ids, token_ps) = W @ one_hot(input_ids) + f(token_type_ids, token_ps)
     #  => phi'(input_ids, token_type_ids, token_ps) = phi'(input_ids) = W
     #  
     # for f(input_ids, token_type_ids, token_ps) = nn(phi(input_ids, token_type_ids, token_ps)):
     #   => f'(input_ids, token_type_ids, token_ps) = nn'(input_ids, token_type_ids, token_ps) @ W
-    dPhi = model.embeddings.word_embeddings.weight.T.detach().to(dh)
-    return torch.vmap(lambda grad: grad @ dPhi)(dh)
+    dPhi = model.embeddings.word_embeddings.weight.T.detach().to(dh[0])
+    return [grad @ dPhi for grad in dh]
 
-def metadata_to_json(dir:str, doc_ids:List[Union[int, str]], metadata:Dict[str, Union[List, torch.Tensor]]):
+def metadata_to_pkl(dir:str, doc_ids:List[Union[int, str]], metadata:Dict[str, Union[List, torch.Tensor]]):
     keys = list(metadata.keys())
     for i, values in enumerate(zip(*[metadata[key] for key in keys])):
         metadata_doc = {}
@@ -43,7 +44,7 @@ def metadata_to_json(dir:str, doc_ids:List[Union[int, str]], metadata:Dict[str, 
         with open(os.path.join(dir, 'meta_data', f'{doc_ids[i]}.pkl'), 'wb') as file:
             pickle.dump(metadata_doc, file)
 
-def metadata_from_json(dir:str, doc_ids:List[Union[int, str]]) -> Dict[str, List]:
+def metadata_from_pkl(dir:str, doc_ids:List[Union[int, str]]) -> Dict[str, List]:
     metadata = None
     for doc_id in doc_ids:
         with open(os.path.join(dir, 'meta_data', f'{doc_id}.pkl'), 'rb') as file:
@@ -91,7 +92,7 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
         output = {
             'texts':                contexts,
             'input_ids':            [ctx_input.input_ids[i, m].detach().cpu() for i, m in enumerate(token_mask)],
-            'in_tokens':            [[self.tokenizer.decode(token) for token in t[m]] for t, m in zip(ctx_input.input_ids, token_mask)]
+            'in_tokens':            [self.tokenizer.convert_ids_to_tokens(t[m]) for t, m in zip(ctx_input.input_ids, token_mask)]
         }
 
         # register gradient computation:
@@ -176,7 +177,7 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
             embeddings.append(outputs.pop('embedding'))
 
             # save meta-data:
-            metadata_to_json(dir, range(i, j), outputs)
+            metadata_to_pkl(dir, range(i, j), outputs)
 
         with open(os.path.join(dir, 'embeddings.pt'), 'wb') as file:
             torch.save(torch.concatenate(embeddings, dim=0), file)
@@ -219,9 +220,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module):
             'context': embedding_backward(self.query_encoder, self._dh0['context'])
         }
     
-        if filter_special_tokens:
-            # set the importance of special tokens to 0.
-            grad = {key: grad[key] * self._special_tokens_mask[key][:,:,None] for key in grad}
+        if not filter_special_tokens: print('WARNING: `filter_special_tokens` is not used in offline retrieval.')
 
         return grad
 
@@ -238,11 +237,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module):
         da = {key:self._da[key] for key in self._da}   # shape: (bs x n_heads x n_inputs)
 
         # compute importance:
-        aGrad = {key:-da[key] * a[key] for key in da}
+        aGrad = {key:[-_da * _a for _da, _a in zip(da[key], a[key], strict=True)] for key in da}
 
-        if filter_special_tokens:
-            # set the importance of special tokens to 0.
-            aGrad = {key: aGrad[key] * self._special_tokens_mask[key][:,None,:] for key in aGrad}
+        if not filter_special_tokens: print('WARNING: `filter_special_tokens` is not used in offline retrieval.')
 
         return aGrad
 
@@ -269,15 +266,13 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module):
 
         # compute importance:
         # elementwise multiplication with a one-hot tensor can be replaced with indexing:
-        gradIn = {key: torch.stack([
-                -dx[key][i, torch.arange(len(tokens)), tokens]
+        gradIn = {key: [
+                -dx[key][i][torch.arange(len(tokens)), tokens]
                 for i, tokens in enumerate(self._x[key])
-            ]) for key in dx
+            ] for key in dx
         }
-    
-        if filter_special_tokens:
-            # set the importance of special tokens to 0.
-            gradIn = {key: gradIn[key] * self._special_tokens_mask[key] for key in gradIn}
+
+        if not filter_special_tokens: print('WARNING: `filter_special_tokens` is not used in offline retrieval.')
 
         return gradIn
 
@@ -285,7 +280,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module):
         # load index from disk if not speciifed:
         if index is None:
             with open(os.path.join(dir, 'embeddings.pt'), 'rb') as file:
-                index = torch.load(file)
+                index = torch.load(file).to(self.query_encoder.device)
         
         # control gradient computation:
         prev_grad = torch.is_grad_enabled()
@@ -296,7 +291,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module):
         token_mask = qry_input.pop('special_tokens_mask') == 0.
         
         self._x = {'query': [qry_input.input_ids[i, m].detach().cpu() for i, m in enumerate(token_mask)]}
-        self._in_tokens = {'query': [[self.tokenizer.decode(token) for token in t[m]] for t, m in zip(qry_input.input_ids, token_mask)]}
+        self._in_tokens = {'query': [self.tokenizer.convert_ids_to_tokens(t[m]) for t, m in zip(qry_input.input_ids, token_mask)]}
 
         # register gradient computation:
         self.query_encoder.get_input_embeddings().requires_grad_(True)
@@ -330,7 +325,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module):
         similarity.sum().backward()
 
         # load retrieved docs (for first query):
-        retrieved = metadata_from_json(dir, retrieved_ids[0])
+        retrieved = metadata_from_pkl(dir, retrieved_ids[0])
 
         self._x['context'] = retrieved['input_ids']
         self._in_tokens['context'] = retrieved['in_tokens']
@@ -343,14 +338,14 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module):
             a = qry_output.attentions[-1]
             # Tensor of shape (bs x n_heads x n_inputs)
             self._a = {
-                'query': [a[i,:,0,m].detach().clone().cpu() for i, m in enumerate(token_mask)],
+                'query': [a[i,:,0,m].detach().cpu() for i, m in enumerate(token_mask)],
                 'context': retrieved['a']
             }
             # Tensor of shape (bs x n_heads x n_outputs x n_inputs)
             self._da = {
-                'query': [a.grad[i,:,0,m].detach().clone().cpu() for i, m in enumerate(token_mask)],
+                'query': [a.grad[i,:,0,m].detach().cpu() for i, m in enumerate(token_mask)],
                 'context': [
-                    ctx.to(qry)@qry.T
+                    (ctx.to(qry)@qry.T).detach().cpu()
                     for ctx, qry
                     in zip(retrieved['da'], index.grad[retrieved_ids[0]])
                 ]
@@ -364,14 +359,14 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module):
             h0 = qry_output.hidden_states[0]
             # Tensor of shape (bs x n_inputs x encoding_size)
             self._h0 = {
-                'query': [h0[i,m,:].detach().clone().cpu()  for i, m in enumerate(token_mask)],
+                'query': [h0[i,m,:].detach().cpu()  for i, m in enumerate(token_mask)],
                 'context': retrieved['h0']
             }
             # Tensor of shape (bs x n_inputs x encoding_size)
             self._dh0 = {
-                'query': [h0.grad[i,m,:].detach().clone().cpu() for i, m in enumerate(token_mask)],
+                'query': [h0.grad[i,m,:].detach().cpu() for i, m in enumerate(token_mask)],
                 'context': [
-                    ctx.to(qry)@qry.T
+                    (ctx.to(qry)@qry.T).detach().cpu()
                     for ctx, qry
                     in zip(retrieved['dh0'], index.grad[retrieved_ids[0]])
                 ]

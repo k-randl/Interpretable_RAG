@@ -8,7 +8,8 @@ import torch
 import pandas as pd
 from transformers import AutoTokenizer
 from methods import *
-from resources.generation import ExplainableAutoModelForGeneration, plot_shap_attributions, highlight_dominant_passages
+from resources.generation import ExplainableAutoModelForGeneration
+from resources.plotting import  higlight_attribution_generator
 
 MODEL_ID = 'meta-llama/Llama-3.1-8B-Instruct'
 
@@ -207,22 +208,23 @@ print(f"Contexts for query_id {query_id} No duplicates:")
 for i, row in enumerate(no_duplicates_df[no_duplicates_df.query_id == query_id].iloc[:6].iterrows()):
     print(f'DOCUMENT {i} : {row[1]['context_id']}' + row[1]['contexts'][:100] + '...')  # Stampa i primi 100 caratteri di ogni contesto
 # %%
-highlight_dominant_passages(
+higlight_attribution_generator(
     original_results['shapley_values_tokens'],
    token_original
 )
 
 # %%
-highlight_dominant_passages(
+higlight_attribution_generator(
     randomized_results['shapley_values_tokens'],
    tokens_randomized
 )   
 
 #%%
-highlight_dominant_passages(
+higlight_attribution_generator(
     no_duplicates_results['shapley_values_tokens'],
    tokens_no_duplicates
 )
+
 # %%
 aligned_validation[aligned_validation.query_id == query_id].iloc[:6]
 # %%
