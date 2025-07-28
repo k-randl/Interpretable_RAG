@@ -109,20 +109,21 @@ def highlight_dominant_passages(scores:NDArray[np.float_], tokens:List[str], tit
         A tuple `(text, legend)`, where both `text` and `legend` are html `<tr>` elements.
     """
 
+    # check threshold value:
+    if (threshold >= 1.) or (threshold < 0.):
+        raise ValueError(f'Parameter `threshold` must be in intervall `[0,1))` but is `{threshold:.2f}`.')
+
     # extract only on positive contributions:
     scores_pos = np.maximum(scores, 0)
     num_docs, num_tokens = scores_pos.shape
 
     if total == None: total = scores_pos.sum(axis=0) if num_docs > 1 else scores_pos.max()
-    if np.all(total > threshold):
-        token_docs = scores_pos.argmax(axis=0)
-        token_vals = scores_pos[token_docs, np.arange(num_tokens)] / total
-        token_vals = np.maximum((token_vals - threshold) / (1. - threshold), 0.)
-        token_docs[token_vals == 0.] = -1
+    total = np.maximum(total, 1e-9) # make sure that total > 0
 
-    else:
-        token_vals = np.zeros(num_tokens, dtype=float)
-        token_docs = -np.ones(num_tokens, dtype=int)
+    token_docs = scores_pos.argmax(axis=0)
+    token_vals = scores_pos[token_docs, np.arange(num_tokens)] / total
+    token_vals = np.maximum((token_vals - threshold) / (1. - threshold), 0.)
+    token_docs[token_vals == 0.] = -1
 
     # prepare color map
     cmap = cm.get_cmap(cmap)
