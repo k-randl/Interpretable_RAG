@@ -156,9 +156,9 @@ randomized_df.to_csv(os.path.join(randomized_path, 'randomized_with_context_ids.
 #%%
 query_id = 3
 
-randomized_results    = GeneratorExplanation(os.path.join(randomized_path, randomized_files[query_id]))
-original_results      = GeneratorExplanation(os.path.join(original_path, original_files[query_id]))
-no_duplicates_results = GeneratorExplanation(os.path.join(no_duplicates_path, no_duplicates_files[query_id]))
+randomized_results    = GeneratorExplanation.load(os.path.join(randomized_path, randomized_files[query_id]), model_name_or_path='MODEL_ID', tokenizer=tokenizer)
+original_results      = GeneratorExplanation.load(os.path.join(original_path, original_files[query_id]), model_name_or_path='MODEL_ID', tokenizer=tokenizer)
+no_duplicates_results = GeneratorExplanation.load(os.path.join(no_duplicates_path, no_duplicates_files[query_id]), model_name_or_path='MODEL_ID', tokenizer=tokenizer)
 
 #%%
 # Plot con rotazione dei token e maggiore spazio

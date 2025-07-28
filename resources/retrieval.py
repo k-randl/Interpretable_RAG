@@ -1,3 +1,4 @@
+import os
 import pickle
 import numpy as np
 
@@ -120,30 +121,77 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
 
 
 class RetrieverExplanation(RetrieverExplanationBase):
-    def __init__(self, saved_data: Union[str, dict]):
-        """Initializes the RetrieverExplanation from a file path or dictionary.
+    @classmethod
+    def load(cls, saved_data:Union[str, dict, list], *,
+        query_encoder_name_or_path:Optional[str]=None,
+        context_encoder_name_or_path:Optional[str]=None,
+        tokenizer:Optional[PreTrainedTokenizer]=None,
+    ) -> Union['RetrieverExplanation', List['RetrieverExplanation']]:
+        """Loads the GeneratorExplanation from a file path or dictionary.
 
         Args:
-            saved_data (str or dict): Path to the saved pickle file or the dictionary itself.
+            saved_data (str | dict | list):     Path to the saved pickle file or the dictionary itself.
+            query_encoder_name_or_path (str):   An optional way to specify the query encoder name.
+            context_encoder_name_or_path (str): An optional way to specify the context encoder name.
+            tokenizer (PreTrainedTokenizer):    An optional way to set the tokenizer to avoid resinstantiation
+                                                the same tokenizer multiple times. 
         """
         if isinstance(saved_data, str):
+            # load all files in a dir as a list:
+            if os.path.isdir(saved_data):
+                return cls.load([os.path.join(saved_data, file)
+                    for file in os.listdir(saved_data)
+                    if not file.endswith('.pkl')])
+
+            # load file:
             with open(saved_data, 'rb') as f:
                 data = pickle.load(f)
 
         elif isinstance(saved_data, dict):
             data = saved_data
 
-        else: raise ValueError("`saved_data` must be a filepath or a dictionary")
+        elif hasattr(saved_data, '__iter__') or hasattr(saved_data, '__len__'):
+            result = []
 
-        self._query_encoder_name_or_path = data['query_encoder_name_or_path']
-        self._context_encoder_name_or_path = data.get('context_encoder_name_or_path')
-        self._in_tokens = data['input']
-        self._grad = data.get('grad')
-        self._aGrad = data.get('aGrad')
-        self._repAGrad = data.get('repAGrad')
-        self._gradIn = data.get('gradIn')
+            # load all entries separatelly:
+            for item in saved_data:
+                try:
+                    # load next file:
+                    result.append(
+                        cls.load(
+                            item,
+                            model_name_or_path=model_name_or_path,
+                            tokenizer=tokenizer
+                        )
+                    )
 
-        self._tokenizer = AutoTokenizer.from_pretrained(self._query_encoder_name_or_path)
+                    # avoid multiple instances of the tokenizer:
+                    if tokenizer is None: tokenizer = result[0].tokenizer
+
+                except Exception as e:
+                    print(f'WARNING: Could not load "{item}": {e}')
+
+            return result
+
+        else: raise ValueError("`saved_data` must be a path, an iterable, or a dictionary")
+
+        result = cls()
+        result._in_tokens = data['input']
+        result._grad = data.get('grad')
+        result._aGrad = data.get('aGrad')
+        result._repAGrad = data.get('repAGrad')
+        result._gradIn = data.get('gradIn')
+
+        if query_encoder_name_or_path is None: result._query_encoder_name_or_path = data['query_encoder_name_or_path'] 
+        else: result._query_encoder_name_or_path = query_encoder_name_or_path
+        
+        if context_encoder_name_or_path is None: result._context_encoder_name_or_path = data.get('context_encoder_name_or_path')
+        else: result._query_encoder_name_or_path = context_encoder_name_or_path
+
+        if tokenizer is None: result._tokenizer = tokenizer
+        else: result._tokenizer = AutoTokenizer.from_pretrained(query_encoder_name_or_path)
+
+        return result
 
     @property
     def in_tokens(self) -> Dict[Literal['query', 'context'], List[List[str]]]:

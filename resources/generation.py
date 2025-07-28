@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import transformers
@@ -10,7 +11,7 @@ from sklearn.linear_model import LinearRegression
 from resources.utils import decode_chat_template, get_model_type
 
 from numpy.typing import NDArray
-from typing import Union, List, Dict, Tuple, Optional, Literal, Set
+from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable
 
 from abc import ABCMeta, abstractmethod
 
@@ -182,32 +183,75 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
 
 
 class GeneratorExplanation(GeneratorExplanationBase):
-    def __init__(self, saved_data:Union[str, dict]):
+    @classmethod
+    def load(cls, saved_data:Union[str, Dict, Iterable], *,
+        model_name_or_path:Optional[str]=None,
+        tokenizer:Optional[transformers.PreTrainedTokenizer]=None
+    ) -> Union['GeneratorExplanation', List['GeneratorExplanation']]:
         """Loads the GeneratorExplanation from a file path or dictionary.
 
         Args:
-            saved_data (str or dict): Path to the saved pickle file or the dictionary itself.
+            saved_data (str | dict | list):     Path to the saved pickle file, a directory, or the dictionary itself.
+            model_name_or_path (str):           An optional way to specify the model name.
+            tokenizer (PreTrainedTokenizer):    An optional way to set the tokenizer to avoid resinstantiation
+                                                the same tokenizer multiple times. 
         """
         if isinstance(saved_data, str):
+            # load all files in a dir as a list:
+            if os.path.isdir(saved_data):
+                return cls.load([os.path.join(saved_data, file)
+                    for file in os.listdir(saved_data)
+                    if not file.endswith('.pkl')])
+
+            # load file:
             with open(saved_data, 'rb') as f:
                 data = pickle.load(f)
 
         elif isinstance(saved_data, dict):
             data = saved_data
 
-        else: raise ValueError("`saved_data` must be a filepath or a dictionary")
+        elif hasattr(saved_data, '__iter__') or hasattr(saved_data, '__len__'):
+            result = []
 
-        self._model_name_or_path = data['model_name_or_path']
-        self._gen_tokens = data['generated_output']
-        self._is_precise = data['shap_precise']
-        self._shapley_values = {
+            # load all entries separatelly:
+            for item in saved_data:
+                try:
+                    # load next file:
+                    result.append(
+                        cls.load(
+                            item,
+                            model_name_or_path=model_name_or_path,
+                            tokenizer=tokenizer
+                        )
+                    )
+
+                    # avoid multiple instances of the tokenizer:
+                    if tokenizer is None: tokenizer = result[0].tokenizer
+
+                except Exception as e:
+                    print(f'WARNING: Could not load "{item}": {e}')
+
+            return result
+
+        else: raise ValueError("`saved_data` must be a path, an iterable, or a dictionary")
+
+        result = cls()
+        result._gen_tokens = data['generated_output']
+        result._is_precise = data['shap_precise']
+        result._shapley_values = {
             'token': np.array(data['shapley_values_tokens']),
             'sequence': np.array(data['shapley_values_passages']),
             'bow': np.array(data['shapley_values_bow']),
             'nucleus': np.array(data['shapley_values_nucleus']),
         }
 
-        self._tokenizer = transformers.AutoTokenizer.from_pretrained(self._model_name_or_path)
+        if model_name_or_path is None: result._model_name_or_path = data['model_name_or_path'] 
+        else: result._model_name_or_path = model_name_or_path
+
+        if tokenizer is None: result._tokenizer = tokenizer
+        else: result._tokenizer = transformers.AutoTokenizer.from_pretrained(model_name_or_path)
+
+        return result
 
     @property
     def gen_tokens(self) -> List[str]:
