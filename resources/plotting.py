@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from html import escape
 from IPython.display import display, HTML
 
-from resources.utils import decode_chat_template
+from resources.utils import decode_chat_template, nucleus_sample_tokens
 
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -66,7 +66,9 @@ def plot_token_vbars(ax:Axes, scores:NDArray[np.float_], tokens:List[str], docum
 
     # tick and axis settings:
     ax.set_xticks(range(len(tokens)), tokens, rotation=90)
-    if normalize: ax.set_ylim(-1, 1)
+    if normalize:
+        if np.any(s_neg < 0.): ax.set_ylim(-1, 1)
+        else: ax.set_ylim(0, 1)
 
     # clean frame (keep only left spine):
     ax.spines['top'].set_visible(False)
@@ -229,7 +231,7 @@ def plot_document_vbars(ax:Axes, scores:NDArray[np.float_], document_names:Optio
     for tick_loc in ax.get_yticks(minor=False):
         ax.axhline(y=tick_loc, color='lightgray', linewidth=0.5, zorder=0)
 
-def plot_waterfall(ax:Axes, scores:NDArray[np.float_], document_names:Optional[List[str]]=None, *,
+def plot_waterfall(ax:Axes, scores:NDArray[np.float_], x_labels:Optional[List[str]], *,
         base_value:float=0.0,
         normalize:bool=False,
         cmap:str='tab10',
@@ -241,7 +243,7 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float_], document_names:Optional[L
         ax (matplotlib.axes.Axes):   `matplotlib.axes.Axes` object.
         scores (NDArray[np.float_]): A 1D array of attribution scores with shape `(len(documents),)`,
                                      where each item represents a document's attribution score.
-        document_names (List[str]):  An optional list of names of the documents.
+        x_labels (List[str]):        The list of x-axis labels.
         base_value (float):          Base value to start the waterfall from (default: `0.0`).
         normalize (bool):            If `True`, normalizes the attribution scores across documents so
                                      that the sum of absolute values equals 1 (default=`False`).
@@ -249,11 +251,6 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float_], document_names:Optional[L
     """
     # normalize so that values sum to 1 (if enabled):
     if normalize: scores = scores / np.abs(scores).sum()
-
-    # fallback for document names:
-    if document_names is None:
-        document_names = [f'Document {i+1:d}' for i in range(len(scores))]
-    elif len(document_names) != len(scores): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # calculate cumulative values:
     cumulative = np.cumsum(np.concatenate([[base_value], scores]))
@@ -271,15 +268,17 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float_], document_names:Optional[L
                ha='center', va='center', fontweight='bold', color='white')
 
     # plot final value:
-    ax.bar(len(document_names), cumulative[-1], color=colors(1), label='Total', **kwargs)
+    ax.bar(len(x_labels), cumulative[-1], color=colors(1), label='Total', **kwargs)
 
     # connect bars with lines:
-    for i in range(len(document_names)):
+    for i in range(len(x_labels)):
         ax.plot([i + 0.4, i + 1.6], [cumulative[i+1], cumulative[i+1]], 'k--', alpha=0.5)
 
     # tick and axis settings:
-    ax.set_xticks(range(len(document_names) + 1), document_names + ['Final'], rotation=45, ha='right')
-    if normalize: ax.set_ylim(-1, 1)
+    ax.set_xticks(range(len(x_labels) + 1), x_labels + ['Final'], rotation=45, ha='right')
+    if normalize: 
+        if ax.get_ylim()[0] < 0: ax.set_ylim(-1, 1)
+        else: ax.set_ylim(0, 1)
 
     # clean frame (keep only left spine):
     ax.spines['top'].set_visible(False)
@@ -301,7 +300,7 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float_], document_names:Optional[L
 
 from resources.retrieval import RetrieverExplanationBase
 
-def plot_importance_retriever(explanation:RetrieverExplanationBase, *,
+def plot_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
         method:Literal['grad', 'gradIn', 'aGrad']='gradIn',
         absolute:bool=True,
         figsize: Tuple[int, int] = (12, 6),
@@ -309,6 +308,22 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, *,
         show:bool=True,
         **kwargs
     ) -> Union[Figure, None]:
+    """Plot tokens in a text sequence that are important for retrieving the document.
+
+    Args:
+        explanation (RetrieverExplanationBase): An object containing the necessary information for plotting.
+        document_names (List[str]):             An optional list of names of the documents.
+        method (str):                           The method for calculating token importance.
+        aggregation (str):                      Aggregation method for probabilities (default: `'token'`).
+        normalize (bool):                       If `True`, normalizes the SHAP values across tokens so that the sum of absolute values equals 1 (default=`True`).
+        figsize ((int, int)):                   The size of the figure.
+        cmap (str):                             The name of a matplotlib colormap used for highlighting.
+        show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+
+    Returns:
+        `matplotlib.figure.Figure` object if `show == False`.
+    """
+
     # get scores:
     if   method == 'grad':   scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
     elif method == 'gradIn': scores = explanation.gradIn(**kwargs)
@@ -317,6 +332,11 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, *,
 
     # compute absolute:
     if absolute: scores = {key:[np.abs(doc) for doc in docs] for key, docs in scores.items()}
+
+    # fallback for document names:
+    if document_names is None:
+        document_names = [f'Doc. {i+1:d}' for i in range(len(scores))]
+    elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # get special tokens:
     special_tokens = set(explanation.tokenizer.special_tokens_map.values())
@@ -333,14 +353,14 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, *,
     axs[0].set_ylabel('Query:')
 
     # plot contexts:
-    for i in range(len(scores['context'])):
+    for i, s in enumerate(scores['context']):
         plot_token_vbars(axs[i+1],
-            scores      = scores['context'][i].numpy()[None,:], 
+            scores      = s.numpy()[None,:], 
             tokens      = explanation.in_tokens['context'][i],
             skip_tokens = special_tokens,
             cmap        = cmap
         )
-        axs[i+1].set_ylabel(f'Doc. {i+1:d}:')
+        axs[i+1].set_ylabel(document_names[i] + ':')
 
     fig.suptitle(f'Token Importance - {method}', fontsize=14, fontweight='bold')
     fig.tight_layout()
@@ -348,13 +368,26 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, *,
     if show: fig.show()
     else: return fig
 
-def higlight_importance_retriever(explanation:RetrieverExplanationBase, *,
+def higlight_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
         method:Literal['grad', 'gradIn', 'aGrad']='gradIn',
         threshold:float=0.0,
         token_processor:Optional[Callable[[str],str]]=None,
         cmap:str='tab10',
         **kwargs
     ) -> str:
+    """Highlights tokens in a text sequence that are important for retrieving the document.
+
+    Args:
+        explanation (RetrieverExplanationBase): An object containing the necessary information for plotting.
+        document_names (List[str]):             An optional list of names of the documents.
+        method (str):                           The method for calculating token importance.
+        threshold (float):                      Minimum importance for highlighting in the intervall `[0., 1.)` (default: `0.`).
+        token_processor ((str) -> str):         An optional function applied to each token before printing.
+        cmap (str):                             The name of a matplotlib colormap used for highlighting.
+
+    Returns:
+        An HTML-formatted string with spans highlighting important tokens.
+    """
     # get scores:
     if   method == 'grad':   scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
     elif method == 'gradIn': scores = explanation.gradIn(**kwargs)
@@ -363,6 +396,11 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, *,
 
     # compute absolute:
     scores = {key:[np.abs(doc) for doc in docs] for key, docs in scores.items()}
+
+    # fallback for document names:
+    if document_names is None:
+        document_names = [f'Document {i+1:d}' for i in range(len(scores['context']))]
+    elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # get special tokens:
     special_tokens = set(explanation.tokenizer.special_tokens_map.values())
@@ -379,11 +417,11 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, *,
     )[0]
 
     # plot contexts:
-    for i in range(len(scores['context'])):
+    for i, s in enumerate(scores['context']):
         html += highlight_dominant_passages(
-            scores          = scores['context'][i].numpy()[None,:], 
+            scores          = s.numpy()[None,:], 
             tokens          = explanation.in_tokens['context'][i],
-            title           = f'Document {i+1:d}',
+            title           = document_names[i],
             threshold       = threshold,
             total           = np.concatenate(scores['context']).max(),
             skip_tokens     = special_tokens,
@@ -410,16 +448,95 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, *,
     display(HTML(html_str))
     return html_str
 
-def visualize_importance_retriever(explanation:RetrieverExplanationBase, *,
+def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *, 
+        method:Literal['grad', 'gradIn', 'aGrad']='gradIn',
+        normalize:bool=True,
+        threshold:float=.9,
+        figsize: Tuple[int, int] = (12, 6),
+        cmap:str='tab10',
+        show:bool=True,
+        **kwargs
+    ) -> Union[Figure, None]:
+    """Create a summary plot showing the most important tokens per document.
+
+    Args:
+        explanation (GeneratorExplanationBase): An object containing the necessary information for plotting.
+        document_names (List[str]):             An optional list of names of the documents.
+        method (str):                           The method for calculating token importance.
+        normalize (bool):                       If `True`, normalizes the importance values across tokens so that the sum of absolute values equals 1 (default=`True`).
+        threshold (float):                      The accumulated perctentual impact of shown tokens per document in the interval `[0.,1.]` (default: `.9`).
+        figsize ((int, int)):                   The size of the figure.
+        cmap (str):                             The name of a matplotlib colormap used for highlighting.
+        show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+
+    Returns:
+        `matplotlib.figure.Figure` object if `show == False`.
+    """
+
+    # get scores:
+    if   method == 'grad':   scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
+    elif method == 'gradIn': scores = explanation.gradIn(**kwargs)
+    elif method == 'aGrad':  scores = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
+    else: raise ValueError()
+
+    # compute absolute:
+    scores = {key:[np.abs(doc) for doc in docs] for key, docs in scores.items()}
+    
+    # fallback for document names:
+    if document_names is None:
+        document_names = [f'Doc. {i+1:d}' for i in range(len(scores['context']))]
+    elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
+
+    # create figure:
+    fig, axs = plt.subplots(len(scores['query']) + len(scores['context']), 1, figsize=figsize)
+
+    # plot query:
+    s, t = nucleus_sample_tokens(scores['query'][0], explanation.in_tokens['query'][0], threshold)
+    plot_waterfall(axs[0],
+        scores    = s,
+        x_labels  = t,
+        normalize = normalize,
+        cmap      = cmap 
+    )
+    axs[0].set_ylabel('Query:')
+
+    # plot contexts:
+    for i, s in enumerate(scores['context']):
+        s, t = nucleus_sample_tokens(s, explanation.in_tokens['context'][i], threshold)
+        plot_waterfall(axs[i+1],
+            scores    = s,
+            x_labels  = t,
+            normalize = normalize,
+            cmap      = cmap 
+        )
+        axs[i+1].set_ylabel(document_names[i] + ':')
+
+    # title and x-label:
+    fig.suptitle(f'Importance Summary - {method}', fontsize=14, fontweight='bold')
+    fig.tight_layout()
+
+    if show: fig.show()
+    else: return fig
+
+def visualize_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
         method:Literal['grad', 'gradIn', 'aGrad']='gradIn',
         cmap:str='tab10',
         **kwargs
     ) -> None:
+    """Visualizes token importance while automatically choosing a fitting plot for the chosen `method`.
+
+    Args:
+        explanation (RetrieverExplanationBase): An object containing the necessary information for plotting.
+        document_names (List[str]):             An optional list of names of the documents.
+        method (str):                           The method for calculating token importance.
+        cmap (str):                             The name of a matplotlib colormap used for highlighting.
+    """
 
     higlight_importance_retriever(
-        explanation = explanation,
-        method      = method,
-        cmap        = cmap,
+        explanation    = explanation,
+        document_names = document_names, 
+        method         = method,
+        cmap           = cmap,
         **kwargs
     )
 
@@ -509,8 +626,8 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
     Args:
         explanation (GeneratorExplanationBase): An object containing the necessary information for plotting.
         document_names (List[str]):             An optional list of names of the documents.
-        threshold (float):                      Minimum attribution for highlighting in the intervall `[0., 1.]` (default: `0.5`).
-        token_processor ((str) -> str):         An otional function applied to each token before printing.
+        threshold (float):                      Minimum attribution for highlighting in the intervall `[0., 1.)` (default: `0.5`).
+        token_processor ((str) -> str):         An optional function applied to each token before printing.
         cmap (str):                             The name of a matplotlib colormap used for highlighting.
 
     Returns:
@@ -580,7 +697,7 @@ def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, doc
         explanation (GeneratorExplanationBase): An object containing the necessary information for plotting.
         document_names (List[str]):             An optional list of names of the documents.
         aggregation (str):                      Aggregation method for probabilities (default: `'token'`).
-        absolute (bool):                        Bar plot tf `True`, else waterfall plot.
+        absolute (bool):                        Bar plot tf `True`, else waterfall plot (default=`False`).
         normalize (bool):                       If `True`, normalizes the SHAP values across tokens so that the sum of absolute values equals 1 (default=`True`).
         figsize ((int, int)):                   The size of the figure.
         cmap (str):                             The name of a matplotlib colormap used for highlighting.
@@ -592,6 +709,11 @@ def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, doc
 
     # get attribution scores:
     shap_values = explanation.get_shapley_values(aggregation)
+
+    # fallback for document names:
+    if document_names is None:
+        document_names = [f'Document {i+1:d}' for i in range(len(shap_values))]
+    elif len(document_names) != len(shap_values): raise ValueError('`len(document_names)` does not match the number of documents!')
     
     # create figure:
     fig, ax = plt.subplots(figsize=figsize)
@@ -611,10 +733,10 @@ def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, doc
         # calculate mean attributions per document
         shap_values = np.mean(shap_values, axis=1)
         plot_waterfall(ax,
-            scores         = shap_values,
-            document_names = document_names,
-            normalize      = normalize,
-            cmap           = cmap 
+            scores    = shap_values,
+            x_labels  = document_names,
+            normalize = normalize,
+            cmap      = cmap 
         )
         ax.set_ylabel('Cumulative Attribution')
 
@@ -632,6 +754,14 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
         cmap:str='tab10',
         **kwargs
     ) -> None:
+    """Visualizes Shapley attribution values while automatically choosing a fitting plot for the chosen `aggregation`.
+
+    Args:
+        explanation (RetrieverExplanationBase): An object containing the necessary information for plotting.
+        document_names (List[str]):             An optional list of names of the documents.
+        aggregation (str):                      Aggregation method for probabilities (default: `'token'`).
+        cmap (str):                             The name of a matplotlib colormap used for highlighting.
+    """
 
     if aggregation == 'token':
         higlight_attribution_generator(

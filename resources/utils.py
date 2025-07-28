@@ -1,8 +1,11 @@
 import os
 import json
 import torch
+import numpy as np
 from importlib import import_module
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Tuple
+
+from numpy.typing import NDArray
 
 __RESOURCE_DIR__ = os.path.dirname(os.path.abspath(__file__))
 
@@ -14,9 +17,9 @@ def find_subseq(seq:List, subseq:List, start:int=0) -> int:
     """Finds subsequences in list-like sequences and returns the index of the first occurence.
 
     Args:
-        seq (List):  The sequence which contains the subsequnece.
-        seq (List):  The subsequence to look for.
-        start (int): The first index of `seq` to be checked.
+        seq (List):    The sequence which contains the subsequnece.
+        subseq (List): The subsequence to look for.
+        start (int):   The first index of `seq` to be checked.
 
     Returns:
         The index of the first occurence of `subseq` in `seq[start:]`.
@@ -27,6 +30,55 @@ def find_subseq(seq:List, subseq:List, start:int=0) -> int:
         if seq[i:i+subseq_size] == subseq:
             return i
     raise ValueError(f'{subseq} not in {seq}.')
+
+def nucleus_sample_tokens(scores:Union[NDArray, torch.Tensor], tokens:List[str], threshold:float=.9) -> Tuple[NDArray, List[str]]:
+    """Nucleus samples the tokens for which the acumulated absolute scores are higher than `threshold`.
+
+    Args:
+        scores (NDArray | Tensor):  The scores.
+        tokens (List):              The tokens.
+        threshold (float):          The threshold that must be exceeded (default: `.9`).
+
+    Returns:
+        A tuple containing the following elements:
+         - An `NDArray` with the sorted scores. The last element is the sum of the remaining non-sampled scores.
+         - A list of token strings in the same order as the returned scores. The last element is a placeholder for the remaining elements.
+    """
+    if (threshold < 0) or (threshold > 1):
+        raise ValueError (f'Parameter `threshold` must be in intervall `[0.,1.]`')
+
+    # convert tensors to numpy:
+    if isinstance(scores, torch.Tensor):
+        scores = scores.cpu().numpy()
+
+    # convert tokens to numpy:
+    tokens = np.array(tokens, dtype=object)
+
+    # combine identical tokens:
+    for token in set(tokens):
+        mask = tokens == token
+        if sum(mask) > 1:
+            # sum the contributions and store them
+            # to the first occurence of the token:
+            i = np.flatnonzero(mask)[0]
+            scores[i] = sum(scores[mask])
+
+            # Delete all but the first occurence
+            # of the token:
+            mask[i] = False
+            scores = scores[~mask]
+            tokens = tokens[~mask]
+
+    # nucelus sample tokens with 90% absolute impact:
+    s_abs = np.abs(scores)
+    s_ind = np.argsort(s_abs)[::-1]
+    s_cum = np.cumsum(s_abs[s_ind])
+    s_sel = (s_cum / s_cum[-1]) <= threshold
+
+    return (
+        scores[s_ind[s_sel]].tolist() + [scores[s_ind[~s_sel]].sum()],
+        [tokens[i] for i in s_ind[s_sel]] + [f'+{np.sum(~s_sel):d} other']
+    )
 
 #====================================================================================================#
 # Messy transformers convenience functions:                                                          #
