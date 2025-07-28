@@ -329,7 +329,7 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, *,
         skip_tokens = special_tokens,
         cmap        = cmap
     )
-    axs[0].set_title('Query:')
+    axs[0].set_ylabel('Query:')
 
     # plot contexts:
     for i in range(len(scores['context'])):
@@ -339,9 +339,9 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, *,
             skip_tokens = special_tokens,
             cmap        = cmap
         )
-        axs[i+1].set_title(f'Document {i+1:d}:')
+        axs[i+1].set_ylabel(f'Doc. {i+1:d}:')
 
-    fig.suptitle(method)
+    fig.suptitle(f'Token Importance - {method}', fontsize=14, fontweight='bold')
     fig.tight_layout()
 
     if show: fig.show()
@@ -488,8 +488,10 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
         skip_tokens    = special_tokens,
         cmap           = cmap
     )
-    fig.suptitle(aggregation)
-    fig.legend()
+    ax.set_title(f'SHAP Attribution - {aggregation.capitalize()} Aggregation', 
+                fontsize=14, fontweight='bold')
+    ax.set_ylabel('Normalized Attribution' if  normalize else 'Attribution')
+    ax.legend()
     fig.tight_layout()
 
     if show: fig.show()
