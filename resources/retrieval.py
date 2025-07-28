@@ -160,7 +160,8 @@ class RetrieverExplanation(RetrieverExplanationBase):
                     result.append(
                         cls.load(
                             item,
-                            model_name_or_path=model_name_or_path,
+                            query_encoder_name_or_path=query_encoder_name_or_path,
+                            context_encoder_name_or_path=context_encoder_name_or_path,
                             tokenizer=tokenizer
                         )
                     )
