@@ -303,7 +303,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return gradIn
 
-    def forward(self, query:str, k:int, dir:str='embeddings', index:Optional[torch.FloatTensor]=None, **kwargs):
+    def forward(self, query:str, k:int, dir:str='embeddings', *, index:Optional[torch.FloatTensor]=None, reorder:bool=False, **kwargs):
         # load index from disk if not speciifed:
         if index is None:
             with open(os.path.join(dir, 'embeddings.pt'), 'rb') as file:
@@ -347,6 +347,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # Compute dot product:
         similarity = qry_output.last_hidden_state[:, 0, :] @ index.to(qry_output.last_hidden_state).T
         retrieved_ids = torch.argsort(similarity, dim=1, descending=True)[:, :k]
+        similarity = similarity.take_along_dim(retrieved_ids, dim=1)
 
         # calculate gradients of output:
         similarity.sum().backward()
@@ -402,4 +403,17 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # reset gradient computation:
         torch.set_grad_enabled(prev_grad)
 
-        return retrieved_ids[0], similarity[0, retrieved_ids[0]]
+        # move outputs to cpu:
+        similarity = similarity[0].detach().cpu()
+        retrieved_ids = retrieved_ids[0].cpu()
+
+        # reorder contexts:
+        if reorder:
+            self._x['context']                   = [self._x['context'][i] for i in retrieved_ids]
+            self._a['context']                   = [self._a['context'][i] for i in retrieved_ids]
+            self._h0['context']                  = [self._h0['context'][i] for i in retrieved_ids]
+            self._da['context']                  = [self._da['context'][i] for i in retrieved_ids]
+            self._dh0['context']                 = [self._dh0['context'][i] for i in retrieved_ids]
+            self._in_tokens['context']           = [self._in_tokens['context'][i] for i in retrieved_ids]
+
+        return retrieved_ids, similarity

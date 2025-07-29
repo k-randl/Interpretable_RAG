@@ -11,7 +11,7 @@ from sklearn.linear_model import LinearRegression
 from resources.utils import decode_chat_template, get_model_type
 
 from numpy.typing import NDArray
-from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable
+from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable, Callable, Any
 
 from abc import ABCMeta, abstractmethod
 
@@ -107,6 +107,138 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
         {"role": "system", "content": system},
         {"role": "user", "content": f"{context_text}\n\nQuery: {query}"}
     ]
+
+def generate_permutations_recursive(items:List[Any], func:Callable[[List[Any]], Any], perturbations:List[Any], index:int) -> List[Tuple[int]]:
+    """Recursively generates index-tagged permutations of subsets of a given list,
+    using bitmask logic to explore all combinations.
+
+    This function is typically used internally by `generate_permutations`. It relies on 
+    a bitmask (`index`) to determine which elements to include in each recursive step.
+    The `func` is used to compute perturbations, which are memorized in the `perturbations` list.
+
+    Args:
+        items (list):         The list of items for which permutations are to be generated.
+        func (callable):      A function applied to subsets of `items` to compute perturbations.
+        perturbations (list): A list (with length 2^n) for memorization of perturbation results.
+        index (int):          A bitmask representing the current subset of `items`.
+
+    Returns:
+        list[tuple[int]]: A list of tuples, each representing a sequence of indices
+                          (as bitmasks) that define a permutation path.
+    """
+    
+    # create perturbation if necessary:
+    if perturbations[index] is None:
+        perturbations[index] = func(items)
+
+    # break on empty set:
+    if index == 0: return [(index,)]
+
+    # calculate possible permutations:
+    i, m = 0, 1
+    permutations = []
+    while i < len(items):
+        if index & m:
+            child_permutations = generate_permutations_recursive(
+                items=items[:i]+items[i+1:],
+                func=func,
+                perturbations=perturbations,
+                index=index & ~m
+            )
+            permutations.extend([prm + (index,) for prm in child_permutations])
+
+            i += 1
+
+        m = m << 1
+
+    return permutations
+
+def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> Tuple[NDArray[np.int_], List[Any]]:
+    """Generates all possible bitmask-tagged permutations of subsets of a list,
+    and computes a perturbation for each subset using a user-defined function.
+
+    This function initializes the perturbation list and starts the recursive
+    permutation generation using `generate_permutations_recursive`.
+
+    Args:
+        items (list): The list of items to permute.
+        func (callable): A function to compute a "perturbation" for any subset of items.
+
+    Returns:
+        tuple:
+            - list[tuple[int]]: List of tuples representing permutations via index bitmasks.
+            - list[Any]: List of perturbation values for each subset, where the index corresponds
+                         to the subset encoded as a bitmask.
+    """
+    # calculate number of possible perturbations:
+    n = (2 ** len(items))
+
+    # initialize perturbation list:
+    perturbations = [None] * n
+
+    # calculate all possible permuations:
+    permutations = np.array(generate_permutations_recursive(
+        items, func,
+        perturbations,  # empty list to be filled
+        n-1             # this creates a bitmap of n ones
+    ))
+
+    # return tuple of permuations and perturbations: 
+    return permutations, perturbations
+
+def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_samples:int) -> Tuple[NDArray[np.float_], List[Any]]:
+    """Randomly samples a specified number of unique subsets of a given list,
+    and returns their binary indicator features along with the result of applying a function
+    to each sampled subset.
+
+    The function constructs a random selection of bitmask-encoded subsets of the input list
+    `items`, including the empty set and the full set. For each sampled subset, it applies
+    the provided function `func` and stores the result. It also returns a binary feature
+    matrix indicating which items are included in each sampled subset.
+
+    Args:
+        items (List[Any]): The list of items to draw subsets from.
+        func (Callable[[List[Any]], Any]): A function that computes a perturbation or
+                                           feature from a subset of `items`.
+        num_samples (int): The number of unique subset samples to generate, including
+                           the empty set and full set.
+
+    Returns:
+        Tuple[np.ndarray, List[Any]]:
+            - features (np.ndarray): A binary matrix of shape (num_samples, len(items)),
+                                     where each row indicates which items are included
+                                     in the corresponding subset (1 for included, 0 otherwise).
+            - perturbations (List[Any]): A list containing the results of applying `func` to
+                                         each sampled subset.
+    """
+    
+    # calculate number of possible perturbations:
+    n = (2 ** len(items))
+
+    # take sample of `num_samples` unique bitmasks (including empty and full):
+    sample = np.empty(num_samples, dtype=int)
+    sample[0]    = 0   # =0b000...0
+    sample[-1]   = n-1 # =0b111...1
+    sample[1:-1] = np.random.choice(np.arange(1,n-1), size=(num_samples-2), replace=False)
+
+    # generate perturbations:
+    perturbations = [None] * num_samples
+    features      = np.zeros((num_samples, len(items)), dtype=float)
+    for i, bitmask in enumerate(sample):
+        # translate bitmask to set:
+        j, m = 0, 1
+        current_items = []
+        while j < len(items):
+            if bitmask & m:
+                current_items.append(items[j])
+                features[i, j] = 1.
+            j += 1
+            m = m << 1
+
+        # generate perturbation:
+        perturbations[i] = func(current_items)
+
+    return features, perturbations
 
 #=======================================================================#
 # Generator Explanation:                                                #
@@ -669,7 +801,7 @@ class ExplainableAutoModelForGeneration:
                 return torch.argmax(self._exp_probs[-1], dim=-1)
 
 
-            def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', conditional:bool=True, system:Optional[str]=None, **kwargs):
+            def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', conditional:bool=True, target:Literal['context', 'query']='context', system:Optional[str]=None, **kwargs):
                 """Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
 
                 Args:
@@ -680,7 +812,8 @@ class ExplainableAutoModelForGeneration:
                                         If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
                                         If `inf` is passed, always computes the precise SHAP values.
                                         If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
-                    conditional (bool): Whether to compute the compared values conditioned on the original generation (default: `True`)
+                    conditional (bool): Whether to compute the compared values conditioned on the original generation (default: `True`).
+                    target (str):       Whether to explain the impact of the `'context'` or the `'query'` (default: `'context'`).
                     system (str):       An optional system prompt.
 
                 Returns:
@@ -703,25 +836,24 @@ class ExplainableAutoModelForGeneration:
                     **kwargs
                 )
 
-                # calculate number of samples needed for precise calculation:
-                n = 2 ** len(contexts)
-                if   max_samples == 'auto': max_samples = batch_size
-                elif max_samples == 'inf':  max_samples = n
-                perturbed_rag_prompts = [None] * min(n, max_samples)
+                # generate perturbed prompts:
+                if target == 'context':
+                    perturbed_rag_prompts = self.__generate_prompts(
+                        contexts,                                                    # permute the contexts
+                        lambda items:create_rag_prompt(query, items, system=system), # build a prompt for each permutation
+                        max_samples,
+                        batch_size
+                    )
 
-                # generate prompts:
-                if max_samples >= n:
-                    # generate prompts for perturbed inputs (precise SHAP values):
-                    perturbed_rag_prompts[-1] = complete_rag_prompt
-                    self._shap_cache   = np.array(self.__generate_permutations(query, contexts, perturbed_rag_prompts, n-1, system=system))
-                    self._shap_precise = True
+                elif query == 'context':
+                    perturbed_rag_prompts = self.__generate_prompts(
+                        query.split(),                                                            # permute the query
+                        lambda items:create_rag_prompt(' '.join(items), contexts, system=system), # build a prompt for each permutation
+                        max_samples,
+                        batch_size
+                    )
 
-                elif max_samples < n:
-                    # sample prompts for kernel SHAP:
-                    self._shap_cache   = self.__generate_sample(query, contexts, perturbed_rag_prompts, max_samples, n-1, system=system)
-                    self._shap_precise = False
-
-                else: raise ValueError(f'Unknown value for parameter `max_samples`: {max_samples}')
+                else: raise ValueError(f'Unknown value for parameter `target`: {target}')
 
                 # generate comparison output:
                 num_batches = int(np.ceil(len(perturbed_rag_prompts[:-1]) / batch_size))
@@ -744,56 +876,27 @@ class ExplainableAutoModelForGeneration:
 
                 return complete_rag_prompt + decode_chat_template(output[0], self.config.name_or_path) 
 
-            def __generate_permutations(self, query:str, contexts:List[str], perturbed_rag_prompts:List[str], index:int, *, system:Optional[str]=None):
-                # create perturbed prompt if necessary:
-                if perturbed_rag_prompts[index] is None:
-                    perturbed_rag_prompts[index] = create_rag_prompt(query, contexts, system=system)
+            def __generate_prompts(self, items, func, max_samples, batch_size):
+                # calculate number of samples needed for precise calculation:
+                n = 2 ** len(items)
+                if   max_samples == 'auto': max_samples = batch_size
+                elif max_samples == 'inf':  max_samples = n
 
-                # break on empty set:
-                if index == 0: return [(index,)]
+                # generate prompts:
+                if max_samples >= n:
+                    # generate prompts for perturbed inputs (precise SHAP values):
+                    self._shap_cache, perturbed_prompts = generate_permutations(items, func)
+                    self._shap_precise = True
 
-                # calculate possible permutations:
-                i, m = 0, 1
-                permutations = []
-                while i < len(contexts):
-                    if index & m:
-                        child_permutations = self.__generate_permutations(query, contexts[:i]+contexts[i+1:],
-                            perturbed_rag_prompts=perturbed_rag_prompts,
-                            index=index & ~m,
-                            system=system
-                        )
-                        permutations.extend([prm + (index,) for prm in child_permutations])
-                        i += 1
+                elif max_samples < n:
+                    # sample prompts for kernel SHAP:
+                    self._shap_cache, perturbed_prompts = sample_perturbations(items, func, max_samples)
+                    self._shap_precise = False
 
-                    m = m << 1
+                else: raise ValueError(f'Unknown value for parameter `max_samples`: {max_samples}')
 
-                return permutations
+                return perturbed_prompts
 
-            def __generate_sample(self, query:str, contexts:List[str], perturbed_rag_prompts:List[str], num_samples:int, num_perturbations:int, *, system:Optional[str]=None):
-                # take sample of `num_samples` unique sets of documents (including empty and full):
-                sample = np.empty(num_samples, dtype=int)
-                sample[0]    = 0
-                sample[-1]   = num_perturbations-1
-                sample[1:-1] = np.random.choice(np.arange(1,num_perturbations-1), size=(num_samples-2), replace=False)
-
-                # generate corresponding prompts:
-                features = np.zeros((num_samples, len(contexts)), dtype=float)
-                for i, index in enumerate(sample[:-1]):
-                    # translate index to set:
-                    j, m = 0, 1
-                    current_contexts = []
-                    while j < len(contexts):
-                        if index & m:
-                            current_contexts.append(contexts[j])
-                            features[i, j] = 1.
-                        j += 1
-                        m = m << 1
-
-                    # generate prompt:
-                    perturbed_rag_prompts[i] = create_rag_prompt(query, current_contexts, system=system)
-
-                return features
-                
 
             def get_shapley_values(self, aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token', **kwargs) -> NDArray[np.float_]:
                 """Generates Shapley feature attribution values for the chose aggregation method.

@@ -256,26 +256,30 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float_], x_labels:Optional[List[st
     cumulative = np.cumsum(np.concatenate([[base_value], scores]))
 
     # get colormap:
-    colors = cm.get_cmap(cmap, 3)
+    colors = cm.get_cmap(cmap)
 
     # plot each contribution:
     for i, value in enumerate(scores):
-        color = colors(2) if value > 0 else colors(0)
+        color = colors(0) if value > 0 else colors(1)
         ax.bar(i, value, bottom=cumulative[i], color=color, **kwargs)
         
         # add value label:
-        ax.text(i, cumulative[i] + value/2, f'{value:.4f}', 
+        ax.text(i, cumulative[i] + value/2, f'{value:.2f}', 
                ha='center', va='center', fontweight='bold', color='white')
 
     # plot final value:
-    ax.bar(len(x_labels), cumulative[-1], color=colors(1), label='Total', **kwargs)
+    ax.bar(len(x_labels), cumulative[-1], color=colors(2), **kwargs)
+        
+    # add value label:
+    ax.text(len(x_labels), cumulative[-1]/2, f'{cumulative[-1]:.2f}', 
+            ha='center', va='center', fontweight='bold', color='white')
 
     # connect bars with lines:
     for i in range(len(x_labels)):
         ax.plot([i + 0.4, i + 1.6], [cumulative[i+1], cumulative[i+1]], 'k--', alpha=0.5)
 
     # tick and axis settings:
-    ax.set_xticks(range(len(x_labels) + 1), x_labels + ['Final'], rotation=45, ha='right')
+    ax.set_xticks(range(len(x_labels) + 1), x_labels + ['Total'], rotation=45, ha='right')
     if normalize: 
         if ax.get_ylim()[0] < 0: ax.set_ylim(-1, 1)
         else: ax.set_ylim(0, 1)
@@ -789,3 +793,88 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
             cmap           = cmap,
             **kwargs
         )
+
+#====================================================================#
+# Plots for retrieval + generation:                                  #
+#====================================================================#
+
+from resources.rag import ExplainableAutoModelForRAG
+
+def plot_document_importance_rag(explanation:ExplainableAutoModelForRAG, document_names:Optional[List[str]]=None, *,
+    figsize: Tuple[int, int] = (12, 6),
+    mean_color:str='gray',
+    cmap:str='tab10',
+    show:bool=True
+) -> Union[Figure, None]:
+    """Plot document importance.
+
+    Args:
+        explanation (ExplainableAutoModelForRA): An object containing the necessary information for plotting.
+        document_names (List[str]):              An optional list of names of the documents.
+        figsize ((int, int)):                    The size of the figure.
+        mean_color (str):                        The color used for the mean values.
+        cmap (str):                              The name of a matplotlib colormap used for highlighting.
+        show (bool):                             If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+
+    Returns:
+        `matplotlib.figure.Figure` object if `show == False`.
+    """
+
+    # get y-values:
+    y_ret = explanation.retriever_document_importance
+    y_gen = explanation.generator_document_importance
+    y_avg = (y_ret + y_gen) / 2.
+
+    # get x-values:
+    num_documents = y_avg.shape[0]
+    x = np.arange(num_documents)
+
+    # get colormap:
+    colors = cm.get_cmap(cmap)
+
+    # fallback for document names:
+    if document_names is None:
+        document_names = [f'Document {i+1:d}' for i in range(num_documents)]
+    elif len(document_names) != num_documents: raise ValueError('`len(document_names)` does not match the number of documents!')
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # draw average shade:
+    ax.bar(x,    y_avg, .8, color=mean_color, alpha=.5)
+
+    # draw bars:
+    ax.bar(x-.2, y_ret, .4, label='Retriever', color=colors(0))
+    ax.bar(x+.2, y_gen, .4, label='Generator', color=colors(1))
+
+    # draw average:
+    ax.hlines(y_avg, x-.4, x+.4, color=mean_color, label='average')
+
+    # draw texts:
+    y_top = np.maximum(y_ret, y_gen)
+    for i, s in enumerate(document_names):
+        ax.text(x[i], max(y_top[i], 0)+.01, s, ha='center', va='bottom')
+
+    # clean frame (keep only left spine):
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    if ax.get_ylim()[0] < 0.:
+        ax.spines['bottom'].set_visible(False)
+
+        # add horizontal grid line at zero:
+        ax.axhline(y=0, color='black', linewidth=0.5)
+
+    # add horizontal grid lines at each tick:
+    for tick_loc in ax.get_yticks(minor=False):
+        ax.axhline(y=tick_loc, color='lightgray', linewidth=0.5, zorder=0)
+
+    ax.set_title(f'Overall Document Importance', 
+                fontsize=14, fontweight='bold')
+    ax.set_xticks([])
+    ax.set_ylabel('Normalized Importance')
+    ax.legend()
+
+    fig.tight_layout()
+
+    if show: fig.show()
+    else: return fig

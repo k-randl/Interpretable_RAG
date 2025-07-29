@@ -175,7 +175,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return gradIn
 
-    def forward(self, query:str, contexts:List[str], k:Optional[int]=None, **kwargs):
+    def forward(self, query:str, contexts:List[str], k:Optional[int]=None, *, reorder:bool=False, **kwargs):
         # control gradient computation:
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
@@ -204,8 +204,8 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # Compute dot product:
         similarity = qry_output.last_hidden_state[:, 0, :] @ ctx_output.last_hidden_state[:, 0, :].T
         if k is not None:
-            retrieved_ids = torch.argsort(similarity, dim=1).flip(dims=(1,))[0,:k]
-            similarity = similarity[:, retrieved_ids]
+            retrieved_ids = torch.argsort(similarity, dim=1, descending=True)[:, :k]
+            similarity = similarity.take_along_dim(retrieved_ids, dim=1)
 
         has_attentions    = checkattr(qry_output, 'attentions') and checkattr(ctx_output, 'attentions')
         has_hidden_states = checkattr(qry_output, 'hidden_states') and checkattr(ctx_output, 'hidden_states')
@@ -281,5 +281,19 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # reset gradient computation:
         torch.set_grad_enabled(prev_grad)
 
-        if k is None: return similarity.detach()
-        else: return retrieved_ids, similarity.detach()
+        # move outputs to cpu:
+        similarity = similarity[0].detach().cpu()
+        retrieved_ids = retrieved_ids[0].cpu()
+
+        # reorder contexts:
+        if reorder:
+            self._x['context']                   = self._x['context'][retrieved_ids.numpy()]
+            self._a['context']                   = self._a['context'][retrieved_ids]
+            self._h['context']                   = self._h['context'][retrieved_ids]
+            self._da['context']                  = self._da['context'][retrieved_ids]
+            self._dh['context']                  = self._dh['context'][retrieved_ids]
+            self._special_tokens_mask['context'] = self._special_tokens_mask['context'][retrieved_ids]
+            self._in_tokens['context']           = [self._in_tokens['context'][i] for i in retrieved_ids]
+
+        if k is None: return similarity
+        else: return retrieved_ids, similarity
