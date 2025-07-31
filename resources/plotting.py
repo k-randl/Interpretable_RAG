@@ -89,6 +89,7 @@ def highlight_dominant_passages(scores:NDArray[np.float_], tokens:List[str], tit
         total:Optional[float]=None,
         skip_tokens:List[str]=[],
         token_processor:Optional[Callable[[str],str]]=None,
+        legend:bool=True,
         cmap:str='tab10'
     ) -> Tuple[str, str]:
     """Highlights tokens in a text sequence where a single document contributes
@@ -105,6 +106,7 @@ def highlight_dominant_passages(scores:NDArray[np.float_], tokens:List[str], tit
         total (float):                  Optional Maximum attribution for highlighting (default: `None`).
         skip_tokens (List[str]):        An optional list of tokens that will not be printed.
         token_processor ((str) -> str): An otional function applied to each token before printing.
+        legend (bool):                  Whether to create a legend for the plot (default: `True`).
         cmap (str):                     The name of a matplotlib colormap used for highlighting.
 
     Returns:
@@ -156,6 +158,8 @@ def highlight_dominant_passages(scores:NDArray[np.float_], tokens:List[str], tit
         '</tr>\n'
     )
 
+    if not legend: return html_text
+
     # fallback for document names:
     if document_names is None:
         document_names = [f'Document {i+1:d}' for i in range(num_docs)]
@@ -172,8 +176,8 @@ def highlight_dominant_passages(scores:NDArray[np.float_], tokens:List[str], tit
         '       <i style="line-height:2">Legend:</i>\n' +
         '   </td>\n' +
         '   <td style="text-align:left; vertical-align:top">\n' +
-        '       <div style="line-height:2">' +
-                    ' '.join([f'<div style="background-color:{c}; padding:0px; border-radius:3px; float:left;"><i>{document_names[i]}</i><br><small>{document_vals[i] * 100.:.0f}%</small></div>' for i, c in enumerate(rgb_colors)]) +
+        '       <div style="line-height:1">' +
+                    ''.join([f'<div style="background-color:{c}; text-align: center; padding:3px; margin:3px; border-radius:3px; float:left;"><i>{document_names[i]}</i><br><small>({document_vals[i] * 100.:.0f}%)</small></div>' for i, c in enumerate(rgb_colors)]) +
                 '</div>\n' +
         '   </td>\n' +
         '</tr>\n'
@@ -343,7 +347,7 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, document_nam
 
     # fallback for document names:
     if document_names is None:
-        document_names = [f'Doc. {i+1:d}' for i in range(len(scores))]
+        document_names = [f'Doc. {i+1:d}' for i in range(len(scores['context']))]
     elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # get special tokens:
@@ -381,8 +385,9 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
         threshold:float=0.0,
         token_processor:Optional[Callable[[str],str]]=None,
         cmap:str='tab10',
+        show:bool=True,
         **kwargs
-    ) -> str:
+    ) -> Union[str,None]:
     """Highlights tokens in a text sequence that are important for retrieving the document.
 
     Args:
@@ -392,9 +397,10 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
         threshold (float):                      Minimum importance for highlighting in the intervall `[0., 1.)` (default: `0.`).
         token_processor ((str) -> str):         An optional function applied to each token before printing.
         cmap (str):                             The name of a matplotlib colormap used for highlighting.
+        show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
-        An HTML-formatted string with spans highlighting important tokens.
+        A HTML-formatted string with spans highlighting important tokens if `show == False`.
     """
     # get scores:
     if   method == 'grad':   scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
@@ -421,8 +427,9 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
         threshold       = threshold,
         skip_tokens     = special_tokens,
         token_processor = token_processor,
+        legend          = False,
         cmap            = cmap
-    )[0]
+    )
 
     # plot contexts:
     for i, s in enumerate(scores['context']):
@@ -434,8 +441,9 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
             total           = np.concatenate(scores['context']).max(),
             skip_tokens     = special_tokens,
             token_processor = token_processor,
+            legend          = False,
             cmap            = cmap
-        )[0]
+        )
 
     # Build, display, and return final HTML:
     html_str = (
@@ -453,8 +461,9 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
 
         '</html>'
     )
-    display(HTML(html_str))
-    return html_str
+
+    if show: display(HTML(html_str))
+    else: return html_str
 
 def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *, 
         method:Literal['grad', 'gradIn', 'aGrad']='gradIn',
@@ -529,8 +538,9 @@ def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, docu
 def visualize_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
         method:Literal['grad', 'gradIn', 'aGrad']='gradIn',
         cmap:str='tab10',
+        show:bool=True,
         **kwargs
-    ) -> None:
+    ) -> Union[Figure, str, None]:
     """Visualizes token importance while automatically choosing a fitting plot for the chosen `method`.
 
     Args:
@@ -538,13 +548,18 @@ def visualize_importance_retriever(explanation:RetrieverExplanationBase, documen
         document_names (List[str]):             An optional list of names of the documents.
         method (str):                           The method for calculating token importance.
         cmap (str):                             The name of a matplotlib colormap used for highlighting.
+        show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+
+    Returns:
+        The illustration object if `show == False`.
     """
 
-    higlight_importance_retriever(
+    return higlight_importance_retriever(
         explanation    = explanation,
         document_names = document_names, 
         method         = method,
         cmap           = cmap,
+        show           = show,
         **kwargs
     )
 
@@ -626,6 +641,7 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
 def higlight_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         threshold:float=.5,
         token_processor:Optional[Callable[[str],str]]=None,
+        show:bool=True,
         cmap:str='tab10'
     ) -> str:
     """Highlights tokens in a text sequence where a single document contributes
@@ -637,9 +653,10 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
         threshold (float):                      Minimum attribution for highlighting in the intervall `[0., 1.)` (default: `0.5`).
         token_processor ((str) -> str):         An optional function applied to each token before printing.
         cmap (str):                             The name of a matplotlib colormap used for highlighting.
+        show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
-        An HTML-formatted string with spans highlighting dominant SHAP regions.
+        A HTML-formatted string with spans highlighting dominant SHAP regions if `show == False`.
     """
 
     # get attribution scores:
@@ -663,13 +680,14 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
     special_tokens = set(explanation.tokenizer.special_tokens_map.values())
 
     # create query html:
-    html_query, _ = highlight_dominant_passages(
+    html_query = highlight_dominant_passages(
         scores          = shap_values['query'].mean(axis=1, keepdims=True).T,
         tokens          = explanation.qry_tokens,
         title           = 'Query',
         document_names  = document_names,
         threshold       = threshold,
         skip_tokens     = special_tokens,
+        legend          = False,
         cmap            = cmap
     )
 
@@ -703,8 +721,9 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
 
         '</html>'
     )
-    display(HTML(html_str))
-    return html_str
+
+    if show: display(HTML(html_str))
+    else: return html_str
 
 def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
@@ -775,8 +794,9 @@ def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, doc
 def visualize_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
         cmap:str='tab10',
+        show:bool=True,
         **kwargs
-    ) -> None:
+    ) -> Union[Figure, str, None]:
     """Visualizes Shapley attribution values while automatically choosing a fitting plot for the chosen `aggregation`.
 
     Args:
@@ -784,32 +804,39 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
         document_names (List[str]):             An optional list of names of the documents.
         aggregation (str):                      Aggregation method for probabilities (default: `'token'`).
         cmap (str):                             The name of a matplotlib colormap used for highlighting.
+        show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+
+    Returns:
+        The illustration object if `show == False`.
     """
 
     if aggregation == 'token':
-        higlight_attribution_generator(
+        return higlight_attribution_generator(
             explanation    = explanation,
             document_names = document_names,
             cmap           = cmap,
+            show           = show,
             **kwargs
         )
 
     elif aggregation == 'sequence':
-        plot_attribution_summary_generator(
+        return plot_attribution_summary_generator(
             explanation    = explanation,
             document_names = document_names,
             aggregation    = aggregation,
             normalize      = kwargs.get('normalize', True),
             cmap           = cmap,
+            show           = show,
             **kwargs
         )
 
     else:
-        plot_attribution_generator(
+        return plot_attribution_generator(
             explanation    = explanation,
             document_names = document_names,
             aggregation    = aggregation,
             cmap           = cmap,
+            show           = show,
             **kwargs
         )
 

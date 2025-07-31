@@ -203,9 +203,10 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         # Compute dot product:
         similarity = qry_output.last_hidden_state[:, 0, :] @ ctx_output.last_hidden_state[:, 0, :].T
+        similarity, retrieved_ids = torch.sort(similarity, dim=1, descending=True)
         if k is not None:
-            retrieved_ids = torch.argsort(similarity, dim=1, descending=True)[:, :k]
-            similarity = similarity.take_along_dim(retrieved_ids, dim=1)
+            similarity    = similarity[:, :k]
+            retrieved_ids = retrieved_ids[:, :k]
 
         has_attentions    = checkattr(qry_output, 'attentions') and checkattr(ctx_output, 'attentions')
         has_hidden_states = checkattr(qry_output, 'hidden_states') and checkattr(ctx_output, 'hidden_states')

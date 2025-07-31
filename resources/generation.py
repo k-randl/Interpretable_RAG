@@ -16,6 +16,12 @@ from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable, Callab
 from abc import ABCMeta, abstractmethod
 
 #=======================================================================#
+# Declarations:                                                         #
+#=======================================================================#
+
+MAXINT = int(2**31 - 1) # Maximum value for signed int32
+
+#=======================================================================#
 # Helper Functions:                                                     #
 #=======================================================================#
 
@@ -913,20 +919,22 @@ class ExplainableAutoModelForGeneration:
                 )
 
                 # generate perturbed prompts:
+                if   max_samples == 'auto': max_samples = batch_size
+                elif max_samples == 'inf':  max_samples = MAXINT
+
                 self._qry_tokens = query.split()
-                self._qry_tokens[1:] = [' '+t for t in self._qry_tokens[1:]]
+                self._qry_tokens[1:] = [' ' + t for t in self._qry_tokens[1:]]
+
                 self._shap_cache, perturbed_prompts = {}, {}
                 self._shap_cache['query'], perturbed_prompts['query'] = self.__generate_prompts(
                     self._qry_tokens,                                                         # permute the query
                     lambda items:create_rag_prompt(''.join(items), contexts, system=system), # build a prompt for each permutation
-                    max_samples,
-                    batch_size
+                    int(max_samples/2 + 1)
                 )
                 self._shap_cache['context'], perturbed_prompts['context'] = self.__generate_prompts(
                     contexts,                                                    # permute the contexts
                     lambda items:create_rag_prompt(query, items, system=system), # build a prompt for each permutation
-                    max_samples,
-                    batch_size
+                    int(max_samples/2 + 1)
                 )
 
                 # combine prompt lists comparison output:
@@ -963,11 +971,9 @@ class ExplainableAutoModelForGeneration:
 
                 return complete_rag_prompt + decode_chat_template(output[0], self.config.name_or_path) 
 
-            def __generate_prompts(self, items, func, max_samples, batch_size):
+            def __generate_prompts(self, items, func, max_samples):
                 # calculate number of samples needed for precise calculation:
                 n = 2 ** len(items)
-                if   max_samples == 'auto': max_samples = batch_size
-                elif max_samples == 'inf':  max_samples = n
 
                 # generate prompts:
                 if max_samples >= n:

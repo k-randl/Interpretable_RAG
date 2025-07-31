@@ -16,22 +16,22 @@ contexts = [
     "Marie Curie founded the Curie Institute in Paris in 1920, and the Curie Institute in Warsaw in 1932.",
 ]
 
-rag = ExplainableAutoModelForRetrieval.from_pretrained(
+retriever = ExplainableAutoModelForRetrieval.from_pretrained(
     'facebook/dragon-plus-query-encoder',
     'facebook/dragon-plus-context-encoder'
 ).to('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Create RAG model:
-rag(query, contexts, output_attentions=True, output_hidden_states=True)
+retriever(query, contexts, output_attentions=True, output_hidden_states=True)
 
 #%% aGrad:
-plot_importance_retriever(rag, method='aGrad')
-higlight_importance_retriever(rag, method='aGrad', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
+plot_importance_retriever(retriever, method='aGrad')
+higlight_importance_retriever(retriever, method='aGrad', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
 
 #%% Grad x In:
-plot_importance_retriever(rag, method='gradIn')
-higlight_importance_retriever(rag, method='gradIn', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
+plot_importance_retriever(retriever, method='gradIn')
+higlight_importance_retriever(retriever, method='gradIn', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
 
 #%% Grad:
-plot_importance_retriever(rag, method='grad')
-higlight_importance_retriever(rag, method='grad', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
+plot_importance_retriever(retriever, method='grad')
+higlight_importance_retriever(retriever, method='grad', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
