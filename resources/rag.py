@@ -3,8 +3,9 @@ import numpy as np
 from resources.retrieval_offline import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOfflineRetrieval
 from resources.retrieval_online  import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOnlineRetrieval
 from resources.generation import ExplainableAutoModelForGeneration
+from resources.utils import tokens2words
 
-from typing import Optional, Dict, List, Any
+from typing import Optional, Callable, Dict, List, Any
 from numpy.typing import NDArray
 
 class ExplainableAutoModelForRAG:
@@ -15,12 +16,16 @@ class ExplainableAutoModelForRAG:
         *,
         offline:bool=False,
         retriever_query_format:str='{query}',
+        retriever_token_processor:Optional[Callable[[str],str]]=None,
         retriever_kwargs:Dict[str, Any]={},
+        generator_token_processor:Optional[Callable[[str],str]]=None,
         generator_kwargs:Dict[str, Any]={}
     ):
         # save general info:
         self.__is_offline = offline
         self.__retriever_query_format = retriever_query_format
+        self.__retriever_token_processor = retriever_token_processor
+        self.__generator_token_processor = generator_token_processor
         
         # instantiate generator:
         self.generator = ExplainableAutoModelForGeneration.from_pretrained(
@@ -105,7 +110,7 @@ class ExplainableAutoModelForRAG:
     @property
     def generator_document_importance(self) -> NDArray[np.float_]:
         '''Normalized document importance of the generator.'''
-        #doc_importance_generator = self.generator.get_shapley_values('token').sum(axis=1)
+        #doc_importance_generator = self.generator.get_shapley_values('context', 'token').sum(axis=1)
         doc_importance_generator = self.generator.get_shapley_values('context', 'sequence')[:,0]
         doc_importance_generator /= np.abs(doc_importance_generator).sum()
 
@@ -115,3 +120,52 @@ class ExplainableAutoModelForRAG:
     def mean_document_importance(self) -> NDArray[np.float_]:
         '''Mean normalized document importance of the rag pipeline.'''
         return (self.retriever_document_importance + self.generator_document_importance) / 2.
+    
+    @property
+    def retriever_query_importance(self) -> NDArray[np.float_]:
+        '''Normalized word importance of the query for retrieving.'''
+
+        # get special tokens:
+        special_tokens = set(self.retriever.tokenizer.special_tokens_map.values())
+
+        # get token to word mapping:
+        indices = tokens2words(
+            self.retriever.in_tokens['query'][0],
+            token_processor=self.__retriever_token_processor,
+            filter_tokens=special_tokens
+        )
+
+        # delete formating tokens:
+        if self.__retriever_query_format is not None:
+            pattern = self.__retriever_query_format.format(query='[§§§]').split()
+
+            prefix_size = pattern.index('[§§§]')
+            if prefix_size > 0: indices = indices[prefix_size:]
+
+            suffix_size = len(pattern) - prefix_size - 1
+            if suffix_size > 0: indices = indices[:-suffix_size]
+
+        # get token importance:
+        qry_importance_retriever = np.abs(self.retriever.gradIn()['query'].numpy()[0])
+
+        # aggregate to word importance:
+        qry_importance_retriever = [np.mean([qry_importance_retriever[i] for i in w]) for w in indices]
+
+        # normalize:
+        qry_importance_retriever /= np.abs(qry_importance_retriever).sum()
+
+        return qry_importance_retriever
+    
+    @property
+    def generator_query_importance(self) -> NDArray[np.float_]:
+        '''Normalized word importance of the query during generation.'''
+        #qry_importance_generator = self.generator.get_shapley_values('query', 'token').sum(axis=1)
+        qry_importance_generator = self.generator.get_shapley_values('query', 'sequence')[:,0]
+        qry_importance_generator /= np.abs(qry_importance_generator).sum()
+
+        return qry_importance_generator
+    
+    @property
+    def mean_query_importance(self) -> NDArray[np.float_]:
+        '''Mean word importance of the query for the rag pipeline.'''
+        return (self.retriever_query_importance + self.generator_query_importance) / 2.

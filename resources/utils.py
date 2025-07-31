@@ -3,7 +3,7 @@ import json
 import torch
 import numpy as np
 from importlib import import_module
-from typing import Dict, List, Union, Tuple
+from typing import Optional, Callable, Dict, List, Union, Tuple
 
 from numpy.typing import NDArray
 
@@ -79,6 +79,34 @@ def nucleus_sample_tokens(scores:Union[NDArray, torch.Tensor], tokens:List[str],
         scores[s_ind[s_sel]].tolist() + [scores[s_ind[~s_sel]].sum()],
         [tokens[i] for i in s_ind[s_sel]] + [f'+{np.sum(~s_sel):d} other']
     )
+
+def tokens2words(tokens:List[str], *, token_processor:Optional[Callable[[str],str]]=None, separator:str=' ', filter_tokens:List[str]=[]):
+    """Combines tokens to words by splitting at `separator`.
+
+    Args:
+        tokens (List[str]):             The list of token strings.
+        token_processor ((str) -> str): An optional function applied to each token.
+        separator (str):                The separtaor to split on (default: `' '`).
+        filter_tokens (List[str]):      A list of tokens to be ignored.
+    """
+
+    words = []
+    for i, token in enumerate(tokens):
+        # filter tokens:
+        if token in filter_tokens: continue
+
+        # apply token preprocessing:
+        if token_processor is not None:
+            token = token_processor(token)
+
+        # start new word on first token or separator:
+        if (len(words) == 0) or token.startswith(separator):
+           words.append([i])
+
+        # otherwise continue last word:
+        else: words[-1].append(i)
+
+    return words
 
 #====================================================================================================#
 # Messy transformers convenience functions:                                                          #
