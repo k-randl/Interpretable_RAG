@@ -161,6 +161,10 @@ def highlight_dominant_passages(scores:NDArray[np.float_], tokens:List[str], tit
         document_names = [f'Document {i+1:d}' for i in range(num_docs)]
     elif len(document_names) != num_docs: raise ValueError('`len(document_names)` does not match the number of documents!')
 
+    # extract mean absolute document contributions:
+    document_vals = scores.mean(axis=1)
+    document_vals /= np.abs(document_vals).sum()
+
     # build legend:
     html_legend = (
         '<tr style="border-top: 1px solid">\n' +
@@ -169,7 +173,7 @@ def highlight_dominant_passages(scores:NDArray[np.float_], tokens:List[str], tit
         '   </td>\n' +
         '   <td style="text-align:left; vertical-align:top">\n' +
         '       <div style="line-height:2">' +
-                    ' '.join([f'<i style="background-color:{c}; padding:0px; border-radius:3px;">{document_names[i]}</i>' for i, c in enumerate(rgb_colors)]) +
+                    ' '.join([f'<div style="background-color:{c}; padding:0px; border-radius:3px; float:left;"><i>{document_names[i]}</i><br><small>{document_vals[i] * 100.:.0f}%</small></div>' for i, c in enumerate(rgb_colors)]) +
                 '</div>\n' +
         '   </td>\n' +
         '</tr>\n'
@@ -573,7 +577,7 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
     """
 
     # get attribution scores:
-    shap_values = explanation.get_shapley_values(aggregation)
+    shap_values = explanation.get_shapley_values('context', aggregation)
 
     # get tokens:
     if aggregation == 'token':
@@ -596,7 +600,7 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
         tokens = explanation.tokenizer.convert_ids_to_tokens(indices[:,None])
 
     else: raise ValueError(f'Unknown value for parameter `aggregation`: "{aggregation}"')
-    
+
     # get special tokens:
     special_tokens = set(explanation.tokenizer.special_tokens_map.values())
 
@@ -638,6 +642,9 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
         An HTML-formatted string with spans highlighting dominant SHAP regions.
     """
 
+    # get attribution scores:
+    shap_values = explanation.get_shapley_values(None, 'token')
+
     # get indices of the actual content:
     # (excluding chat template specific tokens) 
     response = decode_chat_template(
@@ -648,16 +655,27 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
 
     # create role:
     role = explanation.gen_tokens[response['role']]
-    if token_processor is not None: 
+    if token_processor is not None:
         role = [token_processor(t) for t in role]
     role = ''.join(role).strip().capitalize()
 
     # get special tokens:
     special_tokens = set(explanation.tokenizer.special_tokens_map.values())
 
-    # create html:
+    # create query html:
+    html_query, _ = highlight_dominant_passages(
+        scores          = shap_values['query'].mean(axis=1, keepdims=True).T,
+        tokens          = explanation.qry_tokens,
+        title           = 'Query',
+        document_names  = document_names,
+        threshold       = threshold,
+        skip_tokens     = special_tokens,
+        cmap            = cmap
+    )
+
+    # create context html:
     html_response, html_legend = highlight_dominant_passages(
-        scores          = explanation.get_shapley_values('token')[:,response['content']],
+        scores          = shap_values['context'][:,response['content']],
         tokens          = explanation.gen_tokens[response['content']],
         title           = role,
         document_names  = document_names,
@@ -677,6 +695,7 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
 
         '<body>\n' +
         '<table>\n' +
+        html_query +
         html_response +
         html_legend +
         '</table>\n' +
@@ -687,7 +706,7 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
     display(HTML(html_str))
     return html_str
 
-def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *, 
+def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
         absolute:bool=False,
         normalize:bool=True,
@@ -712,7 +731,7 @@ def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, doc
     """
 
     # get attribution scores:
-    shap_values = explanation.get_shapley_values(aggregation)
+    shap_values = explanation.get_shapley_values('context', aggregation)
 
     # fallback for document names:
     if document_names is None:
@@ -753,7 +772,7 @@ def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, doc
     if show: fig.show()
     else: return fig
 
-def visualize_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *, 
+def visualize_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
         cmap:str='tab10',
         **kwargs

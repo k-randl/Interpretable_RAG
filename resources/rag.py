@@ -50,9 +50,13 @@ class ExplainableAutoModelForRAG:
         contexts:Optional[List[str]]=None,
         dir:Optional[str]=None,
         index:Optional[torch.FloatTensor]=None, 
-        generator_kwargs:Dict[str, Any]={},
-        retriever_kwargs:Dict[str, Any]={}
+        generator_kwargs:Optional[Dict[str, Any]]=None,
+        retriever_kwargs:Optional[Dict[str, Any]]=None
     ):
+        # init kwargs if unspecified:
+        if generator_kwargs is None: generator_kwargs = {}
+        if retriever_kwargs is None: retriever_kwargs = {}
+
         # check parameters:
         if self.__is_offline:
             if index is not None: retriever_kwargs['index'] = index
@@ -71,7 +75,7 @@ class ExplainableAutoModelForRAG:
         self.retrieved_ids, self.retrieved_sim = self.retriever(
             self.__retriever_query_format.format(query=query),
             k=k,
-            reorder = True,
+            reorder=True,
             output_attentions=True,
             output_hidden_states=True,
             **retriever_kwargs
@@ -101,7 +105,8 @@ class ExplainableAutoModelForRAG:
     @property
     def generator_document_importance(self) -> NDArray[np.float_]:
         '''Normalized document importance of the generator.'''
-        doc_importance_generator = self.generator.get_shapley_values('token').sum(axis=1)
+        #doc_importance_generator = self.generator.get_shapley_values('token').sum(axis=1)
+        doc_importance_generator = self.generator.get_shapley_values('context', 'sequence')[:,0]
         doc_importance_generator /= np.abs(doc_importance_generator).sum()
 
         return doc_importance_generator

@@ -346,8 +346,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         # Compute dot product:
         similarity = qry_output.last_hidden_state[:, 0, :] @ index.to(qry_output.last_hidden_state).T
-        retrieved_ids = torch.argsort(similarity, dim=1, descending=True)[:, :k]
-        similarity = similarity.take_along_dim(retrieved_ids, dim=1)
+        similarity, retrieved_ids = torch.sort(similarity, dim=1, descending=True)
+        similarity    = similarity[:, :k]
+        retrieved_ids = retrieved_ids[:, :k]
 
         # calculate gradients of output:
         similarity.sum().backward()
@@ -407,13 +408,14 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         similarity = similarity[0].detach().cpu()
         retrieved_ids = retrieved_ids[0].cpu()
 
-        # reorder contexts:
-        if reorder:
-            self._x['context']                   = [self._x['context'][i] for i in retrieved_ids]
-            self._a['context']                   = [self._a['context'][i] for i in retrieved_ids]
-            self._h0['context']                  = [self._h0['context'][i] for i in retrieved_ids]
-            self._da['context']                  = [self._da['context'][i] for i in retrieved_ids]
-            self._dh0['context']                 = [self._dh0['context'][i] for i in retrieved_ids]
-            self._in_tokens['context']           = [self._in_tokens['context'][i] for i in retrieved_ids]
+        # reorder contexts to orginial document order:
+        if not reorder:
+            sorted_ids = torch.argsort(retrieved_ids)
+            self._x['context']                   = [self._x['context'][i] for i in sorted_ids]
+            self._a['context']                   = [self._a['context'][i] for i in sorted_ids]
+            self._h0['context']                  = [self._h0['context'][i] for i in sorted_ids]
+            self._da['context']                  = [self._da['context'][i] for i in sorted_ids]
+            self._dh0['context']                 = [self._dh0['context'][i] for i in sorted_ids]
+            self._in_tokens['context']           = [self._in_tokens['context'][i] for i in sorted_ids]
 
         return retrieved_ids, similarity

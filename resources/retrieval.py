@@ -189,8 +189,8 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if context_encoder_name_or_path is None: result._context_encoder_name_or_path = data.get('context_encoder_name_or_path')
         else: result._query_encoder_name_or_path = context_encoder_name_or_path
 
-        if tokenizer is None: result._tokenizer = tokenizer
-        else: result._tokenizer = AutoTokenizer.from_pretrained(query_encoder_name_or_path)
+        if tokenizer is None: result._tokenizer = AutoTokenizer.from_pretrained(result._query_encoder_name_or_path)
+        else: result._tokenizer =tokenizer
 
         return result
 

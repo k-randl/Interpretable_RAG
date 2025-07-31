@@ -108,7 +108,7 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
         {"role": "user", "content": f"{context_text}\n\nQuery: {query}"}
     ]
 
-def generate_permutations_recursive(items:List[Any], func:Callable[[List[Any]], Any], perturbations:List[Any], index:int) -> List[Tuple[int]]:
+def generate_permutations_recursive(items:List[Any], func:Callable[[List[Any]], Any], perturbations:List[Any], index:int) -> Tuple[List[Tuple[int]], List[Tuple[int]]]:
     """Recursively generates index-tagged permutations of subsets of a given list,
     using bitmask logic to explore all combinations.
 
@@ -123,37 +123,44 @@ def generate_permutations_recursive(items:List[Any], func:Callable[[List[Any]], 
         index (int):          A bitmask representing the current subset of `items`.
 
     Returns:
-        list[tuple[int]]: A list of tuples, each representing a sequence of indices
-                          (as bitmasks) that define a permutation path.
+        Tuple:
+            - `permutations`:  A list of tuples, each representing a sequence of indices
+                               of subsets in `perturbations` that define a permutation path.
+            - `new_items`:     A list of tuples, each representing a sequence of indices
+                               of items in `items` added to the previous set to define
+                               a permutation path.
     """
     
-    # create perturbation if necessary:
+    # if current perturbation undefined:
     if perturbations[index] is None:
+        # create perturbation:
         perturbations[index] = func(items)
 
     # break on empty set:
-    if index == 0: return [(index,)]
+    if index == 0: return [(index,)], [()]
 
     # calculate possible permutations:
-    i, m = 0, 1
-    permutations = []
+    i, j, m = 0, 0, 1
+    permutations, new_items = [], []
     while i < len(items):
         if index & m:
-            child_permutations = generate_permutations_recursive(
+            child_permutations, child_new_items = generate_permutations_recursive(
                 items=items[:i]+items[i+1:],
                 func=func,
                 perturbations=perturbations,
                 index=index & ~m
             )
             permutations.extend([prm + (index,) for prm in child_permutations])
+            new_items.extend([ni + (j,) for ni in child_new_items])
 
             i += 1
 
         m = m << 1
+        j += 1
 
-    return permutations
+    return permutations, new_items
 
-def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> Tuple[NDArray[np.int_], List[Any]]:
+def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> Tuple[NDArray[np.int_], NDArray[np.int_], List[Any]]:
     """Generates all possible bitmask-tagged permutations of subsets of a list,
     and computes a perturbation for each subset using a user-defined function.
 
@@ -161,14 +168,18 @@ def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> T
     permutation generation using `generate_permutations_recursive`.
 
     Args:
-        items (list): The list of items to permute.
-        func (callable): A function to compute a "perturbation" for any subset of items.
+        items (List[Any]):        The list of items to permute.
+        func (List[Any]) -> Any): A function to compute a "perturbation" for any subset of items.
 
     Returns:
-        tuple:
-            - list[tuple[int]]: List of tuples representing permutations via index bitmasks.
-            - list[Any]: List of perturbation values for each subset, where the index corresponds
-                         to the subset encoded as a bitmask.
+        Tuple:
+            - `permutations`:  A matrix of shape (len(`permutations`), len(`items`) + 1) where
+                               rows represent sequences of indices of subsets in
+                               `perturbations` that define a permutation path.
+            - `new_items`:     A matrix of shape (len(`permutations`), len(`items`)) where
+                               rows represent sequences of indices of items in `items`
+                               added to the previous set to define a permutation path.
+            - `perturbations`: List of perturbation values for each subset.
     """
     # calculate number of possible perturbations:
     n = (2 ** len(items))
@@ -177,16 +188,16 @@ def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> T
     perturbations = [None] * n
 
     # calculate all possible permuations:
-    permutations = np.array(generate_permutations_recursive(
+    permutations, new_items = generate_permutations_recursive(
         items, func,
         perturbations,  # empty list to be filled
         n-1             # this creates a bitmap of n ones
-    ))
+    )
 
     # return tuple of permuations and perturbations: 
-    return permutations, perturbations
+    return np.array(permutations), np.array(new_items), perturbations
 
-def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_samples:int) -> Tuple[NDArray[np.float_], List[Any]]:
+def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_samples:int) -> Tuple[NDArray[np.bool_], List[Any]]:
     """Randomly samples a specified number of unique subsets of a given list,
     and returns their binary indicator features along with the result of applying a function
     to each sampled subset.
@@ -197,19 +208,18 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
     matrix indicating which items are included in each sampled subset.
 
     Args:
-        items (List[Any]): The list of items to draw subsets from.
-        func (Callable[[List[Any]], Any]): A function that computes a perturbation or
-                                           feature from a subset of `items`.
-        num_samples (int): The number of unique subset samples to generate, including
-                           the empty set and full set.
+        items (List[Any]):        The list of items to draw subsets from.
+        func (List[Any]) -> Any): A function that computes a perturbation or
+                                  feature from a subset of `items`.
+        num_samples (int):        The number of unique subset samples to generate, including
+                                  the empty set and full set.
 
     Returns:
-        Tuple[np.ndarray, List[Any]]:
-            - features (np.ndarray): A binary matrix of shape (num_samples, len(items)),
-                                     where each row indicates which items are included
-                                     in the corresponding subset (1 for included, 0 otherwise).
-            - perturbations (List[Any]): A list containing the results of applying `func` to
-                                         each sampled subset.
+        Tuple:
+            - `subsets`:       A boolean matrix of shape (len(`perturbations`), len(`items`)),
+                               where each row indicates which items are included
+                               in the corresponding subset.
+            - `perturbations`: List of perturbation values for each subset.
     """
     
     # calculate number of possible perturbations:
@@ -223,22 +233,20 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
 
     # generate perturbations:
     perturbations = [None] * num_samples
-    features      = np.zeros((num_samples, len(items)), dtype=float)
+    subsets       = np.zeros((num_samples, len(items)), dtype=bool)
     for i, bitmask in enumerate(sample):
         # translate bitmask to set:
-        j, m = 0, 1
-        current_items = []
-        while j < len(items):
+        current_items, m = [], 1
+        for j in range(len(items)):
             if bitmask & m:
                 current_items.append(items[j])
-                features[i, j] = 1.
-            j += 1
+                subsets[i, j] = 1.
             m = m << 1
 
         # generate perturbation:
         perturbations[i] = func(current_items)
 
-    return features, perturbations
+    return subsets, perturbations
 
 #=======================================================================#
 # Generator Explanation:                                                #
@@ -251,14 +259,26 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
 
     @property
     @abstractmethod
+    def qry_tokens(self) -> List[str]:
+        """The list of query tokens."""
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
     def gen_tokens(self) -> List[str]:
         """The list of generated tokens."""
         raise NotImplementedError()
 
     @property
     @abstractmethod
-    def is_precise(self) -> bool:
-        """`True` if the Shapley feature attribution values are not approximated."""
+    def qry_precise(self) -> bool:
+        """`True` if the Shapley feature attribution values for the query are not approximated."""
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def ctx_precise(self) -> bool:
+        """`True` if the Shapley feature attribution values for the context are not approximated."""
         raise NotImplementedError()
 
     @property
@@ -278,35 +298,51 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
     #===================================================================#
 
     @abstractmethod
-    def get_shapley_values(self, aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token', **kwargs) -> NDArray[np.float_]:
+    def get_shapley_values(self,
+            key:Union[Literal['query', 'context'], None],
+            aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
+            **kwargs
+        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float_]], NDArray[np.float_]]:
         """Generates Shapley feature attribution values for the chosen aggregation method.
 
         Args:
+            key (str):          Explanation key. Can either be `'query'` or `'context'`.
+                                If `None` returns a dictionary of both.
             aggregation (str):  Aggregation method for probabilities (default: `'token'`).
 
         Returns:
-            A `numpy.ndarray` containing the Shapley values.
+            A dicionary containing the following two keys (if `key` is specified) or one of the following:
+            - `'query'`: a `numpy.ndarray` containing the Shapley values for the query
+            - `'context'`: a `numpy.ndarray` containing the Shapley values for the contexts.
         """
         raise NotImplementedError()
 
-    def save_values(self, path:Optional[str]) -> Union[str, None]:
+    def save_values(self, path:Optional[str]=None, *,
+            aggregations:Optional[List[Literal['token', 'sequence', 'bow', 'nucleus']]]=None,
+        ) -> Union[str, None]:
         """Saves the explanation data to a file.
 
         Args:
-            path (str): The path where the values should be saved.
+            path (str):               The path where the values should be saved.
+            aggregations (List[str]): List of aggregations to save.
+                                      If unspecified, saves all aggregations.
 
         Returns:
             If `path` is not specified, returns the saved data instead.
         """
         data_to_save = {
             'model_name_or_path': self.model_name_or_path,
-            'generated_output': self.gen_tokens,
-            'shap_precise': self.is_precise,
-            'shapley_values_tokens': self.get_shapley_values('token'),
-            'shapley_values_passages' : self.get_shapley_values('sequence'),
-            'shapley_values_bow': self.get_shapley_values('bow'),
-            'shapley_values_nucleus': self.get_shapley_values('nucleus'),
+            'qry_tokens': self.qry_tokens,
+            'gen_tokens': self.gen_tokens,
+            'shap_qry_precise': self.qry_precise,
+            'shap_ctx_precise': self.ctx_precise
         }
+
+        if aggregations is None:
+            aggregations = ['token', 'sequence', 'bow', 'nucleus']
+
+        for aggregation in aggregations:
+            data_to_save['shapley_values_' + aggregation] = self.get_shapley_values(None, aggregation)
 
         if path is None: return data_to_save
 
@@ -368,22 +404,27 @@ class GeneratorExplanation(GeneratorExplanationBase):
         else: raise ValueError("`saved_data` must be a path, an iterable, or a dictionary")
 
         result = cls()
-        result._gen_tokens = data['generated_output']
-        result._is_precise = data['shap_precise']
-        result._shapley_values = {
-            'token': np.array(data['shapley_values_tokens']),
-            'sequence': np.array(data['shapley_values_passages']),
-            'bow': np.array(data['shapley_values_bow']),
-            'nucleus': np.array(data['shapley_values_nucleus']),
-        }
+        result._qry_tokens = data['qry_tokens']
+        result._gen_tokens = data['gen_tokens']
+        result._qry_precise = data['shap_qry_precise']
+        result._ctx_precise = data['shap_ctx_precise']
+
+        result._shapley_values = {}
+        for aggregation in ['token', 'sequence', 'bow', 'nucleus']:
+            result._shapley_values[aggregation] = data['shapley_values_' + aggregation]
 
         if model_name_or_path is None: result._model_name_or_path = data['model_name_or_path'] 
         else: result._model_name_or_path = model_name_or_path
 
-        if tokenizer is None: result._tokenizer = tokenizer
-        else: result._tokenizer = transformers.AutoTokenizer.from_pretrained(model_name_or_path)
+        if tokenizer is None: result._tokenizer = transformers.AutoTokenizer.from_pretrained(result._model_name_or_path)
+        else: result._tokenizer = tokenizer
 
         return result
+
+    @property
+    def qry_tokens(self) -> List[str]:
+        """The list of query tokens."""
+        return self._qry_tokens
 
     @property
     def gen_tokens(self) -> List[str]:
@@ -391,9 +432,14 @@ class GeneratorExplanation(GeneratorExplanationBase):
         return self._gen_tokens
 
     @property
-    def is_precise(self) -> bool:
-        """`True` if the Shapley feature attribution values are not approximated."""
-        return self._is_precise
+    def qry_precise(self) -> bool:
+        """`True` if the Shapley feature attribution values for the query are not approximated."""
+        return self._qry_precise
+
+    @property
+    def ctx_precise(self) -> bool:
+        """`True` if the Shapley feature attribution values for the context are not approximated."""
+        return self._ctx_precise
 
     @property
     def tokenizer(self) -> transformers.PreTrainedTokenizer:
@@ -405,16 +451,25 @@ class GeneratorExplanation(GeneratorExplanationBase):
         """The huggingface string identifier of the generator model."""
         return self._model_name_or_path
 
-    def get_shapley_values(self, aggregation: Literal['token', 'sequence', 'bow', 'nucleus'] = 'token', **kwargs) -> NDArray[np.float_]:
+    def get_shapley_values(self,
+            key:Union[Literal['query', 'context'], None],
+            aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
+            **kwargs
+        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float_]], NDArray[np.float_]]:
         """Generates Shapley feature attribution values for the chosen aggregation method.
 
         Args:
+            key (str):          Explanation key. Can either be `'query'` or `'context'`.
+                                If `None` returns a dictionary of both.
             aggregation (str):  Aggregation method for probabilities (default: `'token'`).
 
         Returns:
-            A `numpy.ndarray` containing the Shapley values.
+            A dicionary containing the following two keys (if `key` is specified) or one of the following:
+            - `'query'`: a `numpy.ndarray` containing the Shapley values for the query
+            - `'context'`: a `numpy.ndarray` containing the Shapley values for the contexts.
         """
-        return self._shapley_values[aggregation]
+        if key is None: return self._shapley_values[aggregation]
+        else: return self._shapley_values[aggregation][key]
 
 
 #=======================================================================#
@@ -441,7 +496,6 @@ class ExplainableAutoModelForGeneration:
                 self._gen_probs:torch.Tensor = []
                 self._gen_output = None
                 self._shap_cache = None
-                self._shap_precise = None
                 self.all_top_scores = None
                 self.all_top_tokens = None
 
@@ -451,6 +505,16 @@ class ExplainableAutoModelForGeneration:
             #>> Pairs of properties named `gen_[name]_probs` and
             #>> `cmp_[name]_probs` will be automatically used by the
             #>> `get_shapley_values(...)` method!
+
+            @property
+            def qry_tokens(self) -> List[str]:
+                """The list of query tokens."""
+                # generate(...) needs to be called first:
+                if len(self._gen_probs) == 0:
+                    raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_tokens`!')
+
+                # return query tokens:
+                return self._qry_tokens
 
             @property
             def gen_tokens(self) -> List[str]:
@@ -463,17 +527,30 @@ class ExplainableAutoModelForGeneration:
                 return self.tokenizer.convert_ids_to_tokens(self._gen_output[0])
 
             @property
-            def is_precise(self) -> bool:
-                """`True` if the Shapley feature attribution values are not approximated."""
+            def qry_precise(self) -> bool:
+                """`True` if the Shapley feature attribution values for the query are not approximated."""
                 # generate(...) and get_shapley_values(...) need to be called first:
-                if self._shap_precise is None:
+                if self._shap_cache is None:
                     raise AttributeError(
                         '`generate(...)`, `compare(...)`, and `get_shapley_values(...)` ' +
                         'need to be called at least once before accessing `is_precise`!'
                     )
 
                 # return probability of each token in the original generation:
-                return self._shap_precise
+                return self._shap_cache['query']['precise']
+
+            @property
+            def ctx_precise(self) -> bool:
+                """`True` if the Shapley feature attribution values for the context are not approximated."""
+                # generate(...) and get_shapley_values(...) need to be called first:
+                if self._shap_cache is None:
+                    raise AttributeError(
+                        '`generate(...)`, `compare(...)`, and `get_shapley_values(...)` ' +
+                        'need to be called at least once before accessing `is_precise`!'
+                    )
+
+                # return probability of each token in the original generation:
+                return self._shap_cache['context']['precise']
 
             @property
             def tokenizer(self) -> transformers.PreTrainedTokenizer:
@@ -801,7 +878,7 @@ class ExplainableAutoModelForGeneration:
                 return torch.argmax(self._exp_probs[-1], dim=-1)
 
 
-            def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', conditional:bool=True, target:Literal['context', 'query']='context', system:Optional[str]=None, **kwargs):
+            def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', conditional:bool=True, system:Optional[str]=None, **kwargs):
                 """Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
 
                 Args:
@@ -813,7 +890,6 @@ class ExplainableAutoModelForGeneration:
                                         If `inf` is passed, always computes the precise SHAP values.
                                         If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
                     conditional (bool): Whether to compute the compared values conditioned on the original generation (default: `True`).
-                    target (str):       Whether to explain the impact of the `'context'` or the `'query'` (default: `'context'`).
                     system (str):       An optional system prompt.
 
                 Returns:
@@ -837,32 +913,43 @@ class ExplainableAutoModelForGeneration:
                 )
 
                 # generate perturbed prompts:
-                if target == 'context':
-                    perturbed_rag_prompts = self.__generate_prompts(
-                        contexts,                                                    # permute the contexts
-                        lambda items:create_rag_prompt(query, items, system=system), # build a prompt for each permutation
-                        max_samples,
-                        batch_size
-                    )
+                self._qry_tokens = query.split()
+                self._qry_tokens[1:] = [' '+t for t in self._qry_tokens[1:]]
+                self._shap_cache, perturbed_prompts = {}, {}
+                self._shap_cache['query'], perturbed_prompts['query'] = self.__generate_prompts(
+                    self._qry_tokens,                                                         # permute the query
+                    lambda items:create_rag_prompt(''.join(items), contexts, system=system), # build a prompt for each permutation
+                    max_samples,
+                    batch_size
+                )
+                self._shap_cache['context'], perturbed_prompts['context'] = self.__generate_prompts(
+                    contexts,                                                    # permute the contexts
+                    lambda items:create_rag_prompt(query, items, system=system), # build a prompt for each permutation
+                    max_samples,
+                    batch_size
+                )
 
-                elif query == 'context':
-                    perturbed_rag_prompts = self.__generate_prompts(
-                        query.split(),                                                            # permute the query
-                        lambda items:create_rag_prompt(' '.join(items), contexts, system=system), # build a prompt for each permutation
-                        max_samples,
-                        batch_size
-                    )
+                # combine prompt lists comparison output:
+                perturbed_prompts_combined = perturbed_prompts['query'][:-1] + perturbed_prompts['context'][1:]
 
-                else: raise ValueError(f'Unknown value for parameter `target`: {target}')
+                cache  = self._shap_cache['query']
+                offset = len(perturbed_prompts['context']) - 2
+                if cache['precise']: cache['indices'][:,-1] += offset
+                else: cache['indices'][-1] += offset
+
+                cache = self._shap_cache['context']
+                offset = len(perturbed_prompts['query']) - 2
+                if cache['precise']: cache['indices'][:,1:] += offset
+                else: cache['indices'][1:] += offset
 
                 # generate comparison output:
-                num_batches = int(np.ceil(len(perturbed_rag_prompts[:-1]) / batch_size))
+                num_batches = int(np.ceil(len(perturbed_prompts_combined[:-1]) / batch_size))
                 for i in range(num_batches):
                     # print batch number:
                     if num_batches > 1: print(f'Batch {i+1:d} of {num_batches:d}:')
 
                     # get prompts of this batch:
-                    prompts_batch = perturbed_rag_prompts[:-1][i * batch_size:(i+1) * batch_size]
+                    prompts_batch = perturbed_prompts_combined[:-1][i * batch_size:(i+1) * batch_size]
 
                     # generate probabilities:
                     self.compare(
@@ -885,27 +972,35 @@ class ExplainableAutoModelForGeneration:
                 # generate prompts:
                 if max_samples >= n:
                     # generate prompts for perturbed inputs (precise SHAP values):
-                    self._shap_cache, perturbed_prompts = generate_permutations(items, func)
-                    self._shap_precise = True
+                    permutations, new_items, perturbed_prompts = generate_permutations(items, func)
+                    cache = {'precise': True, 'indices': permutations, 'new_docs': new_items}
 
                 elif max_samples < n:
                     # sample prompts for kernel SHAP:
-                    self._shap_cache, perturbed_prompts = sample_perturbations(items, func, max_samples)
-                    self._shap_precise = False
+                    perturbations, perturbed_prompts = sample_perturbations(items, func, max_samples)
+                    cache = {'precise': False, 'indices': np.arange(perturbations.shape[0]), 'sets': perturbations}
 
                 else: raise ValueError(f'Unknown value for parameter `max_samples`: {max_samples}')
 
-                return perturbed_prompts
+                return cache, perturbed_prompts
 
 
-            def get_shapley_values(self, aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token', **kwargs) -> NDArray[np.float_]:
-                """Generates Shapley feature attribution values for the chose aggregation method.
+            def get_shapley_values(self,
+                key:Union[Literal['query', 'context'], None],
+                aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
+                **kwargs
+            ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float_]], NDArray[np.float_]]:
+                """Generates Shapley feature attribution values for the chosen aggregation method.
 
                 Args:
+                    key (str):          Explanation key. Can either be `'query'` or `'context'`.
+                                        If `None` returns a dictionary of both.
                     aggregation (str):  Aggregation method for probabilities (default: `'token'`).
 
                 Returns:
-                    A `numpy.ndarray` containing the Shapley values.
+                    A dicionary containing the following two keys (if `key` is specified) or one of the following:
+                    - `'query'`: a `numpy.ndarray` containing the Shapley values for the query
+                    - `'context'`: a `numpy.ndarray` containing the Shapley values for the contexts.
                 """
 
                 # Get the correct probabilities based on the `aggreagtion` parameter:
@@ -936,38 +1031,30 @@ class ExplainableAutoModelForGeneration:
                 else: raise ValueError(f'Unknown value for parameter `aggregation`: "{aggregation}"')
 
                 # Call actual method:
-                if self._shap_precise: return self._get_shapley_values_precise(probs)
-                else: return self._get_shapley_values_kernel(probs)
+                result = {'query': None, 'context': None} if key is None else {key: None}
+                for k in result:
+                    if self._shap_cache[k]['precise']: result[k] = self._get_shapley_values_precise(probs, **self._shap_cache[k])
+                    else: result[k] = self._get_shapley_values_kernel(probs, **self._shap_cache[k])
 
-            def _get_shapley_values_precise(self, probs:NDArray[np.float_]) -> NDArray[np.float_]:
-                # Get the shape of the permutations matrix: (num_permutations, num_documents)
-                num_permutations, num_docs = self._shap_cache.shape
+                return result if key is None else result[key]
+
+            def _get_shapley_values_precise(self, probs:NDArray[np.float_], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool) -> NDArray[np.float_]:
+                # Get the shape of the permutations matrix: (num_permutations, num_sets)
+                num_permutations, num_sets = indices.shape
+
+                # Get the number of documents:
+                num_docs = num_sets - 1
 
                 # Initialize array to store marginal contributions for each permutation step
-                p_marginal = np.empty(self._shap_cache.shape + probs[0].shape, dtype=probs[0].dtype)
+                p_marginal = np.empty((num_permutations, num_docs) + probs[0].shape, dtype=probs[0].dtype)
 
                 # For each permutation, calculate the marginal contributions
                 for i in range(num_permutations):
-                    # First document's contribution is its raw probability
-                    p_marginal[i, 0] = probs[self._shap_cache[i, 0]]
-
-                    for j in range(1, num_docs):
+                    for j in range(0, num_docs):
                         # Difference in output probability when adding the j-th document
-                        prev = probs[self._shap_cache[i, j - 1]]
-                        curr = probs[self._shap_cache[i, j]]
+                        prev = probs[indices[i, j]]
+                        curr = probs[indices[i, j + 1]]
                         p_marginal[i, j] = curr - prev
-
-                # Encode the permutation transitions using bitwise operations
-                new_doc = np.empty(self._shap_cache.shape, dtype=np.int16)
-
-                # First position is zeroed (i.e., no document yet included)
-                new_doc[:, 0] = 0
-
-                for j in range(1, num_docs):
-                    # Bitwise difference to capture which bit changed, then take log2
-                    prev = self._shap_cache[:, j - 1]
-                    curr = self._shap_cache[:, j]
-                    new_doc[:, j] = np.log2(curr & ~prev) + 1
 
                 # Initialize SHAP value container: one entry per document
                 p_shap = np.empty((num_docs,) + probs[0].shape, dtype=probs[0].dtype)
@@ -975,18 +1062,18 @@ class ExplainableAutoModelForGeneration:
                 # For each document, aggregate all matching marginal contributions
                 for j in range(num_docs):
                     # Mean over all marginal contributions that map to document j
-                    p_shap[j] = p_marginal[new_doc == j].mean(0)
+                    p_shap[j] = p_marginal[new_docs == j].mean(0)
 
                 # Return SHAP values for all but the baseline (first one)
-                return p_shap[1:]
+                return p_shap
 
-            def _get_shapley_values_kernel(self, probs:NDArray[np.float_]) -> NDArray[np.float_]:
+            def _get_shapley_values_kernel(self, probs:NDArray[np.float_], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool) -> NDArray[np.float_]:
                 # fit a linear regressor using the SHAP kernel:
                 lr = LinearRegression()
-                x = self._shap_cache[1:-1]
-                y = np.stack(probs[1:-1])
-                w = [(len(z)-1) / (comb(len(z), sum(z)) * sum(z) * -sum(z-1))
-                    for z in x]
+                x  = sets[1:-1].astype(float)
+                y  = np.stack([probs[i] for i in indices[1:-1]])
+                w  = [(len(z)-1) / (comb(len(z), sum(z)) * sum(z) * -sum(z-1))
+                      for z in x]
                 lr.fit(x, y, w)
 
                 # attributions are estimated SHAP values:
