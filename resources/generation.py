@@ -254,6 +254,16 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
 
     return subsets, perturbations
 
+def logits2probs(logits:torch.Tensor, use_softmax:bool=True):
+    if use_softmax:
+        probs = torch.softmax(logits, dim=-1)
+
+    else:
+        logits -= logits.min()
+        probs  = logits / logits.sum(dim=-1, keepdim=True)
+
+    return probs
+
 #=======================================================================#
 # Generator Explanation:                                                #
 #=======================================================================#
@@ -497,8 +507,8 @@ class ExplainableAutoModelForGeneration:
                 self._tokenizer:transformers.PreTrainedTokenizer = transformers.AutoTokenizer.from_pretrained(config.name_or_path)
                 self._tokenizer.pad_token_id = self.tokenizer.eos_token_id
                 self._explain:bool = False
-                self._exp_probs:List[torch.Tensor] = []
-                self._gen_probs:torch.Tensor = []
+                self._exp_logits:List[torch.Tensor] = []
+                self._gen_logits:torch.Tensor = []
                 self._gen_output = None
                 self._shap_cache = None
                 self.all_top_scores = None
@@ -515,7 +525,7 @@ class ExplainableAutoModelForGeneration:
             def qry_tokens(self) -> List[str]:
                 """The list of query tokens."""
                 # generate(...) needs to be called first:
-                if len(self._gen_probs) == 0:
+                if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_tokens`!')
 
                 # return query tokens:
@@ -525,7 +535,7 @@ class ExplainableAutoModelForGeneration:
             def gen_tokens(self) -> List[str]:
                 """The list of generated tokens."""
                 # generate(...) needs to be called first:
-                if len(self._gen_probs) == 0:
+                if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_tokens`!')
 
                 # return generated tokens:
@@ -572,12 +582,12 @@ class ExplainableAutoModelForGeneration:
             def gen_token_probs(self) -> NDArray[np.float_]:
                 """Probability of each token in the original generation."""
                 # generate(...) needs to be called first:
-                if len(self._gen_probs) == 0:
+                if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_token_probs`!')
 
                 # return probability of each token in the original generation:
                 return np.array([ 
-                    [float(self._gen_probs[i, j, id]) for j, id  in enumerate(seq)]
+                    [float(self._gen_logits[i, j, id]) for j, id  in enumerate(seq)]
                     for i, seq in enumerate(self._gen_output)
                 ])
 
@@ -585,7 +595,7 @@ class ExplainableAutoModelForGeneration:
             def cmp_token_probs(self) -> NDArray[np.float_]:
                 """Probability of each token in the original generation given the compared input."""
                 # compare(...) needs to be called first:
-                if len(self._exp_probs) == 0:
+                if len(self._exp_logits) == 0:
                     raise AttributeError(
                         '`generate(...)` and `compare(...)` need to be called ' +
                         'at least once before accessing `cmp_token_probs`!'
@@ -595,19 +605,22 @@ class ExplainableAutoModelForGeneration:
                 return [np.array([ 
                     [float(t[i, j, id]) for j, id  in enumerate(seq)]
                     for i, seq in enumerate(self._gen_output)
-                ]) for t in self._exp_probs]
+                ]) for t in self._exp_logits]
 
 
             @property
             def gen_sequence_prob(self) -> NDArray[np.float_]:
                 """Total probability of generating the original sequence."""
                 # generate(...) needs to be called first:
-                if len(self._gen_probs) == 0:
+                if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_sequence_prob`!')
+
+                # convert to probabilities:
+                probs = logits2probs(self._gen_logits)
 
                 # return the multiplied probability of each token in the original generation:
                 return np.prod([ 
-                    [float(self._gen_probs[i, j, id]) for j, id  in enumerate(seq)]
+                    [float(probs[i, j, id]) for j, id  in enumerate(seq)]
                     for i, seq in enumerate(self._gen_output)
                 ], axis=-1)
 
@@ -615,70 +628,79 @@ class ExplainableAutoModelForGeneration:
             def cmp_sequence_probs(self) -> NDArray[np.float_]:
                 """Total probability of generating the original sequence given the compared input."""
                 # compare(...) needs to be called first:
-                if len(self._exp_probs) == 0:
+                if len(self._exp_logits) == 0:
                     raise AttributeError(
                         '`generate(...)` and `compare(...)` need to be called ' +
                         'at least once before accessing `cmp_sequence_probs`!'
                     )
 
+                # convert to probabilities:
+                probs = [logits2probs(t) for t in self._exp_logits]
+
                 # return the multiplied probability of each token in the original generation:
-                
                 return [np.prod([ 
                     [float(t[i, j, id]) for j, id  in enumerate(seq)]
                     for i, seq in enumerate(self._gen_output)
-                ], axis=-1) for t in self._exp_probs]
-                '''
-                return  [np.prod([ 
-                    [float(t[i, j, id]) for j, id  in enumerate(seq)]
-                    for i, seq in enumerate(self._gen_output)
-                ], axis=-1) for t in [torch.softmax(inpt, dim=-1) for inpt in self._exp_probs]]
-                '''
+                ], axis=-1) for t in probs]
+
             @property
             def gen_bow_probs(self) -> NDArray[np.float_]:
                 """Accumulated probability of each token in the vocabualry of being generated given the original input."""
                 # generate(...) needs to be called first:
-                if len(self._gen_probs) == 0:
+                if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_bow_probs`!')
 
+                # convert to probabilities:
+                probs = logits2probs(self._gen_logits)
+
                 # return accumulated probability of each token in the vocabualry:
-                return self._gen_probs.mean(dim=1).float().numpy()
+                return probs.mean(dim=1).float().numpy()
             
             @property
             def cmp_bow_probs(self) -> NDArray[np.float_]:
                 """Accumulated probability of each token in the vocabualry of being generated given the compared input."""
                 # compare(...) needs to be called first:
-                if len(self._exp_probs) == 0:
+                if len(self._exp_logits) == 0:
                     raise AttributeError(
                         '`generate(...)` and `compare(...)` need to be called ' +
                         'at least once before accessing `cmp_bow_probs`!'
                     )
+                
+                # convert to probabilities:
+                probs = [logits2probs(t) for t in self._exp_logits]
 
                 # return accumulated probability of each token in the vocabualry:
-                return [t.mean(dim=1).float().numpy() for t in self._exp_probs]
+                return [t.mean(dim=1).float().numpy() for t in probs]
             
 
             #@property
             def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float_]:
                 """Accumulated probability of each token in the vocabualry of being generated given the original input."""
                 # generate(...) needs to be called first:
-                if len(self._gen_probs) == 0:
+                if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_nucleus_probs`!')
 
+                # convert to probabilities:
+                probs = logits2probs(self._gen_logits)
+
                 # return accumulated probability of each token in the vocabualry:
-                return _nucleus_sampling(self._gen_probs.float(),p=p).mean(dim=1).numpy()
+                return _nucleus_sampling(probs.float(),p=p).mean(dim=1).numpy()
 
             #@property
             def cmp_nucleus_probs(self, p:float=0.9) -> NDArray[np.float_]:
                 """Accumulated probability of each token in the vocabualry of being generated given the compared input."""
                 # compare(...) needs to be called first:
-                if len(self._exp_probs) == 0:
+                if len(self._exp_logits) == 0:
                     raise AttributeError(
                         '`generate(...)` and `compare(...)` need to be called ' +
                         'at least once before accessing `cmp_nucleus_probs`!'
                     )
 
+                # convert to probabilities:
+                probs = [logits2probs(t) for t in self._exp_logits]
+
                 # return accumulated probability of each token in the vocabualry:
-                return [_nucleus_sampling(t.float(),p=p).mean(dim=1).numpy() for t in self._exp_probs]
+                return [_nucleus_sampling(t.float(),p=p).mean(dim=1).numpy() for t in probs]
 
             #===============================================================#
             # Methods:                                                      #
@@ -689,13 +711,8 @@ class ExplainableAutoModelForGeneration:
                 outputs = super().forward(*args, **kwargs)
 
                 # save token probabilities:
-                logits = outputs['logits'][:,-1:,:].detach().cpu()
-                probs = logits / logits.sum(dim=-1, keepdim=True)
-                
-                if self._explain: self._exp_probs[-1].append(probs)
-                else:             self._gen_probs.append(probs)
-                #if self._explain: self._exp_probs[-1].append(outputs.logits[:,-1:,:].detach().cpu())
-                #else:             self._gen_probs.append(outputs.logits[:,-1:,:].detach().cpu())
+                if self._explain: self._exp_logits[-1].append(outputs.logits[:,-1:,:].detach().cpu())
+                else:             self._gen_logits.append(outputs.logits[:,-1:,:].detach().cpu())
 
                 # return token probabilities:
                 return outputs
@@ -719,14 +736,14 @@ class ExplainableAutoModelForGeneration:
                 self._explain    = False
 
                 # reset token probabilities:
-                self._gen_probs  = []
-                self._exp_probs  = []
+                self._gen_logits  = []
+                self._exp_logits  = []
 
                 # generate:
                 self._gen_output = super().generate(**inputs, **kwargs).sequences[:, inputs.input_ids.shape[-1]:]
 
                 # finalize probabilities:
-                self._gen_probs  = torch.concatenate(self._gen_probs, dim=1)
+                self._gen_logits  = torch.concatenate(self._gen_logits, dim=1)
 
                 # return generated text:
                 return self.tokenizer.batch_decode(self._gen_output)
@@ -772,17 +789,17 @@ class ExplainableAutoModelForGeneration:
                 self._explain    = True
 
                 # reset token probabilities:
-                self._exp_probs.append([])
+                self._exp_logits.append([])
 
                 # generate:
                 output = super().generate(**inputs, **kwargs).sequences[:, inputs.input_ids.shape[-1]:]
 
                 # finalize probabilities:
-                self._exp_probs[-1] = torch.concatenate(self._exp_probs[-1], dim=1)
+                self._exp_logits[-1] = torch.concatenate(self._exp_logits[-1], dim=1)
 
                 # split batch in elements if multiple inputs:
                 if len(inputs) > 1:
-                    self._exp_probs.extend([t.unsqueeze(0) for t in self._exp_probs.pop(-1)])
+                    self._exp_logits.extend([t.unsqueeze(0) for t in self._exp_logits.pop(-1)])
 
                 # return generated tokens:
                 return output
@@ -798,7 +815,7 @@ class ExplainableAutoModelForGeneration:
                 self._explain = True
 
                 # reset token probabilities:
-                self._exp_probs.append([])
+                self._exp_logits.append([])
 
                 # convert string to Iterable of tokens:
                 if isinstance(outputs[0], str):
@@ -823,7 +840,7 @@ class ExplainableAutoModelForGeneration:
 
                 # prepare model_kwargs:
                 input_ids, _, model_kwargs = self._prepare_model_inputs(input_ids, self.tokenizer.bos_token_id, kwargs)
-                v0, v1, _ =  [int(i) for i in transformers.__version__.split('.')[:-1]]
+                v0, v1 =  [int(i) for i in transformers.__version__.split('.')[:2]]
                 if v0 >= 4 and v1 >= 52:
                     model_kwargs = self._get_initial_cache_position(
                         seq_length=input_ids.shape[1],
@@ -879,16 +896,16 @@ class ExplainableAutoModelForGeneration:
 
                 # finalize probabilities:
                 if single_input and single_output:
-                    self._exp_probs[-1] = torch.concatenate(self._exp_probs[-1], dim=0).transpose(0,1)
+                    self._exp_logits[-1] = torch.concatenate(self._exp_logits[-1], dim=0).transpose(0,1)
 
-                else: self._exp_probs[-1] = torch.concatenate(self._exp_probs[-1], dim=1)
+                else: self._exp_logits[-1] = torch.concatenate(self._exp_logits[-1], dim=1)
 
                 # split batch in elements if multiple inputs for the same output:
                 if not single_input and single_output:
-                    self._exp_probs.extend([t.unsqueeze(0) for t in self._exp_probs.pop(-1)])
+                    self._exp_logits.extend([t.unsqueeze(0) for t in self._exp_logits.pop(-1)])
 
                 # return generated tokens:
-                return torch.argmax(self._exp_probs[-1], dim=-1)
+                return torch.argmax(self._exp_logits[-1], dim=-1)
 
 
             def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', conditional:bool=True, system:Optional[str]=None, **kwargs):
@@ -1107,10 +1124,10 @@ class ExplainableAutoModelForGeneration:
                     - `permutation_top_tokens`: A tensor of shape (n_perm, top_k, 2) containing the step and token indices.
                 """
                 # ensure that we have at least one tensor to process:
-                if len(self._exp_probs) == 0: return None, None
+                if len(self._exp_logits) == 0: return None, None
 
                 # get the list of tensors:
-                tensor_list = self._exp_probs
+                tensor_list = self._exp_logits
                 all_top_scores = []           # list of (max_new_tokens, top_k)
                 all_top_tokens = []           # list of (max_new_tokens, top_k)
 
