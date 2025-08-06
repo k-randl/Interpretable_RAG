@@ -375,7 +375,7 @@ class GeneratorExplanation(GeneratorExplanationBase):
             if os.path.isdir(saved_data):
                 return cls.load([os.path.join(saved_data, file)
                     for file in os.listdir(saved_data)
-                    if not file.endswith('.pkl')])
+                    if file.endswith('.pkl')])
 
             # load file:
             with open(saved_data, 'rb') as f:
@@ -385,19 +385,18 @@ class GeneratorExplanation(GeneratorExplanationBase):
             data = saved_data
 
         elif hasattr(saved_data, '__iter__') or hasattr(saved_data, '__len__'):
-            result = []
+            result = {}
 
             # load all entries separatelly:
             for item in saved_data:
                 try:
                     # load next file:
-                    result.append(
-                        cls.load(
+                    result[item] = cls.load(
                             item,
                             model_name_or_path=model_name_or_path,
                             tokenizer=tokenizer
                         )
-                    )
+                    
 
                     # avoid multiple instances of the tokenizer:
                     if tokenizer is None: tokenizer = result[0].tokenizer
@@ -623,12 +622,17 @@ class ExplainableAutoModelForGeneration:
                     )
 
                 # return the multiplied probability of each token in the original generation:
+                
                 return [np.prod([ 
                     [float(t[i, j, id]) for j, id  in enumerate(seq)]
                     for i, seq in enumerate(self._gen_output)
                 ], axis=-1) for t in self._exp_probs]
-
-
+                '''
+                return  [np.prod([ 
+                    [float(t[i, j, id]) for j, id  in enumerate(seq)]
+                    for i, seq in enumerate(self._gen_output)
+                ], axis=-1) for t in [torch.softmax(inpt, dim=-1) for inpt in self._exp_probs]]
+                '''
             @property
             def gen_bow_probs(self) -> NDArray[np.float_]:
                 """Accumulated probability of each token in the vocabualry of being generated given the original input."""
@@ -685,10 +689,13 @@ class ExplainableAutoModelForGeneration:
                 outputs = super().forward(*args, **kwargs)
 
                 # save token probabilities:
-                #if self._explain: self._exp_probs[-1].append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
-                #else:             self._gen_probs.append(softmax(outputs['logits'][:,-1:,:].detach().cpu(), dim=-1))
-                if self._explain: self._exp_probs[-1].append(outputs.logits[:,-1:,:].detach().cpu())
-                else:             self._gen_probs.append(outputs.logits[:,-1:,:].detach().cpu())
+                logits = outputs['logits'][:,-1:,:].detach().cpu()
+                probs = logits / logits.sum(dim=-1, keepdim=True)
+                
+                if self._explain: self._exp_probs[-1].append(probs)
+                else:             self._gen_probs.append(probs)
+                #if self._explain: self._exp_probs[-1].append(outputs.logits[:,-1:,:].detach().cpu())
+                #else:             self._gen_probs.append(outputs.logits[:,-1:,:].detach().cpu())
 
                 # return token probabilities:
                 return outputs
@@ -816,7 +823,7 @@ class ExplainableAutoModelForGeneration:
 
                 # prepare model_kwargs:
                 input_ids, _, model_kwargs = self._prepare_model_inputs(input_ids, self.tokenizer.bos_token_id, kwargs)
-                v0, v1, _ =  [int(i) for i in transformers.__version__.split('.')]
+                v0, v1, _ =  [int(i) for i in transformers.__version__.split('.')[:-1]]
                 if v0 >= 4 and v1 >= 52:
                     model_kwargs = self._get_initial_cache_position(
                         seq_length=input_ids.shape[1],

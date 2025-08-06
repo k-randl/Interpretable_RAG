@@ -126,3 +126,9 @@ if problematic_queries:
 #%%
 
 # %%
+import pandas as pd
+
+cast19 = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2020/data/CAST2020collection.tsv',sep='\t', names=['id', 'text'])
+cast22 = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/data/CAST2022collection.tsv', sep='\t', names=['id', 'text'])
+# %%
+ 

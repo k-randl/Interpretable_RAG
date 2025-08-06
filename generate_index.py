@@ -76,3 +76,40 @@ for i in range(ctx_emb.shape[0]):
     axs[i+1].set_title(f'Context {i+1:d}:')
 
 plt.show()
+#%%
+snowflake_embeddings_path = '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2019/passage_embeddings/snowflake-arctic-embed-l-v2.0/passage_embeddings.npy'
+import numpy as np
+import os
+if os.path.exists(snowflake_embeddings_path):
+    snowflake_embeddings = np.load(snowflake_embeddings_path)
+    
+from resources.tools import *
+
+create_faiss_index_flat(snowflake_embeddings, '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2019/passage_embeddings/snowflake-arctic-embed-l-v2.0/flat_index/snowflake_index_flat.index')
+# %%
+from resources.search_tools import *
+from argparse import Namespace
+year = 2019
+model = 'snowflake'
+conversational_path = '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/'
+# Generate the arguments for the search
+
+
+index_path,embeddings_path,query_embeddings_path,id_mapping_path,qrels_path,topics_path,save_path, model_name = generate_args(year,model,conversational_path,index_type='flat',index_name='flat_index_ip.faiss', passage_embeddings_name='passage_embeddings.npy', query_embeddings_name='query_embeddings.npy')
+id_mapping = pd.read_csv(id_mapping_path, sep='\t')
+snowflake_index = load_faiss_index('/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2019/passage_embeddings/snowflake-arctic-embed-l-v2.0/flat_index/snowflake_index_flat.index')
+ir_metrics  = [
+    ir_measures.NDCG @ 3,  # Normalized Discounted Cumulative Gain @3
+    ir_measures.NDCG @ 10,  # Normalized Discounted Cumulative Gain @5
+    ir_measures.MRR @ 10,       # Mean Reciprocal Rank
+    ir_measures.P @ 10,  # Precision at 10
+    ir_measures.P @ 3,     # Precision at 10
+    ir_measures.P @ 1,     # Precision at 10    
+    ir_measures.R @ 10,    # Recall at 10
+]
+
+args = Namespace(queries_path = topics_path, qrels_path = qrels_path, index = snowflake_index, query_embeddings_path = query_embeddings_path, id_mapping = id_mapping, model_name = model_name, top_k = 10, save_path = save_path, sep = None, ir_metrics =ir_metrics, help=None)
+
+
+results_df, results_ir = search(args)
+# %%
