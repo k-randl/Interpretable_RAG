@@ -254,13 +254,39 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
 
     return subsets, perturbations
 
-def logits2probs(logits:torch.Tensor, use_softmax:bool=True):
-    if use_softmax:
+def logits2probs(logits:torch.Tensor, normalization:Literal['softmax', 'relu', 'offset']='softmax'):
+    """Converts raw logits into probability distributions using a specified normalization normalization.
+
+    Args:
+        logits (torch.Tensor):  A tensor containing raw, unnormalized prediction scores (logits).
+        normalization (str):    The normalization method to use for converting logits to probabilities (default='softmax')
+                                - `'softmax'` applies the softmax function along the last dimension.
+                                  Ensures outputs are strictly positive and sum to 1.
+                                - `'relu'` sets all negative logits to zero (ReLU), then normalizes
+                                  by the sum over the last dimension. Can produce sparse outputs.
+                                - `'offset'` shifts logits by subtracting the global minimum, then normalizes
+                                  by the sum over the last dimension. Ensures non-negative outputs
+                                  without enforcing strict positivity.
+
+    Returns:
+        probs (torch.Tensor):   A tensor of the same shape as `logits`, containing valid probability
+                                distributions over the last dimension.
+
+    Raises:
+        ValueError:             If the provided `normalization` is not one of the allowed options.
+    """
+    if normalization == 'softmax':
         probs = torch.softmax(logits, dim=-1)
 
-    else:
-        logits -= logits.min()
-        probs  = logits / logits.sum(dim=-1, keepdim=True)
+    elif normalization == 'relu':
+        probs = torch.maximum(logits, torch.tensor(0.))
+        probs /= probs.sum(dim=-1, keepdim=True)
+
+    elif normalization == 'offset':
+        probs = logits - logits.min()
+        probs /= probs.sum(dim=-1, keepdim=True)
+
+    else: raise ValueError(f'Unknown value for parameter `normalization`: "{normalization}".')
 
     return probs
 
@@ -494,6 +520,19 @@ class GeneratorExplanation(GeneratorExplanationBase):
 class ExplainableAutoModelForGeneration:
     @staticmethod
     def from_pretrained(pretrained_model_name_or_path:str, *args, **kwargs):
+        """ Instantiates an ExplainableAutoModelForGeneration from a pre-trained model configuration.
+
+        Args:
+            pretrained_model_name_or_path (str):
+                Is either ...
+                    - ... a string with the `shortcut name` of a pre-trained model configuration
+                      to load from cache or download, e.g.: ``bert-base-uncased``.
+                    - ... a string with the `identifier name` of a pre-trained model configuration
+                      that was user-uploaded to our S3, e.g.: ``dbmdz/bert-base-german-cased``.
+                    - ... a path to a `directory` containing a configuration file saved using the
+                      :func:`~transformers.PretrainedConfig.save_pretrained` method, e.g.: ``./my_model_directory/``.
+                    - ... a path or url to a saved configuration JSON `file`, e.g.: ``./my_model_directory/configuration.json``.
+        """
         # find model type based on model name:
         T = get_model_type(pretrained_model_name_or_path)
 
@@ -616,10 +655,10 @@ class ExplainableAutoModelForGeneration:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_sequence_prob`!')
 
                 # convert to probabilities:
-                probs = logits2probs(self._gen_logits)
+                probs = logits2probs(self._gen_logits, normalization='relu')
 
                 # return the multiplied probability of each token in the original generation:
-                return np.prod([ 
+                return np.prod([
                     [float(probs[i, j, id]) for j, id  in enumerate(seq)]
                     for i, seq in enumerate(self._gen_output)
                 ], axis=-1)
@@ -635,30 +674,30 @@ class ExplainableAutoModelForGeneration:
                     )
 
                 # convert to probabilities:
-                probs = [logits2probs(t) for t in self._exp_logits]
+                probs = [logits2probs(t, normalization='relu') for t in self._exp_logits]
 
                 # return the multiplied probability of each token in the original generation:
-                return [np.prod([ 
+                return [np.prod([
                     [float(t[i, j, id]) for j, id  in enumerate(seq)]
                     for i, seq in enumerate(self._gen_output)
                 ], axis=-1) for t in probs]
 
             @property
             def gen_bow_probs(self) -> NDArray[np.float_]:
-                """Accumulated probability of each token in the vocabualry of being generated given the original input."""
+                """Average probability of each token in the vocabualry of being generated given the original input."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_bow_probs`!')
 
                 # convert to probabilities:
-                probs = logits2probs(self._gen_logits)
+                probs = logits2probs(self._gen_logits, normalization='softmax')
 
                 # return accumulated probability of each token in the vocabualry:
                 return probs.mean(dim=1).float().numpy()
             
             @property
             def cmp_bow_probs(self) -> NDArray[np.float_]:
-                """Accumulated probability of each token in the vocabualry of being generated given the compared input."""
+                """Average probability of each token in the vocabualry of being generated given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
                     raise AttributeError(
@@ -667,7 +706,7 @@ class ExplainableAutoModelForGeneration:
                     )
                 
                 # convert to probabilities:
-                probs = [logits2probs(t) for t in self._exp_logits]
+                probs = [logits2probs(t, normalization='softmax') for t in self._exp_logits]
 
                 # return accumulated probability of each token in the vocabualry:
                 return [t.mean(dim=1).float().numpy() for t in probs]
@@ -675,20 +714,20 @@ class ExplainableAutoModelForGeneration:
 
             #@property
             def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float_]:
-                """Accumulated probability of each token in the vocabualry of being generated given the original input."""
+                """Average probability of each token in the vocabualry of being generated given the original input."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_nucleus_probs`!')
 
                 # convert to probabilities:
-                probs = logits2probs(self._gen_logits)
+                probs = logits2probs(self._gen_logits, normalization='softmax')
 
                 # return accumulated probability of each token in the vocabualry:
                 return _nucleus_sampling(probs.float(),p=p).mean(dim=1).numpy()
 
             #@property
             def cmp_nucleus_probs(self, p:float=0.9) -> NDArray[np.float_]:
-                """Accumulated probability of each token in the vocabualry of being generated given the compared input."""
+                """Average probability of each token in the vocabualry of being generated given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
                     raise AttributeError(
@@ -697,7 +736,7 @@ class ExplainableAutoModelForGeneration:
                     )
 
                 # convert to probabilities:
-                probs = [logits2probs(t) for t in self._exp_logits]
+                probs = [logits2probs(t, normalization='softmax') for t in self._exp_logits]
 
                 # return accumulated probability of each token in the vocabualry:
                 return [_nucleus_sampling(t.float(),p=p).mean(dim=1).numpy() for t in probs]
