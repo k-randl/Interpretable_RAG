@@ -87,6 +87,16 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         raise NotImplementedError()
 
+    @abstractmethod
+    def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+        '''Integrated gradient scores of the last batch.
+
+        Args:
+            filter_special_tokens:  If `True`, set the importance of special tokens to 0.
+            
+        Returns:                    Importance scores with shape = (bs, n_inputs)'''
+        raise NotImplementedError()
+
     def save_values(self, path:Optional[str]=None) -> Union[str, None]:
         """Saves the explanation data to a file.
 
@@ -112,6 +122,9 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         except NotImplementedError: pass
 
         try: data_to_save['gradIn'] = self.gradIn()
+        except NotImplementedError: pass
+
+        try: data_to_save['intGrad'] = self.intGrad()
         except NotImplementedError: pass
 
         if path is None: return data_to_save
@@ -182,6 +195,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         result._aGrad = data.get('aGrad')
         result._repAGrad = data.get('repAGrad')
         result._gradIn = data.get('gradIn')
+        result._intGrad = data.get('intGrad')
 
         if query_encoder_name_or_path is None: result._query_encoder_name_or_path = data['query_encoder_name_or_path'] 
         else: result._query_encoder_name_or_path = query_encoder_name_or_path
@@ -247,3 +261,11 @@ class RetrieverExplanation(RetrieverExplanationBase):
             Importance scores with shape = (bs, n_inputs)'''
         if self._gradIn is None: raise NotImplementedError("No `gradIn` values were saved.")
         return self._gradIn
+    
+    def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+        '''Integrated gradient scores of the last batch.
+
+        Returns:
+            Importance scores with shape = (bs, n_inputs)'''
+        if self._intGrad is None: raise NotImplementedError("No `intGrad` values were saved.")
+        return self._intGrad

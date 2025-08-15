@@ -1,6 +1,8 @@
 import os
 import pickle
 import torch
+from math import ceil
+from tqdm.autonotebook import trange
 from tqdm.autonotebook import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
 from typing import Optional, List, Literal, Union, Dict
@@ -16,15 +18,15 @@ def checkattr(obj:object, name:str) -> bool:
         return getattr(obj, name) is not None
     return False
 
-def embedding_backward(model:PreTrainedModel, dh:List[torch.Tensor]):
+def embedding_backward(model:PreTrainedModel, dPhi:List[torch.Tensor]):
     # this is very specific for BERT and may need to be updated to support other models:
     # phi(input_ids, token_type_ids, token_ps) = W @ one_hot(input_ids) + f(token_type_ids, token_ps)
     #  => phi'(input_ids, token_type_ids, token_ps) = phi'(input_ids) = W
     #  
     # for f(input_ids, token_type_ids, token_ps) = nn(phi(input_ids, token_type_ids, token_ps)):
     #   => f'(input_ids, token_type_ids, token_ps) = nn'(input_ids, token_type_ids, token_ps) @ W
-    dPhi = model.embeddings.word_embeddings.weight.T.detach().to(dh[0])
-    return [grad @ dPhi for grad in dh]
+    w = model.embeddings.word_embeddings.weight.T.detach().to(dPhi[0])
+    return [grad @ w for grad in dPhi]
 
 def metadata_to_pkl(dir:str, doc_ids:List[Union[int, str]], metadata:Dict[str, Union[List, torch.Tensor]]):
     keys = list(metadata.keys())
@@ -95,7 +97,7 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
 
-        # Apply tokenizer
+        # apply tokenizer:
         ctx_input = self.tokenizer(contexts, padding=True, truncation=True, return_special_tokens_mask=True, return_tensors='pt')
         token_mask = ctx_input.pop('special_tokens_mask') == 0.
         output = {
@@ -104,44 +106,44 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
             'in_tokens':            [self.tokenizer.convert_ids_to_tokens(t[m]) for t, m in zip(ctx_input.input_ids, token_mask)]
         }
 
+        # apply embeding:
+        ctx_embeds = self.context_encoder.get_input_embeddings()(torch.tensor(
+            ctx_input.pop('input_ids'),
+            device=self.context_encoder.device
+        ))
+
         # register gradient computation:
         self.context_encoder.get_input_embeddings().requires_grad_(True)
 
         # Compute embeddings: take the last-layer hidden state of the [CLS] token
-        ctx_output = self.context_encoder(**ctx_input.to(self.context_encoder.device), **kwargs)
+        ctx_output = self.context_encoder(inputs_embeds=ctx_embeds, **ctx_input.to(self.context_encoder.device), **kwargs)
         output['embedding'] = ctx_output.last_hidden_state[:, 0, :].detach().cpu()
         embedding_size = output['embedding'].shape[-1]
+        has_attentions = checkattr(ctx_output, 'attentions')
 
-        has_attentions    = checkattr(ctx_output, 'attentions')
-        has_hidden_states = checkattr(ctx_output, 'hidden_states')
+        # register gradient computation for embedings:
+        # register retain_grad:
+        ctx_embeds.retain_grad()
+
+        # list of tensors of shape (n_inputs x embedding_size)
+        output['phi'] = [ctx_embeds[i,m,:].detach().bfloat16().cpu() for i, m in enumerate(token_mask)]
+
+        # list of tensors of shape (n_inputs x embedding_size x embedding_size)
+        output['dPhi'] = [torch.BFloat16Tensor(item.shape + (embedding_size,), device='cpu') for item in output['phi']]
 
         # register gradient computation for attention weights:
         if has_attentions:
             # tensor of shape (bs x n_heads x n_outputs x n_inputs)
             a = ctx_output.attentions[-1]
 
-            # list of tensors of shape (n_heads x n_inputs)
-            output['a'] = [a[i,:,0,m].detach().bfloat16().cpu() for i, m in enumerate(token_mask)]
-
             # register retain_grad:
             a.retain_grad()
 
+            # list of tensors of shape (n_heads x n_inputs)
+            output['a'] = [a[i,:,0,m].detach().bfloat16().cpu() for i, m in enumerate(token_mask)]
+
             # list of tensors of shape (n_heads x n_inputs x embedding_size)
             output['da'] = [torch.BFloat16Tensor(item.shape + (embedding_size,), device='cpu') for item in output['a']]
-
-        # register gradient computation for hidden states:
-        if has_hidden_states:
-            # tensor of shape (bs x n_inputs x embedding_size)
-            h0 = ctx_output.hidden_states[0]
-
-            # list of tensors of shape (n_inputs x embedding_size)
-            output['h0'] = [h0[i,m,:].detach().bfloat16().cpu() for i, m in enumerate(token_mask)]
-
-            # register retain_grad:
-            h0.retain_grad()
-
-            # list of tensors of shape (n_inputs x embedding_size x embedding_size)
-            output['dh0'] = [torch.BFloat16Tensor(item.shape + (embedding_size,), device='cpu') for item in output['h0']]
 
         for i in tqdm(range(embedding_size), total=embedding_size):
             # reset old gradients:
@@ -150,17 +152,15 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
             # calculate gradients of output:
             ctx_output.last_hidden_state[:, 0, i].sum().backward(retain_graph = True)
 
+            # save gradients with regard to input embedding:
+            for j, m in enumerate(token_mask):
+                output['dPhi'][j][:,:,i] = ctx_embeds.grad[j,m,:].detach().bfloat16().cpu()
+
             # save gradients with regard to attention weights:
             if has_attentions:
                 a = ctx_output.attentions[-1]
                 for j, m in enumerate(token_mask):
                     output['da'][j][:,:,i] = a.grad[j,:,0,m].detach().bfloat16().cpu()
-
-            # save gradients with regard to hidden states:
-            if has_hidden_states:
-                h0 = ctx_output.hidden_states[0]
-                for j, m in enumerate(token_mask):
-                    output['dh0'][j][:,:,i] = h0.grad[j,m,:].detach().bfloat16().cpu()
 
         # reset gradient computation:
         torch.set_grad_enabled(prev_grad)
@@ -243,8 +243,8 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         # compute importance:
         grad = {
-            'query':   embedding_backward(self.query_encoder, self._dh0['query']),
-            'context': embedding_backward(self.query_encoder, self._dh0['context'])
+            'query':   embedding_backward(self.query_encoder, self._dPhi['query']),
+            'context': embedding_backward(self.query_encoder, self._dPhi['context'])
         }
     
         if not filter_special_tokens: print('WARNING: `filter_special_tokens` is not used in offline retrieval.')
@@ -313,12 +313,18 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
 
-        # Apply tokenizer
+        # apply tokenizer:
         qry_input = self.tokenizer(query, return_special_tokens_mask=True, return_tensors='pt')
         token_mask = qry_input.pop('special_tokens_mask') == 0.
         
         self._x = {'query': [qry_input.input_ids[i, m].detach().cpu() for i, m in enumerate(token_mask)]}
         self._in_tokens = {'query': [self.tokenizer.convert_ids_to_tokens(t[m]) for t, m in zip(qry_input.input_ids, token_mask)]}
+
+        # apply embeding:
+        qry_embeds = self.query_encoder.get_input_embeddings()(torch.tensor(
+            qry_input.pop('input_ids'),
+            device=self.query_encoder.device
+        ))
 
         # register gradient computation:
         self.query_encoder.get_input_embeddings().requires_grad_(True)
@@ -329,20 +335,16 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         index.grad = None
 
         # Compute embeddings: take the last-layer hidden state of the [CLS] token
-        qry_output = self.query_encoder(**qry_input.to(self.query_encoder.device), **kwargs)
+        qry_output = self.query_encoder(inputs_embeds=qry_embeds, **qry_input.to(self.query_encoder.device), **kwargs)
+        has_attentions = checkattr(qry_output, 'attentions')
 
-        has_attentions    = checkattr(qry_output, 'attentions')
-        has_hidden_states = checkattr(qry_output, 'hidden_states')
+        # register embedding for gradient computation:
+        qry_embeds.retain_grad()
 
         # register attentions for gradient computation:
         if has_attentions:
             a = qry_output.attentions[-1]
             a.retain_grad()
-
-        # register hidden states for gradient computation:
-        if has_hidden_states:
-            h0 = qry_output.hidden_states[0]
-            h0.retain_grad()
 
         # Compute dot product:
         similarity = qry_output.last_hidden_state[:, 0, :] @ index.to(qry_output.last_hidden_state).T
@@ -358,6 +360,29 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         self._x['context'] = retrieved['input_ids']
         self._in_tokens['context'] = retrieved['in_tokens']
+
+        # save gradients with regard to phi:
+        assert 'phi' in retrieved
+        assert 'dPhi' in retrieved
+        # Tensor of shape (bs x n_inputs x encoding_size)
+        self._phi = {
+            'query': [qry_embeds[i,m,:].detach().cpu()  for i, m in enumerate(token_mask)],
+            'context': retrieved['phi']
+        }
+        # Tensor of shape (bs x n_inputs x encoding_size)
+        self._dPhi = {
+            'query': [qry_embeds.grad[i,m,:].detach().cpu() for i, m in enumerate(token_mask)],
+            'context': [
+                (ctx.to(qry)@qry.T).detach().cpu()
+                for ctx, qry
+                in zip(retrieved['dPhi'], index.grad[retrieved_ids[0]])
+            ]
+        }
+        # Tensor of shape (bs x encoding_size)
+        self._y = {  
+            'query':   qry_output.last_hidden_state[:, 0, :].detach().cpu(),
+            'context': index[retrieved_ids].detach().cpu()
+        }
 
         # save gradients with regard to attention weights:
         if has_attentions:
@@ -380,27 +405,6 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                 ]
             }
 
-        # save gradients with regard to hidden states:
-        if has_hidden_states:
-            assert 'h0' in retrieved
-            assert 'dh0' in retrieved
-            # Tensor of shape (bs x n_inputs x encoding_size)
-            h0 = qry_output.hidden_states[0]
-            # Tensor of shape (bs x n_inputs x encoding_size)
-            self._h0 = {
-                'query': [h0[i,m,:].detach().cpu()  for i, m in enumerate(token_mask)],
-                'context': retrieved['h0']
-            }
-            # Tensor of shape (bs x n_inputs x encoding_size)
-            self._dh0 = {
-                'query': [h0.grad[i,m,:].detach().cpu() for i, m in enumerate(token_mask)],
-                'context': [
-                    (ctx.to(qry)@qry.T).detach().cpu()
-                    for ctx, qry
-                    in zip(retrieved['dh0'], index.grad[retrieved_ids[0]])
-                ]
-            }
-
         # reset gradient computation:
         torch.set_grad_enabled(prev_grad)
 
@@ -413,9 +417,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             sorted_ids = torch.argsort(retrieved_ids)
             self._x['context']                   = [self._x['context'][i] for i in sorted_ids]
             self._a['context']                   = [self._a['context'][i] for i in sorted_ids]
-            self._h0['context']                  = [self._h0['context'][i] for i in sorted_ids]
+            self._phi['context']                 = [self._phi['context'][i] for i in sorted_ids]
             self._da['context']                  = [self._da['context'][i] for i in sorted_ids]
-            self._dh0['context']                 = [self._dh0['context'][i] for i in sorted_ids]
+            self._dPhi['context']                = [self._dPhi['context'][i] for i in sorted_ids]
             self._in_tokens['context']           = [self._in_tokens['context'][i] for i in sorted_ids]
 
         return retrieved_ids, similarity

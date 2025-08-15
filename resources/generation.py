@@ -203,7 +203,7 @@ def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> T
     # return tuple of permuations and perturbations: 
     return np.array(permutations), np.array(new_items), perturbations
 
-def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_samples:int) -> Tuple[NDArray[np.bool_], List[Any]]:
+def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_samples:int, complementary:bool=False) -> Tuple[NDArray[np.bool_], List[Any]]:
     """Randomly samples a specified number of unique subsets of a given list,
     and returns their binary indicator features along with the result of applying a function
     to each sampled subset.
@@ -219,6 +219,8 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
                                   feature from a subset of `items`.
         num_samples (int):        The number of unique subset samples to generate, including
                                   the empty set and full set.
+        complementary (bool):     If `True`, makes sure that the sampled perturbations are
+                                  pairs of complementary sets.
 
     Returns:
         Tuple:
@@ -235,7 +237,20 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
     sample = np.empty(num_samples, dtype=int)
     sample[0]    = 0   # =0b000...0
     sample[-1]   = n-1 # =0b111...1
-    sample[1:-1] = np.random.choice(np.arange(1,n-1), size=(num_samples-2), replace=False)
+    if complementary:
+        sample[1:-1:2] = np.random.choice(
+            np.arange(1,(n//2)-1),
+            size=((num_samples//2)-1),
+            replace=False
+        )
+        sample[2:-1:2] = np.invert(sample[1:-1:2]) & (n-1)
+
+    else:
+        sample[1:-1] = np.random.choice(
+            np.arange(1,n-1),
+            size=(num_samples-2),
+            replace=False
+        )
 
     # generate perturbations:
     perturbations = [None] * num_samples
@@ -550,8 +565,6 @@ class ExplainableAutoModelForGeneration:
                 self._gen_logits:torch.Tensor = []
                 self._gen_output = None
                 self._shap_cache = None
-                self.all_top_scores = None
-                self.all_top_tokens = None
 
             #===============================================================#
             # Properties:                                                   #
@@ -560,6 +573,42 @@ class ExplainableAutoModelForGeneration:
             #>> `cmp_[name]_probs` will be automatically used by the
             #>> `get_shapley_values(...)` method!
 
+            # Focusing functionailty:
+            #---------------------------------------------------------------#
+            @property
+            def focus(self) -> slice:
+                """The focus of the explanation, if set."""
+                # generate(...) needs to be called first:
+                if len(self._gen_logits) == 0: return None
+
+                # return the focus:
+                if hasattr(self, '_focus'): return self._focus
+                else: return slice(0, self._gen_output.shape[1])
+            
+            @focus.setter
+            def focus(self, value:Union[Tuple[int, int], None]) -> None:
+                """Sets the focus of the explanation."""
+                # generate(...) needs to be called first:
+                if (value is not None) and (len(self._gen_logits) == 0):
+                    raise AttributeError('`generate(...)` needs to be called at least once before setting `focus`!')
+
+                # set the focus:
+                if value is None:
+                    # if `value` is `None`, delete the private `_focus` attribute,
+                    # setting the focus to the whole sequence:
+                    if hasattr(self, '_focus'): del self._focus
+
+                elif isinstance(value, tuple):
+                    # if `value` is a tuple, interpret it as a slice:
+                    self._focus = slice(*value)
+
+                else: raise TypeError(
+                    f'`focus` must be a tuple of two integers or `None`, but got `{type(value)}: {value}`'
+                )
+
+
+            # GeneratorExplanationBase properties:
+            #---------------------------------------------------------------#
             @property
             def qry_tokens(self) -> List[str]:
                 """The list of query tokens."""
@@ -577,8 +626,14 @@ class ExplainableAutoModelForGeneration:
                 if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_tokens`!')
 
+                # get focus:
+                focus = self.focus
+
+                # get generated token ids:
+                output_ids = self._gen_output[0, focus]
+                
                 # return generated tokens:
-                return self.tokenizer.convert_ids_to_tokens(self._gen_output[0])
+                return self.tokenizer.convert_ids_to_tokens(output_ids)
 
             @property
             def qry_precise(self) -> bool:
@@ -617,6 +672,8 @@ class ExplainableAutoModelForGeneration:
                 return self.config.name_or_path
 
 
+            # Explanation properties:
+            #---------------------------------------------------------------#
             @property
             def gen_token_probs(self) -> NDArray[np.float_]:
                 """Probability of each token in the original generation."""
@@ -624,10 +681,19 @@ class ExplainableAutoModelForGeneration:
                 if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_token_probs`!')
 
+                # get focus:
+                focus = self.focus
+
+                # get generated token ids:
+                output_ids = self._gen_output[:, focus]
+
+                # get logits:
+                logits = self._gen_logits[:, focus, :]
+
                 # return probability of each token in the original generation:
                 return np.array([ 
-                    [float(self._gen_logits[i, j, id]) for j, id  in enumerate(seq)]
-                    for i, seq in enumerate(self._gen_output)
+                    [float(logits[i, j, id]) for j, id  in enumerate(seq)]
+                    for i, seq in enumerate(output_ids)
                 ])
 
             @property
@@ -640,11 +706,20 @@ class ExplainableAutoModelForGeneration:
                         'at least once before accessing `cmp_token_probs`!'
                     )
 
+                # get focus:
+                focus = self.focus
+
+                # get generated token ids:
+                output_ids = self._gen_output[:, focus]
+
+                # get logits:
+                logits = [t[:, focus, :] for t in self._exp_logits]
+
                 # return probability of each token in the original generation:
                 return [np.array([ 
                     [float(t[i, j, id]) for j, id  in enumerate(seq)]
-                    for i, seq in enumerate(self._gen_output)
-                ]) for t in self._exp_logits]
+                    for i, seq in enumerate(output_ids)
+                ]) for t in logits]
 
 
             @property
@@ -654,13 +729,20 @@ class ExplainableAutoModelForGeneration:
                 if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_sequence_prob`!')
 
-                # convert to probabilities:
-                probs = logits2probs(self._gen_logits, normalization='relu')
+                # get focus:
+                focus = self.focus
+
+                # get generated token ids:
+                output_ids = self._gen_output[:, focus]
+
+                # get probabilities:
+                probs = logits2probs(self._gen_logits[:, focus, :], normalization='relu')
+                #probs = logits2probs(self._gen_logits[:, focus, :], normalization='offset')
 
                 # return the multiplied probability of each token in the original generation:
                 return np.prod([
                     [float(probs[i, j, id]) for j, id  in enumerate(seq)]
-                    for i, seq in enumerate(self._gen_output)
+                    for i, seq in enumerate(output_ids)
                 ], axis=-1)
 
             @property
@@ -673,14 +755,22 @@ class ExplainableAutoModelForGeneration:
                         'at least once before accessing `cmp_sequence_probs`!'
                     )
 
-                # convert to probabilities:
-                probs = [logits2probs(t, normalization='relu') for t in self._exp_logits]
+                # get focus:
+                focus = self.focus
+
+                # get generated token ids:
+                output_ids = self._gen_output[:, focus]
+
+                # get probabilities:
+                probs = [logits2probs(t[:, focus, :], normalization='relu') for t in self._exp_logits]
+                #probs = [logits2probs(t[:, focus, :], normalization='offset') for t in self._exp_logits]
 
                 # return the multiplied probability of each token in the original generation:
                 return [np.prod([
                     [float(t[i, j, id]) for j, id  in enumerate(seq)]
-                    for i, seq in enumerate(self._gen_output)
+                    for i, seq in enumerate(output_ids)
                 ], axis=-1) for t in probs]
+
 
             @property
             def gen_bow_probs(self) -> NDArray[np.float_]:
@@ -689,8 +779,11 @@ class ExplainableAutoModelForGeneration:
                 if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_bow_probs`!')
 
-                # convert to probabilities:
-                probs = logits2probs(self._gen_logits, normalization='softmax')
+                # get focus:
+                focus = self.focus
+
+                # get probabilities:
+                probs = logits2probs(self._gen_logits[:, focus, :], normalization='softmax')
 
                 # return accumulated probability of each token in the vocabualry:
                 return probs.mean(dim=1).float().numpy()
@@ -704,9 +797,12 @@ class ExplainableAutoModelForGeneration:
                         '`generate(...)` and `compare(...)` need to be called ' +
                         'at least once before accessing `cmp_bow_probs`!'
                     )
-                
-                # convert to probabilities:
-                probs = [logits2probs(t, normalization='softmax') for t in self._exp_logits]
+
+                # get focus:
+                focus = self.focus
+
+                # get probabilities:
+                probs = [logits2probs(t[:, focus, :], normalization='softmax') for t in self._exp_logits]
 
                 # return accumulated probability of each token in the vocabualry:
                 return [t.mean(dim=1).float().numpy() for t in probs]
@@ -719,8 +815,11 @@ class ExplainableAutoModelForGeneration:
                 if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_nucleus_probs`!')
 
-                # convert to probabilities:
-                probs = logits2probs(self._gen_logits, normalization='softmax')
+                # get focus:
+                focus = self.focus
+
+                # get probabilities:
+                probs = logits2probs(self._gen_logits[:, focus, :], normalization='softmax')
 
                 # return accumulated probability of each token in the vocabualry:
                 return _nucleus_sampling(probs.float(),p=p).mean(dim=1).numpy()
@@ -735,8 +834,11 @@ class ExplainableAutoModelForGeneration:
                         'at least once before accessing `cmp_nucleus_probs`!'
                     )
 
-                # convert to probabilities:
-                probs = [logits2probs(t, normalization='softmax') for t in self._exp_logits]
+                # get focus:
+                focus = self.focus
+
+                # get probabilities:
+                probs = [logits2probs(t[:, focus, :], normalization='softmax') for t in self._exp_logits]
 
                 # return accumulated probability of each token in the vocabualry:
                 return [_nucleus_sampling(t.float(),p=p).mean(dim=1).numpy() for t in probs]
@@ -769,10 +871,13 @@ class ExplainableAutoModelForGeneration:
                     List of generated strings.
                 """
                 # tokenize inputs:
-                inputs = self.tokenizer(inputs, truncation=True, return_tensors='pt')
+                inputs = self.tokenizer(inputs, truncation=True, return_tensors='pt').to(self.device)
 
                 # deactivate explanation mode:
                 self._explain    = False
+
+                # reset focus:
+                self.focus       = None
 
                 # reset token probabilities:
                 self._gen_logits  = []
@@ -859,6 +964,7 @@ class ExplainableAutoModelForGeneration:
                 # convert string to Iterable of tokens:
                 if isinstance(outputs[0], str):
                     outputs = self.tokenizer(outputs, add_special_tokens=False, return_attention_mask=False, return_tensors='pt').input_ids
+                outputs = outputs.to(self.device)
 
                 # tokenize input:
                 inputs = self.tokenizer(inputs, padding=True, truncation=True, return_tensors='pt')
@@ -990,14 +1096,14 @@ class ExplainableAutoModelForGeneration:
 
                 self._shap_cache, perturbed_prompts = {}, {}
                 self._shap_cache['query'], perturbed_prompts['query'] = self.__generate_prompts(
-                    self._qry_tokens,                                                         # permute the query
+                    self._qry_tokens,                                                        # permute the query
                     lambda items:create_rag_prompt(''.join(items), contexts, system=system), # build a prompt for each permutation
-                    int(max_samples/2 + 1)
+                    int(max_samples//2 + 1)
                 )
                 self._shap_cache['context'], perturbed_prompts['context'] = self.__generate_prompts(
                     contexts,                                                    # permute the contexts
                     lambda items:create_rag_prompt(query, items, system=system), # build a prompt for each permutation
-                    int(max_samples/2 + 1)
+                    int(max_samples//2 + 1)
                 )
 
                 # combine prompt lists comparison output:
@@ -1025,7 +1131,7 @@ class ExplainableAutoModelForGeneration:
                     # generate probabilities:
                     self.compare(
                         [self.tokenizer.apply_chat_template(prmpt, tokenize=False) for prmpt in prompts_batch],
-                        output if conditional else None,
+                        'last' if conditional else None,
                         **kwargs
                     )
 
@@ -1057,6 +1163,8 @@ class ExplainableAutoModelForGeneration:
             def get_shapley_values(self,
                 key:Union[Literal['query', 'context'], None],
                 aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
+                num_samples:int=100,
+                sample_size:int=10,
                 **kwargs
             ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float_]], NDArray[np.float_]]:
                 """Generates Shapley feature attribution values for the chosen aggregation method.
@@ -1065,6 +1173,10 @@ class ExplainableAutoModelForGeneration:
                     key (str):          Explanation key. Can either be `'query'` or `'context'`.
                                         If `None` returns a dictionary of both.
                     aggregation (str):  Aggregation method for probabilities (default: `'token'`).
+                    num_samples (int):  Number of samples for Monte-Carlo approximation.
+                                        Ignored in case of precise calculation (default: `100`).
+                    sample_size (int):  Size of samples for Monte-Carlo approximation.
+                                        Ignored in case of precise calculation (default: `10`).
 
                 Returns:
                     A dicionary containing the following two keys (if `key` is specified) or one of the following:
@@ -1103,11 +1215,13 @@ class ExplainableAutoModelForGeneration:
                 result = {'query': None, 'context': None} if key is None else {key: None}
                 for k in result:
                     if self._shap_cache[k]['precise']: result[k] = self._get_shapley_values_precise(probs, **self._shap_cache[k])
-                    else: result[k] = self._get_shapley_values_kernel(probs, **self._shap_cache[k])
+                    else: result[k] = self._get_shapley_values_monte_carlo(probs, num_samples=num_samples, sample_size=sample_size, **self._shap_cache[k])
 
                 return result if key is None else result[key]
 
             def _get_shapley_values_precise(self, probs:NDArray[np.float_], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool) -> NDArray[np.float_]:
+                assert precise is True, 'Precise SHAP values can only be calculated for precise values!'
+
                 # Get the shape of the permutations matrix: (num_permutations, num_sets)
                 num_permutations, num_sets = indices.shape
 
@@ -1136,7 +1250,62 @@ class ExplainableAutoModelForGeneration:
                 # Return SHAP values for all but the baseline (first one)
                 return p_shap
 
+            def _get_shapley_values_monte_carlo(self, probs:NDArray[np.float_], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float_]:
+                assert precise is False, 'Monte Carlo SHAP values can only be calculated for approximate values!'
+
+                # Generate Shapley values for `num_samples` samples of `sample_size` documents:
+                attributions = []
+                for _ in range(num_samples):
+                    sample = np.random.choice(len(indices)-2, size=sample_size-2, replace=False) + 1 # skip the first and last indices
+
+                    attributions.append(
+                        self._get_shapley_values_kernel(
+                            probs   = probs,
+                            indices = np.concatenate([indices[:1], indices[sample], indices[-1:]]),
+                            sets    = np.concatenate([sets[:1], sets[sample], sets[-1:]]),
+                            precise = precise
+                        )
+                    )
+
+                # Return the mean of the attributions across all samples:
+                return np.mean(attributions, axis=0)
+            
+            def _get_shapley_values_complementary(self, probs:NDArray[np.float_], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool) -> NDArray[np.float_]:
+                assert precise is False, 'Complementary SHAP values can only be calculated for approximate values!'
+
+                # Initialize array to store marginal contributions for each permutation step
+                p_marginal = np.empty((indices.shape[0] - 2, 2) + probs[0].shape, dtype=probs[0].dtype)
+
+                # calculate complementary marginal contributions:
+                p_marginal[:,0] = np.stack([probs[i] for i in indices[1:-1]]) - probs[0]
+                p_marginal[:,1] = probs[-1] - p_marginal[:,0]
+
+                # fit a linear regressor using the SHAP kernel:
+                lr = LinearRegression()
+                x  = np.concatenate((
+                    #[sets[0], sets[-1]],
+                    sets[1:-1],
+                    ~sets[1:-1]
+                ), axis=0, dtype=float)
+                y  = np.concatenate((
+                    #[probs[0], probs[-1]],
+                    p_marginal[:,0],
+                    p_marginal[:,1]
+                ), axis=0, dtype=float)
+                w  = [1. / (comb(len(z), sum(z)) * (len(z) - sum(z)))
+                      for z in x]
+                lr.fit(x, y, w)
+                #lr.fit(x, y)
+
+                # attributions are estimated SHAP values:
+                attributions = lr.coef_.T
+
+                # rescale attributions to fit prediction:
+                return attributions
+            
             def _get_shapley_values_kernel(self, probs:NDArray[np.float_], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool) -> NDArray[np.float_]:
+                assert precise is False, 'Kernel SHAP values can only be calculated for approximate values!'
+
                 # fit a linear regressor using the SHAP kernel:
                 lr = LinearRegression()
                 x  = sets[1:-1].astype(float)
@@ -1149,7 +1318,7 @@ class ExplainableAutoModelForGeneration:
                 attributions = lr.coef_.T
 
                 # rescale attributions to fit prediction:
-                return attributions / np.abs(attributions.sum(axis=0)) * (probs[-1] - probs[0])
+                return attributions
             
             def _extract_top_exp_prob(self, top_k = 200):
                 """Extracts the top-k probabilities and their corresponding tokens from the generated tensors.
@@ -1178,10 +1347,73 @@ class ExplainableAutoModelForGeneration:
                     all_top_tokens.append(idx)    # keep the token IDs
 
                 # (optional) stack into big tensors: (n_perm, max_new_tokens, top_k)
-                self.all_top_scores = torch.stack(all_top_scores).squeeze(1)
-                self.all_top_tokens = torch.stack(all_top_tokens).squeeze(1)
+                return torch.stack(all_top_scores).squeeze(1), torch.stack(all_top_tokens).squeeze(1)
 
         return _ExplainableAutoModelForGeneration.from_pretrained(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
             *args, **kwargs
         )
+
+#=======================================================================#
+# Context Managers:                                                     #
+#=======================================================================#
+
+class Focus:
+    def __init__(self, target:GeneratorExplanationBase, focus:Union[Tuple[int, int], str, None], *,
+            token_processor:Optional[Callable[[str],str]]=None
+        ) -> None:
+        """Context manager to set the focus of the explanation.
+
+        Args:
+            target (GeneratorExplanationBase):               The target object to set the focus on.
+            focus (Union[Tuple[int, int], str, None]):       The focus to set. Can be a tuple of two integers representing a slice,
+                                                             a string representing a subsequence, or `None` to reset the focus.
+            token_processor (Optional[Callable[[str],str]]): Optional function to process tokens before setting the focus.
+                                                             If provided, it will be applied to each token in the focus string.
+        """
+        # set the target:
+        self._target = target
+
+        # if focus is a string, find it in the generated tokens:
+        if isinstance(focus, str):
+            # normalize focus string:
+            focus = focus.lower().strip()
+
+            # check that token_processor is provided if focus is a string:
+            if token_processor is None:
+                raise ValueError(f'`token_processor` must be specified in case `focus` is a string!')
+            
+            # find the subsequence in the generated tokens:
+            tokens = [token_processor(t) for t in self._target.gen_tokens]
+            num_tokens = len(tokens)
+
+            self._focus = None
+            for i in range(num_tokens):
+                if self._focus is not None: break
+
+                for j in range(i + 1, num_tokens):
+                    # normalize candidate:
+                    candidate = ''.join(tokens[i:j]).lower().strip()
+
+                    # if candidate is not a prefix of focus, skip:
+                    if not focus.startswith(candidate): break
+
+                    if candidate == focus:
+                        self._focus = (i, j)
+                        break
+
+            # raise an error if the focus string is not found:
+            if self._focus is None:
+                raise ValueError(f'Focus string "{focus}" not found in the generated tokens!')
+
+        # othewise set the focus to the provided value:
+        else: self._focus = focus
+
+    def __enter__(self):
+        """Sets the focus of the explanation."""
+        self._target.focus = self._focus
+        return self._target
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        """Resets the focus of the explanation."""
+        self._target.focus = None

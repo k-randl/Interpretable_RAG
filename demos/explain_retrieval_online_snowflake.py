@@ -36,3 +36,8 @@ higlight_importance_retriever(retriever, method='gradIn', token_processor=lambda
 #%% Grad:
 plot_importance_retriever(retriever, method='grad')
 higlight_importance_retriever(retriever, method='grad', token_processor=lambda s: s.replace('▁', ' '))
+
+#%% Integrated Gradients:
+plot_importance_retriever(retriever, method='intGrad')
+higlight_importance_retriever(retriever, method='intGrad', token_processor=lambda s: s.replace('▁', ' '))
+# %%

@@ -313,7 +313,7 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float_], x_labels:Optional[List[st
 from resources.retrieval import RetrieverExplanationBase
 
 def plot_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Literal['grad', 'gradIn', 'aGrad']='gradIn',
+        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='gradIn',
         absolute:bool=True,
         figsize: Tuple[int, int] = (12, 6),
         cmap:str='tab10',
@@ -337,9 +337,10 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, document_nam
     """
 
     # get scores:
-    if   method == 'grad':   scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
-    elif method == 'gradIn': scores = explanation.gradIn(**kwargs)
-    elif method == 'aGrad':  scores = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
+    if   method == 'grad':    scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
+    elif method == 'gradIn':  scores = explanation.gradIn(**kwargs)
+    elif method == 'aGrad':   scores = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
+    elif method == 'intGrad': scores = explanation.intGrad(**kwargs)
     else: raise ValueError()
 
     # compute absolute:
@@ -356,8 +357,8 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, document_nam
     fig, axs = plt.subplots(len(scores['query']) + len(scores['context']), 1, figsize=figsize)
 
     # plot query:
-    plot_token_vbars(axs[0], 
-        scores      = scores['query'][0].numpy()[None,:], 
+    plot_token_vbars(axs[0],
+        scores      = scores['query'][0].numpy()[None,:],
         tokens      = explanation.in_tokens['query'][0],
         skip_tokens = special_tokens,
         cmap        = cmap
@@ -381,7 +382,7 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, document_nam
     else: return fig
 
 def higlight_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Literal['grad', 'gradIn', 'aGrad']='gradIn',
+        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='gradIn',
         threshold:float=0.0,
         token_processor:Optional[Callable[[str],str]]=None,
         cmap:str='tab10',
@@ -403,9 +404,10 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
         A HTML-formatted string with spans highlighting important tokens if `show == False`.
     """
     # get scores:
-    if   method == 'grad':   scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
-    elif method == 'gradIn': scores = explanation.gradIn(**kwargs)
-    elif method == 'aGrad':  scores = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
+    if   method == 'grad':    scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
+    elif method == 'gradIn':  scores = explanation.gradIn(**kwargs)
+    elif method == 'aGrad':   scores = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
+    elif method == 'intGrad': scores = explanation.intGrad(**kwargs)
     else: raise ValueError()
 
     # compute absolute:
@@ -466,7 +468,7 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
     else: return html_str
 
 def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *, 
-        method:Literal['grad', 'gradIn', 'aGrad']='gradIn',
+        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='gradIn',
         normalize:bool=True,
         threshold:float=.9,
         figsize: Tuple[int, int] = (12, 6),
@@ -491,9 +493,10 @@ def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, docu
     """
 
     # get scores:
-    if   method == 'grad':   scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
-    elif method == 'gradIn': scores = explanation.gradIn(**kwargs)
-    elif method == 'aGrad':  scores = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
+    if   method == 'grad':    scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
+    elif method == 'gradIn':  scores = explanation.gradIn(**kwargs)
+    elif method == 'aGrad':   scores = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
+    elif method == 'intGrad': scores = explanation.intGrad(**kwargs)
     else: raise ValueError()
 
     # compute absolute:
@@ -536,7 +539,7 @@ def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, docu
     else: return fig
 
 def visualize_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Literal['grad', 'gradIn', 'aGrad']='gradIn',
+        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='gradIn',
         cmap:str='tab10',
         show:bool=True,
         **kwargs

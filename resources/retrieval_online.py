@@ -1,4 +1,6 @@
 import torch
+from math import ceil
+from tqdm.autonotebook import trange
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
 from typing import Optional, List, Dict, Literal
 
@@ -13,15 +15,15 @@ def checkattr(obj:object, name:str) -> bool:
         return getattr(obj, name) is not None
     return False
 
-def embedding_backward(model:PreTrainedModel, dh:torch.Tensor):
+def embedding_backward(model:PreTrainedModel, dPhi:torch.Tensor):
     # this is very specific for BERT and may need to be updated to support other models:
     # phi(input_ids, token_type_ids, token_ps) = W @ one_hot(input_ids) + f(token_type_ids, token_ps)
     #  => phi'(input_ids, token_type_ids, token_ps) = phi'(input_ids) = W
     #  
     # for f(input_ids, token_type_ids, token_ps) = nn(phi(input_ids, token_type_ids, token_ps)):
     #   => f'(input_ids, token_type_ids, token_ps) = nn'(input_ids, token_type_ids, token_ps) @ W
-    dPhi = model.embeddings.word_embeddings.weight.T.detach().to(dh)
-    return torch.vmap(lambda grad: grad @ dPhi)(dh)
+    w = model.embeddings.word_embeddings.weight.T.detach().to(dPhi)
+    return torch.vmap(lambda grad: grad @ w)(dPhi)
 
 #=======================================================================#
 # Generic Model Class:                                                  #
@@ -96,19 +98,18 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         }
         else: return None
 
-    def grad(self, layer:int=0, filter_special_tokens:bool=True):
+    def grad(self, filter_special_tokens:bool=True):
         '''Gradients towards the inputs of the last batch.
 
         Args:
-            layer:                  Transformer layer to compute the scores for (default 0).
             filter_special_tokens:  If `True`, set the importance of special tokens to 0.
 
         Returns:                    Importance scores with shape = (bs, n_inputs, n_tokens)'''
 
         # compute importance:
         grad = {
-            'query':   embedding_backward(self.query_encoder, self._dh['query'][:,layer]),
-            'context': embedding_backward(self.context_encoder, self._dh['context'][:,layer])
+            'query':   embedding_backward(self.query_encoder, self._dPhi['query']),
+            'context': embedding_backward(self.context_encoder, self._dPhi['context'])
         }
     
         if filter_special_tokens:
@@ -117,18 +118,17 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return grad
 
-    def aGrad(self, layer:int=-1, filter_special_tokens:bool=True):
+    def aGrad(self, filter_special_tokens:bool=True):
         '''AGrad (`-da ⊙ a`) scores of the last batch.
 
         Args:
-            layer:                  Transformer layer to compute the scores for (default -1).
             filter_special_tokens:  If `True`, set the importance of special tokens to 0.
 
         Returns:                    Importance scores with shape = (bs, n_heads, n_outputs, n_inputs)'''
 
         # compute attention weigths and gradients:
-        a  = {key:self._a[key][:,layer,:,0,:] for key in self._a}     # shape: (bs x n_layers x n_heads x n_outputs x n_inputs)
-        da = {key:self._da[key][:,layer,:,0,:] for key in self._da}   # shape: (bs x n_layers x n_heads x n_outputs x n_inputs)
+        a  = {key:self._a[key][:,-1,:,0,:] for key in self._a}     # shape: (bs x n_layers x n_heads x n_outputs x n_inputs)
+        da = {key:self._da[key][:,-1,:,0,:] for key in self._da}   # shape: (bs x n_layers x n_heads x n_outputs x n_inputs)
 
         # compute importance:
         aGrad = {key:-da[key] * a[key] for key in da}
@@ -149,17 +149,16 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         raise NotImplementedError()
 
-    def gradIn(self, layer:int=0, filter_special_tokens:bool=True):
+    def gradIn(self, filter_special_tokens:bool=True):
         '''GradIn (`dx ⊙ x`) scores of the last batch.
 
         Args:
-            layer:                  Transformer layer to compute the scores for (default 0).
             filter_special_tokens:  If `True`, set the importance of special tokens to 0.
             
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
 
         # compute gradient to input:
-        dx = self.grad(layer=layer, filter_special_tokens=False)
+        dx = self.grad(filter_special_tokens=False)
 
         # compute importance:
         # elementwise multiplication with a one-hot tensor can be replaced with indexing:
@@ -175,12 +174,137 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return gradIn
 
+    def intGrad(self, filter_special_tokens:bool=True, num_steps:int=100, batch_size:int=64):
+        '''Integrated gradient scores of the last batch.
+
+        Args:
+            filter_special_tokens:  If `True`, set the importance of special tokens to 0.
+            num_steps:              Number of approximation steps for the Rieman approximation
+                                    of the integral (default 100).
+            batch_size:             Batch size used for calculating the gradients (default 64).
+            
+        Returns:                    Importance scores with shape = (bs, n_inputs)'''
+        # get the embedings:
+        in_qry_embeds = self.query_encoder.get_input_embeddings()(torch.tensor(
+            self._x['query'],
+            device=self.query_encoder.device
+        ))
+        in_ctx_embeds = self.context_encoder.get_input_embeddings()(torch.tensor(
+            self._x['context'],
+            device=self.context_encoder.device
+        ))
+
+        # get attention masks:
+        qry_attention_mask = torch.tensor(self._x['query'] != self.tokenizer.pad_token_id,
+                                          device=in_qry_embeds.device, dtype=in_qry_embeds.dtype)
+        ctx_attention_mask = torch.tensor(self._x['context'] != self.tokenizer.pad_token_id,
+                                          device=in_ctx_embeds.device, dtype=in_ctx_embeds.dtype)
+
+        # baseline is zeros with only special tokens remaining:
+        bl_qry_embeds = in_qry_embeds * qry_attention_mask[:,:,None] * torch.tensor(
+            (1 - self._special_tokens_mask['query']),
+            device=self.query_encoder.device
+        )[:,:,None]
+        bl_ctx_embeds = in_ctx_embeds * ctx_attention_mask[:,:,None] * torch.tensor(
+            (1 - self._special_tokens_mask['context']),
+            device=self.context_encoder.device
+        )[:,:,None]
+
+        in_qry_embeds -= bl_qry_embeds
+        in_ctx_embeds -= bl_ctx_embeds
+
+        # path functions:
+        steps = torch.linspace(0., 1., num_steps)
+
+        def qry_path_fn(t:torch.Tensor): return bl_qry_embeds.to(in_qry_embeds) + (t.to(in_qry_embeds) * in_qry_embeds)
+        qry_path_fn_batched = torch.vmap(qry_path_fn)
+
+        def ctx_path_fn(t:torch.Tensor): return bl_ctx_embeds.to(in_ctx_embeds) + (t.to(in_ctx_embeds) * in_ctx_embeds)
+        ctx_path_fn_batched = torch.vmap(ctx_path_fn)
+        
+        # chunk wise dot product gradients:
+        def calculate_sim(a:torch.Tensor, b:torch.Tensor): return a @ b.T
+        calculate_sim_batched = torch.vmap(calculate_sim)
+
+        # get chunk sizes:
+        qry_size, ctx_size = [self._x[key].shape[0] for key in ['query', 'context']]
+        chunk_size = batch_size//max(qry_size, ctx_size)
+
+        # get original outputs:
+        in_qry_output = self._y['query'][None, :, :].to(in_qry_embeds)
+        in_ctx_output = self._y['context'][None, :, :].to(in_ctx_embeds)
+
+        # Riemann integrate along path:
+        intGrad = {'query': 0., 'context':0.}  # Tensors of shape (n_inputs x encoding_size)
+        qry_mult = in_qry_embeds / num_steps
+        ctx_mult = in_ctx_embeds / num_steps
+        for i in trange(ceil(num_steps/chunk_size)):
+            batch = steps[i*chunk_size:(i+1)*chunk_size]
+            batch_qry_embeds = qry_path_fn_batched(batch.to(self.query_encoder.device)).flatten(start_dim=0, end_dim=1)
+            batch_ctx_embeds = ctx_path_fn_batched(batch.to(self.context_encoder.device)).flatten(start_dim=0, end_dim=1)
+
+            # compute embeddings: take the last-layer hidden state of the [CLS] token
+            batch_qry_output = self.query_encoder(
+                inputs_embeds=batch_qry_embeds,
+                attention_mask=qry_attention_mask.repeat(batch.shape[0], 1)
+            ).last_hidden_state[:, 0, :].view(batch.shape[0], qry_size, -1)
+
+            batch_ctx_output = self.context_encoder(
+                inputs_embeds=batch_ctx_embeds,
+                attention_mask=ctx_attention_mask.repeat(batch.shape[0], 1)
+            ).last_hidden_state[:, 0, :].view(batch.shape[0], ctx_size, -1)
+
+            # compute dot product similarity:
+            batch_qry_similarity = calculate_sim_batched(batch_qry_output, in_ctx_output.repeat(batch.shape[0], 1, 1))
+            batch_ctx_similarity = calculate_sim_batched(in_qry_output.repeat(batch.shape[0], 1, 1), batch_ctx_output)
+
+            # save first and last output:
+            if 0 in batch:
+                bl_qry_similarity = batch_qry_similarity[batch == 0].detach().cpu().numpy()
+                bl_ctx_similarity = batch_ctx_similarity[batch == 0].detach().cpu().numpy()
+
+            if 1 in batch:
+                in_qry_similarity = batch_qry_similarity[batch == 1].detach().cpu().numpy()
+                in_ctx_similarity = batch_ctx_similarity[batch == 1].detach().cpu().numpy()
+
+            # register input embeddings for gradient computation:
+            batch_qry_embeds.retain_grad()
+            batch_qry_embeds.grad = None
+
+            batch_ctx_embeds.retain_grad()
+            batch_ctx_embeds.grad = None
+
+            # calculate gradients:
+            batch_qry_similarity.sum().backward(retain_graph = True)
+            batch_ctx_similarity.sum().backward(retain_graph = True)
+
+            # save gradients with regard to hidden states:
+            with torch.no_grad():
+                intGrad['query']   += (batch_qry_embeds.grad.detach().sum(dim=(0)) * qry_mult).sum(dim=-1).cpu()
+                intGrad['context'] += (batch_ctx_embeds.grad.detach().sum(dim=(0)) * ctx_mult).sum(dim=-1).cpu()
+
+        # calculate total attribition scaled by number of used tokens:
+        total_qry = (in_qry_similarity - bl_qry_similarity) / qry_attention_mask.detach().cpu().numpy().mean(axis=1)
+        total_ctx = (in_ctx_similarity - bl_ctx_similarity) / ctx_attention_mask.detach().cpu().numpy().mean(axis=1)
+
+        # check additivity:
+        ratio_qry = intGrad['query'].sum() / total_qry.sum()
+        ratio_ctx = intGrad['context'].sum() / total_ctx.sum()
+        if ratio_qry < .95: print(f'WARNING: query attributions add up to only {ratio_qry*100.:.1f}% of the score. Please increase number of steps!')
+        if ratio_ctx < .95: print(f'WARNING: context attributions add up to only {ratio_ctx*100.:.1f}% of the score. Please increase number of steps!')
+
+        if filter_special_tokens:
+            # set the importance of special tokens to 0.
+            intGrad = {key: intGrad[key] * self._special_tokens_mask[key] for key in intGrad}
+
+        return intGrad
+
     def forward(self, query:str, contexts:List[str], k:Optional[int]=None, *, reorder:bool=False, **kwargs):
         # control gradient computation:
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
 
-        # Apply tokenizer
+        # apply tokenizer:
         qry_input = self.tokenizer(query, return_special_tokens_mask=True, return_tensors='pt')
         ctx_input = self.tokenizer(contexts, padding=True, truncation=True, return_special_tokens_mask=True, return_tensors='pt')
 
@@ -197,9 +321,19 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             'context': [self.tokenizer.convert_ids_to_tokens(text) for text in ctx_input.input_ids],
         }
 
+        # apply embeding:
+        qry_embeds = self.query_encoder.get_input_embeddings()(torch.tensor(
+            qry_input.pop('input_ids'),
+            device=self.query_encoder.device
+        ))
+        ctx_embeds = self.context_encoder.get_input_embeddings()(torch.tensor(
+            ctx_input.pop('input_ids'),
+            device=self.context_encoder.device
+        ))
+
         # Compute embeddings: take the last-layer hidden state of the [CLS] token
-        qry_output = self.query_encoder(**qry_input.to(self.query_encoder.device), **kwargs)
-        ctx_output = self.context_encoder(**ctx_input.to(self.context_encoder.device), **kwargs)
+        qry_output = self.query_encoder(inputs_embeds=qry_embeds, **qry_input.to(self.query_encoder.device), **kwargs)
+        ctx_output = self.context_encoder(inputs_embeds=ctx_embeds, **ctx_input.to(self.context_encoder.device), **kwargs)
 
         # Compute dot product:
         similarity = qry_output.last_hidden_state[:, 0, :] @ ctx_output.last_hidden_state[:, 0, :].T
@@ -209,23 +343,40 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             retrieved_ids = retrieved_ids[:, :k]
 
         has_attentions    = checkattr(qry_output, 'attentions') and checkattr(ctx_output, 'attentions')
-        has_hidden_states = checkattr(qry_output, 'hidden_states') and checkattr(ctx_output, 'hidden_states')
 
         # save gradients:
+        # register input embeddings for gradient computation:
+        qry_embeds.retain_grad()
+        qry_embeds.grad = None
+
+        ctx_embeds.retain_grad()
+        ctx_embeds.grad = None
+
         # register attentions for gradient computation:
         if has_attentions:
             for a in qry_output.attentions + ctx_output.attentions:
                 a.retain_grad()
                 a.grad = None
 
-        # register hidden states for gradient computation:
-        if has_hidden_states:
-            for h in qry_output.hidden_states + ctx_output.hidden_states:
-                h.retain_grad()
-                h.grad = None
-
         # calculate gradients of output:
         similarity.sum().backward(retain_graph = True)
+
+        # save gradients with regard to input embeddings:
+        # Tensor of shape (bs x n_inputs x encoding_size)
+        self._phi = {
+            'query':   qry_embeds.detach().cpu(),
+            'context': ctx_embeds.detach().cpu()
+        }
+        # Tensor of shape (bs x n_inputs x encoding_size)
+        self._dPhi = {
+            'query':   qry_embeds.grad.detach().cpu(),
+            'context': ctx_embeds.grad.detach().cpu()
+        }
+        # Tensor of shape (bs x encoding_size)
+        self._y = {  
+            'query':   qry_output.last_hidden_state[:, 0, :].detach().cpu(),
+            'context': ctx_output.last_hidden_state[:, 0, :].detach().cpu()
+        }
 
         # save gradients with regard to attention weights:
         if has_attentions:
@@ -253,32 +404,6 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             }
         else: self._a, self._da = None, None
 
-        # save gradients with regard to hidden states:
-        if has_hidden_states:
-            # Tensor of shape (bs x n_layers x n_inputs x encoding_size)
-            self._h = {
-                'query': torch.stack(
-                    [h.detach().clone().cpu() for h in qry_output.hidden_states],
-                    dim=1
-                ),
-                'context': torch.stack(
-                    [h.detach().clone().cpu() for h in ctx_output.hidden_states],
-                    dim=1
-                )
-            }
-            # Tensor of shape (bs x n_layers x n_inputs x encoding_size)
-            self._dh = {
-                'query': torch.stack(
-                    [h.grad.detach().clone().cpu() for h in qry_output.hidden_states],
-                    dim=1
-                ),
-                'context': torch.stack(
-                    [h.grad.detach().clone().cpu() for h in ctx_output.hidden_states],
-                    dim=1
-                )
-            }
-        else: self._h, self._dh = None, None
-
         # reset gradient computation:
         torch.set_grad_enabled(prev_grad)
 
@@ -290,9 +415,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         if reorder:
             self._x['context']                   = self._x['context'][retrieved_ids.numpy()]
             self._a['context']                   = self._a['context'][retrieved_ids]
-            self._h['context']                   = self._h['context'][retrieved_ids]
+            self._phi['context']                 = self._phi['context'][retrieved_ids]
             self._da['context']                  = self._da['context'][retrieved_ids]
-            self._dh['context']                  = self._dh['context'][retrieved_ids]
+            self._dPhi['context']                = self._dPhi['context'][retrieved_ids]
             self._special_tokens_mask['context'] = self._special_tokens_mask['context'][retrieved_ids]
             self._in_tokens['context']           = [self._in_tokens['context'][i] for i in retrieved_ids]
 
