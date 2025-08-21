@@ -87,7 +87,21 @@ with open(os.path.join(results_path, 'mae_offset.json'), 'r') as file:
 with open(os.path.join(results_path, 'mae_relu.json'), 'r') as file:
     mae_relu = json.load(file)
 
-plt.boxplot([mae_offset, mae_relu], labels=['Offset', 'ReLU'])
-plt.ylabel('Mean Absolute Error')
-plt.xlabel('Probability Calculation Method')
-# %%
+_, ax = plt.subplots(1,1, figsize=(4,4))
+
+ax.boxplot([mae_offset, mae_relu], labels=['Offset', 'ReLU'])
+ax.set_ylim(bottom=0)
+
+# clean frame (keep only left spine):
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+ax.spines['bottom'].set_visible(False)
+
+# add horizontal grid lines at each tick:
+for tick_loc in ax.get_yticks():
+    ax.axhline(y=tick_loc, color='darkgray', linewidth=0.5, zorder=0)
+
+ax.set_ylabel('Mean Absolute Error')
+
+plt.tight_layout()
+plt.savefig('logits2probs.pdf')
