@@ -1,9 +1,10 @@
+aopc
+matplotlib
 nltk
 numpy
+pandas
+rouge_score
 sentence-transformers
 torch
-transformers
-pandas
-matplotlib
-rouge_score
 tqdm
+transformers
