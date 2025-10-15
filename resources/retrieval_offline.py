@@ -416,10 +416,11 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         if not reorder:
             sorted_ids = torch.argsort(retrieved_ids)
             self._x['context']                   = [self._x['context'][i] for i in sorted_ids]
-            self._a['context']                   = [self._a['context'][i] for i in sorted_ids]
             self._phi['context']                 = [self._phi['context'][i] for i in sorted_ids]
-            self._da['context']                  = [self._da['context'][i] for i in sorted_ids]
             self._dPhi['context']                = [self._dPhi['context'][i] for i in sorted_ids]
+            if has_attentions:
+                self._a['context']               = [self._a['context'][i] for i in sorted_ids]
+                self._da['context']              = [self._da['context'][i] for i in sorted_ids]
             self._in_tokens['context']           = [self._in_tokens['context'][i] for i in sorted_ids]
 
         return retrieved_ids, similarity

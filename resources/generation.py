@@ -359,7 +359,7 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
             key:Union[Literal['query', 'context'], None],
             aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
             **kwargs
-        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float_]], NDArray[np.float_]]:
+        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
         """Generates Shapley feature attribution values for the chosen aggregation method.
 
         Args:
@@ -511,7 +511,7 @@ class GeneratorExplanation(GeneratorExplanationBase):
             key:Union[Literal['query', 'context'], None],
             aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
             **kwargs
-        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float_]], NDArray[np.float_]]:
+        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
         """Generates Shapley feature attribution values for the chosen aggregation method.
 
         Args:
@@ -675,7 +675,7 @@ class ExplainableAutoModelForGeneration:
             # Explanation properties:
             #---------------------------------------------------------------#
             @property
-            def gen_token_probs(self) -> NDArray[np.float_]:
+            def gen_token_probs(self) -> NDArray[np.float64]:
                 """Probability of each token in the original generation."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
@@ -697,7 +697,7 @@ class ExplainableAutoModelForGeneration:
                 ])
 
             @property
-            def cmp_token_probs(self) -> NDArray[np.float_]:
+            def cmp_token_probs(self) -> NDArray[np.float64]:
                 """Probability of each token in the original generation given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
@@ -723,7 +723,7 @@ class ExplainableAutoModelForGeneration:
 
 
             @property
-            def gen_sequence_prob(self) -> NDArray[np.float_]:
+            def gen_sequence_prob(self) -> NDArray[np.float64]:
                 """Total probability of generating the original sequence."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
@@ -746,7 +746,7 @@ class ExplainableAutoModelForGeneration:
                 ], axis=-1)
 
             @property
-            def cmp_sequence_probs(self) -> NDArray[np.float_]:
+            def cmp_sequence_probs(self) -> NDArray[np.float64]:
                 """Total probability of generating the original sequence given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
@@ -773,7 +773,7 @@ class ExplainableAutoModelForGeneration:
 
 
             @property
-            def gen_bow_probs(self) -> NDArray[np.float_]:
+            def gen_bow_probs(self) -> NDArray[np.float64]:
                 """Average probability of each token in the vocabualry of being generated given the original input."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
@@ -789,7 +789,7 @@ class ExplainableAutoModelForGeneration:
                 return probs.mean(dim=1).float().numpy()
             
             @property
-            def cmp_bow_probs(self) -> NDArray[np.float_]:
+            def cmp_bow_probs(self) -> NDArray[np.float64]:
                 """Average probability of each token in the vocabualry of being generated given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
@@ -809,7 +809,7 @@ class ExplainableAutoModelForGeneration:
             
 
             #@property
-            def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float_]:
+            def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
                 """Average probability of each token in the vocabualry of being generated given the original input."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
@@ -825,7 +825,7 @@ class ExplainableAutoModelForGeneration:
                 return _nucleus_sampling(probs.float(),p=p).mean(dim=1).numpy()
 
             #@property
-            def cmp_nucleus_probs(self, p:float=0.9) -> NDArray[np.float_]:
+            def cmp_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
                 """Average probability of each token in the vocabualry of being generated given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
@@ -1166,7 +1166,7 @@ class ExplainableAutoModelForGeneration:
                 num_samples:int=100,
                 sample_size:int=10,
                 **kwargs
-            ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float_]], NDArray[np.float_]]:
+            ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
                 """Generates Shapley feature attribution values for the chosen aggregation method.
 
                 Args:
@@ -1219,7 +1219,7 @@ class ExplainableAutoModelForGeneration:
 
                 return result if key is None else result[key]
 
-            def _get_shapley_values_precise(self, probs:NDArray[np.float_], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool) -> NDArray[np.float_]:
+            def _get_shapley_values_precise(self, probs:NDArray[np.float64], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool) -> NDArray[np.float64]:
                 assert precise is True, 'Precise SHAP values can only be calculated for precise values!'
 
                 # Get the shape of the permutations matrix: (num_permutations, num_sets)
@@ -1250,7 +1250,7 @@ class ExplainableAutoModelForGeneration:
                 # Return SHAP values for all but the baseline (first one)
                 return p_shap
 
-            def _get_shapley_values_monte_carlo(self, probs:NDArray[np.float_], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float_]:
+            def _get_shapley_values_monte_carlo(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float64]:
                 assert precise is False, 'Monte Carlo SHAP values can only be calculated for approximate values!'
 
                 # Generate Shapley values for `num_samples` samples of `sample_size` documents:
@@ -1270,7 +1270,7 @@ class ExplainableAutoModelForGeneration:
                 # Return the mean of the attributions across all samples:
                 return np.mean(attributions, axis=0)
             
-            def _get_shapley_values_complementary(self, probs:NDArray[np.float_], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool) -> NDArray[np.float_]:
+            def _get_shapley_values_complementary(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool) -> NDArray[np.float64]:
                 assert precise is False, 'Complementary SHAP values can only be calculated for approximate values!'
 
                 # Initialize array to store marginal contributions for each permutation step
@@ -1303,7 +1303,7 @@ class ExplainableAutoModelForGeneration:
                 # rescale attributions to fit prediction:
                 return attributions
             
-            def _get_shapley_values_kernel(self, probs:NDArray[np.float_], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool) -> NDArray[np.float_]:
+            def _get_shapley_values_kernel(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool) -> NDArray[np.float64]:
                 assert precise is False, 'Kernel SHAP values can only be calculated for approximate values!'
 
                 # fit a linear regressor using the SHAP kernel:

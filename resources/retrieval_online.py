@@ -414,10 +414,11 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # reorder contexts:
         if reorder:
             self._x['context']                   = self._x['context'][retrieved_ids.numpy()]
-            self._a['context']                   = self._a['context'][retrieved_ids]
             self._phi['context']                 = self._phi['context'][retrieved_ids]
-            self._da['context']                  = self._da['context'][retrieved_ids]
             self._dPhi['context']                = self._dPhi['context'][retrieved_ids]
+            if has_attentions:
+                self._a['context']               = self._a['context'][retrieved_ids]
+                self._da['context']              = self._da['context'][retrieved_ids]
             self._special_tokens_mask['context'] = self._special_tokens_mask['context'][retrieved_ids]
             self._in_tokens['context']           = [self._in_tokens['context'][i] for i in retrieved_ids]
 

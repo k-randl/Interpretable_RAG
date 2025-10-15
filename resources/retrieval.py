@@ -48,7 +48,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
     #===================================================================#
 
     @abstractmethod
-    def grad(self, filter_special_tokens:bool=True) ->  Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+    def grad(self, filter_special_tokens:bool=True) ->  Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]:
         '''Gradients towards the inputs of the last batch.
 
         Args:
@@ -58,7 +58,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         raise NotImplementedError()
 
     @abstractmethod
-    def aGrad(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+    def aGrad(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]:
         '''AGrad (`-da ⊙ a`) scores of the last batch.
 
         Args:
@@ -68,7 +68,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         raise NotImplementedError()
 
     @abstractmethod
-    def repAGrad(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+    def repAGrad(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]:
         '''RepAGrad scores of the last batch.
 
         Args:
@@ -78,7 +78,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         raise NotImplementedError()
 
     @abstractmethod
-    def gradIn(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+    def gradIn(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]:
         '''GradIn (`dx ⊙ x`) scores of the last batch.
 
         Args:
@@ -88,7 +88,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         raise NotImplementedError()
 
     @abstractmethod
-    def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+    def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]:
         '''Integrated gradient scores of the last batch.
 
         Args:
@@ -230,7 +230,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         """The huggingface string identifier of the context encoder model."""
         return self._context_encoder_name_or_path
 
-    def grad(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+    def grad(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]:
         '''Gradients towards the inputs of the last batch.
 
         Returns:
@@ -238,7 +238,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if self._grad is None: raise NotImplementedError("No `grad` values were saved.")
         return self._grad
 
-    def aGrad(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+    def aGrad(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]:
         '''AGrad (`-da ⊙ a`) scores of the last batch.
 
         Returns:
@@ -246,7 +246,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if self._aGrad is None: raise NotImplementedError("No `aGrad` values were saved.")
         return self._aGrad
 
-    def repAGrad(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+    def repAGrad(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]:
         '''RepAGrad scores of the last batch.
 
         Returns:
@@ -254,7 +254,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if self._repAGrad is None: raise NotImplementedError("No `repAGrad` values were saved.")
         return self._repAGrad
 
-    def gradIn(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+    def gradIn(self, filter_special_tokens:bool=True) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]:
         '''GradIn (`dx ⊙ x`) scores of the last batch.
 
         Returns:
@@ -262,7 +262,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if self._gradIn is None: raise NotImplementedError("No `gradIn` values were saved.")
         return self._gradIn
     
-    def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float_], FloatTensor]]]:
+    def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]:
         '''Integrated gradient scores of the last batch.
 
         Returns:
