@@ -5,7 +5,7 @@ sys.path.insert(0, "..")
 
 import torch
 from resources.generation import ExplainableAutoModelForGeneration
-from resources.plotting import visualize_attribution_generator
+from code.Interpretable_RAG.resources.plotting_16_10_2025 import visualize_attribution_generator
 
 from huggingface_hub import login
 from getpass import getpass

@@ -4,7 +4,7 @@ sys.path.insert(0, "..")
 
 import torch
 import numpy as np
-from resources.plotting import plot_importance_retriever, higlight_importance_retriever
+from code.Interpretable_RAG.resources.plotting_16_10_2025 import plot_importance_retriever, higlight_importance_retriever
 from resources.retrieval_online import ExplainableAutoModelForRetrieval
 
 # We use msmarco query and passages as an example

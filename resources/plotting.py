@@ -1,4 +1,7 @@
 import numpy as np
+import pandas as pd
+import spacy
+import pickle
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
@@ -927,3 +930,203 @@ def plot_document_importance_rag(explanation:ExplainableAutoModelForRAG, documen
 
     if show: fig.show()
     else: return fig
+
+#====================================================================#
+# (New) Plots for Part-of-Speech (POS) Analysis                      #
+#====================================================================#
+
+# Note: These functions require spacy and a model. 
+# You may need to run:
+# pip install spacy pandas
+# python -m spacy download en_core_web_sm
+
+# load small english model
+nlp = spacy.load("en_core_web_sm")
+
+def tokens_to_pos(tokens, detok="auto"):
+    """
+    Convert subword tokens into words, tag them with POS,
+    and map back to original token indices.
+    """
+    # simple detok heuristic (works ok with GPT-style tokens like 'Ġhello')
+    words = []
+    mapping = []  # map each original token index -> word index
+    current_word = ""
+    word_idx = -1
+
+    for i, tok in enumerate(tokens):
+        # roberta/gpt2 style
+        if tok.startswith("Ġ") or tok.startswith(" "):
+            # start new word
+            words.append(tok[1:])
+            word_idx = len(words)-1
+            mapping.append(word_idx)
+        elif tok.startswith("##"):  # bert/wordpiece
+            # continuation
+            if words:
+                words[-1] += tok[2:]
+                mapping.append(word_idx)
+            else:
+                words.append(tok[2:])
+                word_idx = len(words)-1
+                mapping.append(word_idx)
+        else:
+            if words:
+                words[-1] += tok
+                mapping.append(word_idx)
+            else:
+                words.append(tok)
+                word_idx = len(words)-1
+                mapping.append(word_idx)
+
+    text = " ".join(words)
+    doc = nlp(text)
+
+    # now assign POS back to each token
+    pos_per_word = [token.pos_ for token in doc]  # e.g. "NOUN", "VERB", etc.
+    pos_per_token = [pos_per_word[m] if m < len(pos_per_word) else "X" for m in mapping]
+
+    return pos_per_token, pos_per_word, mapping, words
+
+def shap_by_pos(shap_docs_tokens, pos_tags, doc_names=None, absolute=True):
+    """
+    Aggregate contributions per POS category across tokens.
+    """
+    S = np.asarray(shap_docs_tokens)   # (D, T)
+    if absolute:
+        S = np.abs(S)
+
+    D, T = S.shape
+    assert len(pos_tags) == T
+
+    if doc_names is None:
+        doc_names = [f"Doc {i+1}" for i in range(D)]
+
+    # unique POS categories
+    pos_set = sorted(set(pos_tags))
+    agg = {pos: S[:, np.array(pos_tags) == pos].mean(axis=1) for pos in pos_set}
+
+    df = pd.DataFrame(agg, index=doc_names).T
+    return df
+
+def plot_shap_by_pos(df, cmap="tab10", figsize=(10,6),dpi=300, normalize=True ,save_path=None,show=True):
+    """
+    df: POS x Documents DataFrame from shap_by_pos()
+    """
+    if normalize:
+        df = df.div(df.sum(axis=1), axis=0)  # normalize per POS
+    fig, ax = plt.subplots(figsize=figsize, dpi = dpi) # Crea figura e assi
+
+    # Genera i colori in modo coerente con le altre funzioni di plot
+    num_docs = df.shape[1]
+    cmap_obj = cm.get_cmap(cmap)
+    colors = [cmap_obj(i) for i in range(num_docs)]
+
+    # Passa la lista di colori esplicita alla funzione di plot
+    df.plot(kind="bar", stacked=True, color=colors, ax=ax)
+
+    ax.set_ylabel("Normalized contribution" if normalize else "Mean contribution")
+    ax.set_xlabel("POS tag")
+    ax.set_title("Document impact by Part-of-Speech")
+    plt.xticks(rotation=45, ha="right")
+    plt.legend(title="Documents", bbox_to_anchor=(1.05, 1), loc="upper left")
+    fig.tight_layout()
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+
+    if show:
+        plt.show()
+
+    return fig
+
+#====================================================================#
+# (New) Plots for Global Importance Analysis                         #
+#====================================================================#
+
+def safe_load_pickle(file_path):
+    """
+    Carica in modo sicuro un file pickle, gestendo potenziali eccezioni.
+
+    Args:
+        file_path (str): Il percorso del file .pkl da caricare.
+
+    Returns:
+        dict: L'oggetto caricato dal file pickle, o None se si verifica un errore.
+    """
+    
+    try:
+        with open(file_path, 'rb') as f:
+            obj = pickle.load(f)
+        return obj
+    except Exception as e:
+        print(f"Error nel caricamento del file {file_path}: {e}")
+        return None
+
+def process_global_importance(pickle_files: list, safe_load_pickle_func) -> pd.DataFrame:
+    """
+    Elabora una lista di file pickle per calcolare l'importanza media di ogni documento.
+
+    Args:
+        pickle_files (list): Lista di percorsi ai file .pkl.
+        safe_load_pickle_func (function): La funzione per caricare in modo sicuro i file pickle.
+
+    Returns:
+        pd.DataFrame: Un DataFrame dove ogni colonna è un documento e ogni riga
+                      rappresenta l'importanza media di quel documento per una singola query.
+    """
+    all_doc_importances = []
+
+    for file_path in pickle_files:
+        try:
+            obj = safe_load_pickle_func(file_path)
+            if "shapley_values_token" in obj and "context" in obj["shapley_values_token"]:
+                S = np.asarray(obj["shapley_values_token"]["context"])
+                # Calcola l'importanza average (assoluta) per ogni documento in questo file
+                mean_importance_per_doc = np.abs(S).mean(axis=1)
+                all_doc_importances.append(mean_importance_per_doc)
+        except Exception:
+            # Ignora i file che non possono essere caricati o non hanno i data necessari
+            continue
+    
+    if not all_doc_importances:
+        return pd.DataFrame()
+
+    # Determina il numero massimo di documenti trovati
+    max_docs = max(len(row) for row in all_doc_importances)
+    doc_names = [f"Doc {i+1}" for i in range(max_docs)]
+
+    # Crea il DataFrame
+    df = pd.DataFrame(all_doc_importances, columns=doc_names[:len(all_doc_importances[0])])
+    return df
+
+def plot_global_importance_distribution(df: pd.DataFrame, cmap="tab10", figsize=(12, 7), dpi=300):
+    """
+    Crea un box plot per visualizzare la distribuzione dell'importanza di ogni documento.
+    """
+    if df.empty:
+        return None
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    
+    num_docs = df.shape[1]
+    cmap_obj = cm.get_cmap(cmap)
+    colors = [cmap_obj(i) for i in range(num_docs)]
+
+    # Box plot
+    box = ax.boxplot(df.values, patch_artist=True, labels=df.columns)
+    for patch, color in zip(box['boxes'], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+
+    # Calcola e plotta la average
+    means = df.mean().values
+    ax.scatter(range(1, num_docs + 1), means, marker='o', color='red', s=50, zorder=3, label='Media Globale')
+
+    ax.set_title(f"Distribuzione dell'Importanza dei Documenti su {len(df)} Query")
+    ax.set_ylabel("Importanza Media Assoluta per Query")
+    ax.set_xlabel("Documenti Sorgente")
+    ax.grid(True, axis='y', linestyle='--', alpha=0.6)
+    ax.legend()
+    fig.tight_layout()
+    
+    return fig

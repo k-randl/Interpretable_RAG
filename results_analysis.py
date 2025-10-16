@@ -9,7 +9,7 @@ import pandas as pd
 from transformers import AutoTokenizer
 from methods import *
 from resources.generation import GeneratorExplanation
-from resources.plotting import *
+from code.Interpretable_RAG.resources.plotting_16_10_2025 import *
 
 MODEL_ID = 'meta-llama/Llama-3.1-8B-Instruct'
 

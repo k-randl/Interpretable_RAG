@@ -1,7 +1,7 @@
 # %%
 import os
 os.environ['TRANSFORMERS_CACHE'] = '/home/francomaria.nardini/raid/guidorocchietti/.cache/huggingface'
-os.environ['CUDA_VISIBLE_DEVICES'] = '3,4,5,6,7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,3,4,5'
 import torch
 import numpy as np
 import pandas as pd
@@ -39,7 +39,7 @@ num_docs_context = 6
 contexts = {k: v[:num_docs_context] for k, v in contexts.items()}  # Limit to num_docs contexts
 random_context = {k: np.random.choice(v, num_docs_context, replace=False).tolist() for k, v in contexts.items()}
 no_duplicate_contexts = {k: list(set(v))[:num_docs_context] for k, v in contexts.items()}  # Remove duplicates 
-#%%
+
 
 #%%
 do_original = False

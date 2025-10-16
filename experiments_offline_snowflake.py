@@ -10,7 +10,7 @@ from resources.retrieval_offline import ExplainableAutoModelForContextEncoding, 
 
 # %%
 # We use msmarco query and passages as an example
-df_for_testing = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/code/efra_retrieval/validation_Dataset_with_chunks_ids.csv')
+df_for_testing = pd.read_csv('data/validation_Dataset_with_chunks_ids.csv')
 contexts = df_for_testing['text'].unique().tolist()
 df_for_testing_first_ten_queries = df_for_testing[df_for_testing['query'].isin(df_for_testing['query'].unique()[:10])]
 unique_contexts = df_for_testing_first_ten_queries['text'].unique().tolist()
