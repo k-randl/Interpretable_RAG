@@ -10,3 +10,4 @@ wget -P ./resources/ https://raw.githubusercontent.com/neulab/BARTScore/main/bar
 wget -P ./resources/ https://raw.githubusercontent.com/jbshp/LongDocFACTScore/refs/heads/main/src/longdocfactscore/ldfacts.py
 
 mkdir ./data
+python -m spacy download en_core_web_sm

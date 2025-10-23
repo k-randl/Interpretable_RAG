@@ -7,7 +7,7 @@ from tqdm.autonotebook import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
 from typing import Optional, List, Literal, Union, Dict
 
-from resources.retrieval import RetrieverExplanationBase
+from .retrieval import RetrieverExplanationBase
 
 #=======================================================================#
 # Helper Functions:                                                     #

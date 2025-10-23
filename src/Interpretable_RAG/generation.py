@@ -8,7 +8,7 @@ import pickle
 from scipy.special import comb
 from sklearn.linear_model import LinearRegression
 
-from resources.utils import decode_chat_template, get_model_type
+from .utils import decode_chat_template, get_model_type
 
 from numpy.typing import NDArray
 from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable, Callable, Any

@@ -4,7 +4,7 @@ from tqdm.autonotebook import trange
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
 from typing import Optional, List, Dict, Literal
 
-from resources.retrieval import RetrieverExplanationBase
+from .retrieval import RetrieverExplanationBase
 
 #=======================================================================#
 # Helper Functions:                                                     #

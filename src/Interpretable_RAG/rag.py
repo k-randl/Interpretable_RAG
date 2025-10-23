@@ -1,9 +1,9 @@
 import torch
 import numpy as np
-from resources.retrieval_offline import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOfflineRetrieval
-from resources.retrieval_online  import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOnlineRetrieval
-from resources.generation import ExplainableAutoModelForGeneration
-from resources.utils import tokens2words
+from .retrieval_offline import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOfflineRetrieval
+from .retrieval_online  import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOnlineRetrieval
+from .generation import ExplainableAutoModelForGeneration
+from .utils import tokens2words
 
 from typing import Optional, Callable, Dict, List, Any
 from numpy.typing import NDArray

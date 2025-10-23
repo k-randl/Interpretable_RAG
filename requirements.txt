@@ -7,3 +7,4 @@ sentence-transformers
 torch
 tqdm
 transformers
+spacy

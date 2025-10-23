@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from html import escape
 from IPython.display import display, HTML
 
-from resources.utils import decode_chat_template, nucleus_sample_tokens
+from .utils import decode_chat_template, nucleus_sample_tokens
 
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -313,7 +313,7 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float_], x_labels:Optional[List[st
 # Plots for retrieval:                                               #
 #====================================================================#
 
-from resources.retrieval import RetrieverExplanationBase
+from .retrieval import RetrieverExplanationBase
 
 def plot_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
         method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='gradIn',
@@ -573,7 +573,7 @@ def visualize_importance_retriever(explanation:RetrieverExplanationBase, documen
 # Plots for generation:                                              #
 #====================================================================#
 
-from resources.generation import GeneratorExplanationBase
+from .generation import GeneratorExplanationBase
 
 def plot_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         aggregation:Literal['token', 'bow', 'nucleus']='token',
@@ -850,7 +850,7 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
 # Plots for retrieval + generation:                                  #
 #====================================================================#
 
-from resources.rag import ExplainableAutoModelForRAG
+from .rag import ExplainableAutoModelForRAG
 
 def plot_document_importance_rag(explanation:ExplainableAutoModelForRAG, document_names:Optional[List[str]]=None, *,
     figsize: Tuple[int, int] = (12, 6),
