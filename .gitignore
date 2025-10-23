@@ -1,19 +1,33 @@
-.**
-*/.**
-*__pycache__
-*__pycache__/**
-**.xlsx
-**.pkl
-data/*/**
-plots/**
-summaries/**
-index_snowflake/**
-result**
-output**
-old**
-resources/ldfacts.py**
+# File di cache e di sistema
+.idea/
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
 
+# Artefatti di build
+build/
+dist/
+*.egg-info/
+
+# File di dati generati o temporanei
+*.xlsx
+*.pkl
+data/*/
+
+# Cartelle di output
+outputs_evaluation/
+outputs_retrieved/
+results/
+plots/
+summaries/
+index_snowflake/
+
+# Cartella con file vecchi
+old/
+
+# File specifici da ignorare
+resources/ldfacts.py
 EFRA Validation dataset - Context Relevancy V2_modified.csv
 align_data.py
 generation.old.py
-
