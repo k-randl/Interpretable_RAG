@@ -41,9 +41,9 @@ if os.path.exists(os.path.join(RESULTS_FOLDER,'randomized')):
     csvs = [f for f in randomized_files if f.endswith('.csv')]
     randomized_files = [f for f in randomized_files if f.endswith('.pkl')]
     if csvs:
-        # Leggi il CSV e converti la colonna contexts da stringa a lista
+        # Read the CSV and convert the contexts column from string to list
         randomized_df = pd.read_csv(os.path.join(randomized_path,csvs[0]))
-        randomized_df['contexts'] = randomized_df['contexts'].apply(eval)  # Converte la stringa in lista
+        randomized_df['contexts'] = randomized_df['contexts'].apply(eval)  # Convert string to list
         ### put every value in the contexts lists as a single row
         randomized_df = randomized_df.explode('contexts').reset_index(drop=True)
         #randomized_files = [f for f in randomized_files if f.endswith('.pkl')]
@@ -56,46 +56,46 @@ if os.path.exists(os.path.join(RESULTS_FOLDER,'no_duplicates')):
     csvs = [f for f in no_duplicates_files if f.endswith('.csv')]
     no_duplicates_files = [f for f in no_duplicates_files if f.endswith('.pkl')]
     if csvs:
-        # Leggi il CSV e converti la colonna contexts da stringa a lista
+        # Read the CSV and convert the contexts column from string to list
         no_duplicates_df = pd.read_csv(os.path.join(no_duplicates_path, csvs[0]))
-        no_duplicates_df['contexts'] = no_duplicates_df['contexts'].apply(eval)  # Converte la stringa in lista
+        no_duplicates_df['contexts'] = no_duplicates_df['contexts'].apply(eval)  # Convert string to list
         no_duplicates_df = no_duplicates_df.explode('contexts').reset_index(drop=True)
         #no_duplicates_files = [f for f in no_duplicates_files if f.endswith('.pkl')]
-# Funzione per calcolare la similarità tra due testi
+# Function to calculate the similarity between two texts
 
-# Funzione per calcolare la similarità di Jaccard tra due testi
+# Function to calculate the Jaccard similarity between two texts
 def calculate_similarity(text1, text2):
-    # Converti i testi in set di parole
+    # Convert texts to sets of words
     words1 = set(text1.lower().split())
     words2 = set(text2.lower().split())
     
-    # Calcola l'intersezione e l'unione
+    # Calculate intersection and union
     intersection = len(words1.intersection(words2))
     union = len(words1.union(words2))
     
-    # Calcola il rapporto di Jaccard
+    # Calculate Jaccard ratio
     if union == 0:
         return 0
     return intersection / union
 
 #%%
-# Allineamento dei dataframe con aligned_validation
+# Alignment of dataframes with aligned_validation
 if 'randomized_df' in locals():
-    # Aggiungi colonna context_id a randomized_df
+    # Add context_id column to randomized_df
     randomized_df['context_id'] = None
-    similarity_threshold = 0.8  # Stessa soglia usata in align_data.py
+    similarity_threshold = 0.8  # Same threshold used in align_data.py
     
-    # Per ogni query_id
+    # For each query_id
     for query_id in aligned_validation['query_id'].unique():
-        # Prendi i contesti e i loro ID dalla validation
+        # Get the contexts and their IDs from the validation
         query_contexts = aligned_validation[aligned_validation['query_id'] == query_id]
         
-        # Per ogni riga nel randomized dataset
+        # For each row in the randomized dataset
         mask = (randomized_df['query_id'] == query_id)
         for idx in randomized_df[mask].index:
             context = randomized_df.loc[idx, 'contexts']
             
-            # Trova il miglior match in base alla similarità
+            # Find the best match based on similarity
             best_similarity = 0
             best_match = None
             
@@ -105,28 +105,28 @@ if 'randomized_df' in locals():
                     best_similarity = similarity
                     best_match = validation_row
             
-            # Se la similarità è sopra la soglia, usa questo match
+            # If the similarity is above the threshold, use this match
             if best_similarity >= similarity_threshold:
                 randomized_df.loc[idx, 'context_id'] = best_match['context_id']
                 randomized_df.loc[idx, 'similarity_score'] = best_similarity
 
 #%%
 if 'no_duplicates_df' in locals():
-    # Aggiungi colonna context_id a no_duplicates_df
+    # Add context_id column to no_duplicates_df
     no_duplicates_df['context_id'] = None
-    similarity_threshold = 0.8  # Stessa soglia usata in align_data.py
+    similarity_threshold = 0.8  # Same threshold used in align_data.py
     
-    # Per ogni query_id
+    # For each query_id
     for query_id in aligned_validation['query_id'].unique():
-        # Prendi i contesti e i loro ID dalla validation
+        # Get the contexts and their IDs from the validation
         query_contexts = aligned_validation[aligned_validation['query_id'] == query_id]
         
-        # Per ogni riga nel no_duplicates dataset
+        # For each row in the no_duplicates dataset
         mask = (no_duplicates_df['query_id'] == query_id)
         for idx in no_duplicates_df[mask].index:
             context = no_duplicates_df.loc[idx, 'contexts']
             
-            # Trova il miglior match in base alla similarità
+            # Find the best match based on similarity
             best_similarity = 0
             best_match = None
             
@@ -136,17 +136,17 @@ if 'no_duplicates_df' in locals():
                     best_similarity = similarity
                     best_match = validation_row
             
-            # Se la similarità è sopra la soglia, usa questo match
+            # If the similarity is above the threshold, use this match
             if best_similarity >= similarity_threshold:
                 no_duplicates_df.loc[idx, 'context_id'] = best_match['context_id']
                 no_duplicates_df.loc[idx, 'similarity_score'] = best_similarity
 
 
-# Verifica i risultati
-print("\nNumero di context_id allineati:")
+# Verify the results
+print("\nNumber of aligned context_ids:")
 print(f"Randomized: {randomized_df['context_id'].notna().sum()}")
 
-# Salva i DataFrame aggiornati
+# Save the updated DataFrames
 randomized_df.to_csv(os.path.join(randomized_path, 'randomized_with_context_ids.csv'), index=False)
         
 #%%
@@ -161,30 +161,30 @@ original_results      = GeneratorExplanation.load(os.path.join(original_path, or
 no_duplicates_results = GeneratorExplanation.load(os.path.join(no_duplicates_path, no_duplicates_files[query_id]), model_name_or_path='MODEL_ID', tokenizer=tokenizer)
 
 #%%
-# Plot con rotazione dei token e maggiore spazio
+# Plot with token rotation and more space
 plot_attribution_generator(original_results, aggregation='token', normalize=True, figsize=(20, 8))
 
 ### print the contexts
 print(f"Contexts for query_id {query_id}:")
 for i, row in enumerate(aligned_validation[aligned_validation.query_id == query_id].iloc[:6].iterrows()):
-    print(f'DOCUMENT {row[1]['context_id']}' + row[1]['context'][:100] + '...')  # Stampa i primi 100 caratteri di ogni contesto
+    print(f'DOCUMENT {row[1]['context_id']}' + row[1]['context'][:100] + '...')  # Print the first 100 characters of each context
 #%%
-# Plot con rotazione dei token e maggiore spazio
+# Plot with token rotation and more space
 plot_attribution_generator(randomized_results, aggregation='token', normalize=True, figsize=(20, 8))
 
 ### print the contexts
 print(f"Contexts for query_id {query_id} Randomized:")
 for i, row in enumerate(randomized_df[randomized_df.query_id == query_id].iloc[:6].iterrows()):
-    print(f'DOCUMENT {row[1]['context_id']}' + row[1]['contexts'][:100] + '...')  # Stampa i primi 100 caratteri di ogni contesto
+    print(f'DOCUMENT {row[1]['context_id']}' + row[1]['contexts'][:100] + '...')  # Print the first 100 characters of each context
     
 #%%
-# Plot con rotazione dei token e maggiore spazio
+# Plot with token rotation and more space
 plot_attribution_generator(no_duplicates_results, aggregation='token', normalize=True, figsize=(20, 8))
 
 ### print the contexts
 print(f"Contexts for query_id {query_id} No duplicates:")
 for i, row in enumerate(no_duplicates_df[no_duplicates_df.query_id == query_id].iloc[:6].iterrows()):
-    print(f'DOCUMENT {i} : {row[1]['context_id']}' + row[1]['contexts'][:100] + '...')  # Stampa i primi 100 caratteri di ogni contesto
+    print(f'DOCUMENT {i} : {row[1]['context_id']}' + row[1]['contexts'][:100] + '...')  # Print the first 100 characters of each context
 # %%
 higlight_attribution_generator(original_results, token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'))
 

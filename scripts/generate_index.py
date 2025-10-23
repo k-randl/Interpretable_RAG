@@ -114,6 +114,6 @@ args = Namespace(queries_path = topics_path, qrels_path = qrels_path, index = sn
 results_df, results_ir = search(args)
 # %%
 '''python generate_index.py \
-    --embeddings_path /percorso/dei/tuoi/passage_embeddings.npy \
-    --save_path /percorso/output/mio_indice.faiss \
+    --embeddings_path /path/to/your/passage_embeddings.npy \
+    --save_path /path/to/output/my_index.faiss \
     --metric IP'''

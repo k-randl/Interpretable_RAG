@@ -1015,14 +1015,14 @@ def plot_shap_by_pos(df, cmap="tab10", figsize=(10,6),dpi=300, normalize=True ,s
     """
     if normalize:
         df = df.div(df.sum(axis=1), axis=0)  # normalize per POS
-    fig, ax = plt.subplots(figsize=figsize, dpi = dpi) # Crea figura e assi
+    fig, ax = plt.subplots(figsize=figsize, dpi = dpi) # Create figure and axes
 
-    # Genera i colori in modo coerente con le altre funzioni di plot
+    # Generate colors consistently with other plot functions
     num_docs = df.shape[1]
     cmap_obj = cm.get_cmap(cmap)
     colors = [cmap_obj(i) for i in range(num_docs)]
 
-    # Passa la lista di colori esplicita alla funzione di plot
+    # Pass the explicit list of colors to the plot function
     df.plot(kind="bar", stacked=True, color=colors, ax=ax)
 
     ax.set_ylabel("Normalized contribution" if normalize else "Mean contribution")
@@ -1045,13 +1045,13 @@ def plot_shap_by_pos(df, cmap="tab10", figsize=(10,6),dpi=300, normalize=True ,s
 
 def safe_load_pickle(file_path):
     """
-    Carica in modo sicuro un file pickle, gestendo potenziali eccezioni.
+    Safely loads a pickle file, handling potential exceptions.
 
     Args:
-        file_path (str): Il percorso del file .pkl da caricare.
+        file_path (str): The path to the .pkl file to load.
 
     Returns:
-        dict: L'oggetto caricato dal file pickle, o None se si verifica un errore.
+        dict: The object loaded from the pickle file, or None if an error occurs.
     """
     
     try:
@@ -1059,20 +1059,20 @@ def safe_load_pickle(file_path):
             obj = pickle.load(f)
         return obj
     except Exception as e:
-        print(f"Error nel caricamento del file {file_path}: {e}")
+        print(f"Error loading file {file_path}: {e}")
         return None
 
 def process_global_importance(pickle_files: list, safe_load_pickle_func) -> pd.DataFrame:
     """
-    Elabora una lista di file pickle per calcolare l'importanza media di ogni documento.
+    Processes a list of pickle files to calculate the average importance of each document.
 
     Args:
-        pickle_files (list): Lista di percorsi ai file .pkl.
-        safe_load_pickle_func (function): La funzione per caricare in modo sicuro i file pickle.
+        pickle_files (list): List of paths to the .pkl files.
+        safe_load_pickle_func (function): The function to safely load the pickle files.
 
     Returns:
-        pd.DataFrame: Un DataFrame dove ogni colonna è un documento e ogni riga
-                      rappresenta l'importanza media di quel documento per una singola query.
+        pd.DataFrame: A DataFrame where each column is a document and each row
+                      represents the average importance of that document for a single query.
     """
     all_doc_importances = []
 
@@ -1081,27 +1081,27 @@ def process_global_importance(pickle_files: list, safe_load_pickle_func) -> pd.D
             obj = safe_load_pickle_func(file_path)
             if "shapley_values_token" in obj and "context" in obj["shapley_values_token"]:
                 S = np.asarray(obj["shapley_values_token"]["context"])
-                # Calcola l'importanza average (assoluta) per ogni documento in questo file
+                # Calculate the average (absolute) importance for each document in this file
                 mean_importance_per_doc = np.abs(S).mean(axis=1)
                 all_doc_importances.append(mean_importance_per_doc)
         except Exception:
-            # Ignora i file che non possono essere caricati o non hanno i data necessari
+            # Ignore files that cannot be loaded or do not have the necessary data
             continue
     
     if not all_doc_importances:
         return pd.DataFrame()
 
-    # Determina il numero massimo di documenti trovati
+    # Determine the maximum number of documents found
     max_docs = max(len(row) for row in all_doc_importances)
     doc_names = [f"Doc {i+1}" for i in range(max_docs)]
 
-    # Crea il DataFrame
+    # Create the DataFrame
     df = pd.DataFrame(all_doc_importances, columns=doc_names[:len(all_doc_importances[0])])
     return df
 
 def plot_global_importance_distribution(df: pd.DataFrame, cmap="tab10", figsize=(12, 7), dpi=300):
     """
-    Crea un box plot per visualizzare la distribuzione dell'importanza di ogni documento.
+    Creates a box plot to visualize the importance distribution of each document.
     """
     if df.empty:
         return None
@@ -1118,13 +1118,13 @@ def plot_global_importance_distribution(df: pd.DataFrame, cmap="tab10", figsize=
         patch.set_facecolor(color)
         patch.set_alpha(0.7)
 
-    # Calcola e plotta la average
+    # Calculate and plot the average
     means = df.mean().values
-    ax.scatter(range(1, num_docs + 1), means, marker='o', color='red', s=50, zorder=3, label='Media Globale')
+    ax.scatter(range(1, num_docs + 1), means, marker='o', color='red', s=50, zorder=3, label='Global Mean')
 
-    ax.set_title(f"Distribuzione dell'Importanza dei Documenti su {len(df)} Query")
-    ax.set_ylabel("Importanza Media Assoluta per Query")
-    ax.set_xlabel("Documenti Sorgente")
+    ax.set_title(f"Distribution of Document Importance over {len(df)} Queries")
+    ax.set_ylabel("Mean Absolute Importance per Query")
+    ax.set_xlabel("Source Documents")
     ax.grid(True, axis='y', linestyle='--', alpha=0.6)
     ax.legend()
     fig.tight_layout()
