@@ -174,7 +174,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return gradIn
 
-    def intGrad(self, filter_special_tokens:bool=True, num_steps:int=100, batch_size:int=64):
+    def intGrad(self, filter_special_tokens:bool=True, num_steps:int=100, batch_size:int=64, verbose:bool=True):
         '''Integrated gradient scores of the last batch.
 
         Args:
@@ -182,6 +182,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             num_steps:              Number of approximation steps for the Rieman approximation
                                     of the integral (default 100).
             batch_size:             Batch size used for calculating the gradients (default 64).
+            verbose:                If `True`, shows a progress bar.
             
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         # get the embedings:
@@ -238,7 +239,12 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         intGrad = {'query': 0., 'context':0.}  # Tensors of shape (n_inputs x encoding_size)
         qry_mult = in_qry_embeds / num_steps
         ctx_mult = in_ctx_embeds / num_steps
-        for i in trange(ceil(num_steps/chunk_size)):
+
+        iterator = None
+        if verbose: iterator = trange(ceil(num_steps/chunk_size))
+        else:       iterator = range(ceil(num_steps/chunk_size))
+
+        for i in iterator:
             batch = steps[i*chunk_size:(i+1)*chunk_size]
             batch_qry_embeds = qry_path_fn_batched(batch.to(self.query_encoder.device)).flatten(start_dim=0, end_dim=1)
             batch_ctx_embeds = ctx_path_fn_batched(batch.to(self.context_encoder.device)).flatten(start_dim=0, end_dim=1)
