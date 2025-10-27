@@ -8,7 +8,7 @@ from typing import Optional, Dict, List
 # Retriever Explanation Faithfullness:                                  #
 #=======================================================================#
 
-from resources.retrieval_online  import ExplainableAutoModelForRetrieval
+from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
 
 class AIPCForRetrieval:
     def __init__(self, retriever:ExplainableAutoModelForRetrieval, *, query_format:str='{query}') -> None:
@@ -228,7 +228,7 @@ class AIPCForRetrieval:
 # Generator Explanation Faithfullness:                                  #
 #=======================================================================#
 
-from resources.generation import ExplainableAutoModelForGeneration
+from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 
 class AIPCForGeneration:
     def __init__(self, generator:ExplainableAutoModelForGeneration) -> None:
