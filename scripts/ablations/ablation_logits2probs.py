@@ -1,17 +1,19 @@
 # %%
 import os
 import sys
-sys.path.insert(0, "..")
+sys.path.insert(0, "../..")
 
-token_path = os.path.join(os.path.dirname(__file__), '..', '.huggingface.token')
-results_path = os.path.join(os.path.dirname(__file__), 'results', 'logits2probs')
+# paths:
+TOKEN_PATH   = os.path.join(os.path.dirname(__file__), '..', '..', '.huggingface.token')
+RESULTS_PATH = os.path.join(os.path.dirname(__file__), 'results', 'logits2probs')
+os.makedirs(RESULTS_PATH, exist_ok=True)
 
 # %%
 from huggingface_hub import login
 from getpass import getpass
 
-if os.path.exists(token_path ):
-    with open(token_path , 'r') as file:
+if os.path.exists(TOKEN_PATH):
+    with open(TOKEN_PATH, 'r') as file:
         login(token=file.read())
 
 else: login(token=getpass(prompt='Huggingface login  token: '))
@@ -27,7 +29,7 @@ sample = dataset.shuffle(seed=42).select(range(200))
 
 # %% Load Pipeline:
 import torch
-from resources.generation import ExplainableAutoModelForGeneration, Focus
+from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration, Focus
 
 generator = ExplainableAutoModelForGeneration.from_pretrained(
     pretrained_model_name_or_path='meta-llama/Llama-3.1-8B-Instruct',
@@ -81,10 +83,10 @@ for item in tqdm(sample):
 import json
 import matplotlib.pyplot as plt
 
-with open(os.path.join(results_path, 'mae_offset.json'), 'r') as file:
+with open(os.path.join(RESULTS_PATH, 'mae_offset.json'), 'r') as file:
     mae_offset = json.load(file)
 
-with open(os.path.join(results_path, 'mae_relu.json'), 'r') as file:
+with open(os.path.join(RESULTS_PATH, 'mae_relu.json'), 'r') as file:
     mae_relu = json.load(file)
 
 _, ax = plt.subplots(1,1, figsize=(4,4))

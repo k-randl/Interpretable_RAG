@@ -1,18 +1,19 @@
 # %%
 import os
 import sys
-sys.path.insert(0, "..")
+sys.path.insert(0, "../..")
 
 import torch
-from resources.generation import ExplainableAutoModelForGeneration
-from code.Interpretable_RAG.resources.plotting_16_10_2025 import visualize_attribution_generator
+from src.Interpretable_RAG.plotting import visualize_attribution_generator
+from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 
 from huggingface_hub import login
 from getpass import getpass
 
 # %%
-if os.path.exists('.huggingface.token'):
-    with open('.huggingface.token', 'r') as file:
+TOKEN_PATH = os.path.join(os.path.dirname(__file__), '..', '..', '.huggingface.token')
+if os.path.exists(TOKEN_PATH):
+    with open(TOKEN_PATH, 'r') as file:
         login(token=file.read())
 
 else: login(token=getpass(prompt='Huggingface login  token: '))

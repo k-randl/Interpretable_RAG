@@ -1,10 +1,10 @@
 #%%
 import sys
-sys.path.insert(0, "..")
+sys.path.insert(0, "../..")
 
 import torch
-from code.Interpretable_RAG.resources.plotting_16_10_2025 import plot_importance_retriever, higlight_importance_retriever
-from resources.retrieval_online import ExplainableAutoModelForRetrieval
+from src.Interpretable_RAG.plotting import plot_importance_retriever, higlight_importance_retriever
+from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
 
 # We use msmarco query and passages as an example
 query =  "Where was Marie Curie born?"

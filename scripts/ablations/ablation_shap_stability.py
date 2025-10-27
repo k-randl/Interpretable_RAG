@@ -1,21 +1,23 @@
 # %%
 import os
 import sys
-sys.path.insert(0, "..")
+sys.path.insert(0, "../..")
 
-token_path = os.path.join(os.path.dirname(__file__), '..', '.huggingface.token')
-results_path = os.path.join(os.path.dirname(__file__), 'results', 'shap_stability')
+# paths:
+TOKEN_PATH   = os.path.join(os.path.dirname(__file__), '..', '..', '.huggingface.token')
+RESULTS_PATH = os.path.join(os.path.dirname(__file__), 'results', 'shap_stability')
+os.makedirs(RESULTS_PATH, exist_ok=True)
 
 #%%
 import torch
-from resources.generation import ExplainableAutoModelForGeneration
+from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 
 # %%
 from huggingface_hub import login
 from getpass import getpass
 
-if os.path.exists(token_path):
-    with open(token_path, 'r') as file:
+if os.path.exists(TOKEN_PATH):
+    with open(TOKEN_PATH, 'r') as file:
         login(token=file.read())
 
 else: login(token=getpass(prompt='Huggingface login  token: '))
@@ -31,7 +33,7 @@ sample_texts = [(item['query'], item['passages']['passage_text']) for item in da
 
 # %% Load Pipeline:
 import torch
-from resources.generation import ExplainableAutoModelForGeneration
+from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 
 generator = ExplainableAutoModelForGeneration.from_pretrained(
     pretrained_model_name_or_path='meta-llama/Llama-3.1-8B-Instruct',
@@ -47,10 +49,10 @@ from tqdm.autonotebook import tqdm
 START = 0
 
 if START > 0:
-    with open(os.path.join(results_path, 'std.json'), 'r') as file:
+    with open(os.path.join(RESULTS_PATH, 'std.json'), 'r') as file:
         shap_std = json.load(file)
 
-    with open(os.path.join(results_path, 'var.json'), 'r') as file:
+    with open(os.path.join(RESULTS_PATH, 'var.json'), 'r') as file:
         shap_var = json.load(file)
 
 else: shap_std, shap_var = [], []
@@ -119,10 +121,10 @@ for query, contexts in tqdm(sample_texts[START:]):
         }
 
     # save:
-    with open(os.path.join(results_path, 'std.json'), 'w') as file:
+    with open(os.path.join(RESULTS_PATH, 'std.json'), 'w') as file:
         json.dump(shap_std, file)
 
-    with open(os.path.join(results_path, 'var.json'), 'w') as file:
+    with open(os.path.join(RESULTS_PATH, 'var.json'), 'w') as file:
         json.dump(shap_var, file)
 
 #%%
@@ -159,7 +161,7 @@ def plot(ax, l, x, v_kl, v_mc):
 
 def plot_var(axs, ls, file_path):
     # load var:
-    with open(os.path.join(results_path, file_path), 'r') as file:
+    with open(os.path.join(RESULTS_PATH, file_path), 'r') as file:
         var = json.load(file)
 
     # vs monte carlo samples @ sample size 20:

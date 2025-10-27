@@ -1,21 +1,23 @@
 # %%
 import os
 import sys
-sys.path.insert(0, "..")
+sys.path.insert(0, "../..")
 
-token_path = os.path.join(os.path.dirname(__file__), '..', '.huggingface.token')
-results_path = os.path.join(os.path.dirname(__file__), 'results', 'shap_error')
+# paths:
+TOKEN_PATH   = os.path.join(os.path.dirname(__file__), '..', '..', '.huggingface.token')
+RESULTS_PATH = os.path.join(os.path.dirname(__file__), 'results', 'shap_error')
+os.makedirs(RESULTS_PATH, exist_ok=True)
 
 #%%
 import torch
-from resources.generation import ExplainableAutoModelForGeneration
+from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 
 # %%
 from huggingface_hub import login
 from getpass import getpass
 
-if os.path.exists(token_path):
-    with open(token_path, 'r') as file:
+if os.path.exists(TOKEN_PATH):
+    with open(TOKEN_PATH, 'r') as file:
         login(token=file.read())
 
 else: login(token=getpass(prompt='Huggingface login  token: '))
@@ -31,7 +33,7 @@ sample_texts = [(item['query'], item['passages']['passage_text']) for item in da
 
 # %% Load Pipeline:
 import torch
-from resources.generation import ExplainableAutoModelForGeneration, Focus
+from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration, Focus
 
 generator = ExplainableAutoModelForGeneration.from_pretrained(
     pretrained_model_name_or_path='meta-llama/Llama-3.1-8B-Instruct',
@@ -47,7 +49,7 @@ from tqdm.autonotebook import tqdm
 START = 0
 
 if START > 0:
-    with open(os.path.join(results_path, 'val.json'), 'r') as file:
+    with open(os.path.join(RESULTS_PATH, 'val.json'), 'r') as file:
         val = json.load(file)
 
 else: val = []
@@ -108,7 +110,7 @@ for query, contexts in tqdm(sample_texts[START:]):
             val[-1][max_samples]['monte carlo'][num_mc_samples] = approx_val.tolist()
 
     # save:
-    with open(os.path.join(results_path, 'val.json'), 'w') as file:
+    with open(os.path.join(RESULTS_PATH, 'val.json'), 'w') as file:
         json.dump(val, file)
 
 #%%
@@ -145,7 +147,7 @@ def plot(ax, l, x, v_kl, v_mc, alternative):
 
 def plot_func(axs, ls, func, alternative):
     # load var:
-    with open(os.path.join(results_path, 'val.json'), 'r') as file:
+    with open(os.path.join(RESULTS_PATH, 'val.json'), 'r') as file:
         var = json.load(file)
 
     # vs monte carlo samples @ sample size 20:
