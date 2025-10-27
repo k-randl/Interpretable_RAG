@@ -30,6 +30,7 @@ old/
 src/longdocfactscore/*
 
 # Specific files to ignore
+*.huggingface.token
 EFRA Validation dataset - Context Relevancy V2_modified.csv
 align_data.py
 generation.old.py
