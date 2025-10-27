@@ -97,11 +97,15 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         raise NotImplementedError()
 
-    def save_values(self, path:Optional[str]=None) -> Union[str, None]:
+    def save_values(self, path:Optional[str]=None, *, filter_special_tokens:bool=True, num_steps:int=100, batch_size:int=64) -> Union[str, None]:
         """Saves the explanation data to a file.
 
         Args:
-            path (str): The path where the values should be saved.
+            path (str):                             The path where the values should be saved.
+            filter_special_tokens (bool, optional): If `True` (default), set the importance of special tokens to 0.
+            num_steps (int, optional):              Number of approximation steps for the Rieman approximation
+                                                    of the integral in `intGrad` (default 100).
+            batch_size (int, optional):             Batch size used for calculating the gradients in `intGrad` (default 64).
 
         Returns:
             If `path` is not specified, returns the saved data instead.
@@ -112,19 +116,19 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
             'input': self.in_tokens
         }
 
-        try: data_to_save['grad'] = self.grad()
+        try: data_to_save['grad'] = self.grad(filter_special_tokens=filter_special_tokens)
         except NotImplementedError: pass
 
-        try: data_to_save['aGrad'] = self.aGrad()
+        try: data_to_save['aGrad'] = self.aGrad(filter_special_tokens=filter_special_tokens)
         except NotImplementedError: pass
 
-        try: data_to_save['repAGrad'] = self.repAGrad()
+        try: data_to_save['repAGrad'] = self.repAGrad(filter_special_tokens=filter_special_tokens)
         except NotImplementedError: pass
 
-        try: data_to_save['gradIn'] = self.gradIn()
+        try: data_to_save['gradIn'] = self.gradIn(filter_special_tokens=filter_special_tokens)
         except NotImplementedError: pass
 
-        try: data_to_save['intGrad'] = self.intGrad()
+        try: data_to_save['intGrad'] = self.intGrad(filter_special_tokens=filter_special_tokens, num_steps=num_steps, batch_size=batch_size)
         except NotImplementedError: pass
 
         if path is None: return data_to_save
