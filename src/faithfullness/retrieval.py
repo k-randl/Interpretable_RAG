@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 from tqdm.autonotebook import tqdm
 from typing import Optional, Dict, List
 
+from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
+
 #=======================================================================#
 # Retriever Explanation Faithfullness:                                  #
 #=======================================================================#
-
-from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
 
 class AIPCForRetrieval:
     def __init__(self, retriever:ExplainableAutoModelForRetrieval, *, query_format:str='{query}') -> None:
@@ -223,102 +223,3 @@ class AIPCForRetrieval:
         ax.legend()
         ax.set_xlabel('Masked Tokens [%]')
         ax.set_ylabel('Normalized Similarity $\Delta$ [%]')
-
-#=======================================================================#
-# Generator Explanation Faithfullness:                                  #
-#=======================================================================#
-
-from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
-
-class AIPCForGeneration:
-    def __init__(self, generator:ExplainableAutoModelForGeneration) -> None:
-        '''Initialize the AIPCForGeneration evaluator. This class computes
-        area-inside-perturbation-curves (AIPC) for retrieval explanations by iteratively
-        masking tokens in retrieved contexts according to relevancy scores and measuring
-        the change in similarity. The object stores the retriever and a fixed perturbation
-        grid `xs` created after init.
-
-        Args:
-            generator (ExplainableAutoModelForGeneration):
-                Explainable generation model that provides .explain_generate(...) and exposes tokenizers/encoders required for
-                perturbation experiments.
-        '''
-        self.generator    = generator
-        self.xs           = np.arange(0., 1.01, .01)
-
-    def __call__(self, data:Dict[str, List], k:int=5, method:str='intGrad', *, step:int=1, normalize:bool=True, **kwargs) -> float:
-        '''Compute a faithfulness score by comparing area-under-curve (AUC) values for two
-        perturbation strategies: perturbing most-relevant features first (MoRF) and
-        perturbing least-relevant features first (LeRF).
-        This method:
-        - Generates the MoRF perturbation curve and stores the result in self.morf.
-        - Generates the LeRF perturbation curve and stores the result in self.lerf.
-        - Computes the mean curve across examples for each strategy and computes the
-            area under each mean curve.
-        - Returns the absolute difference between the two AUC values.
-
-        Args:
-            data (Dict[str, List]):     Input data structure expected by self.perturbe (typically a mapping of
-                                        input fields to lists/arrays of instances and any required metadata).
-            k (int, optional):          Number of elements/features to consider during perturbation (e.g. top-k).
-                                        Defaults to 5.
-            method (str, optional):     Name of the attribution/importance method to use (forwarded to
-                                        self.perturbe). Defaults to 'intGrad'.
-            step (int, optional):       Perturbation granularity / number of features to remove per perturbation
-                                        step (forwarded to self.perturbe). Defaults to 1.
-            normalize (bool, optional): If `True`, y axis is normalized.
-            **kwargs:                   Additional keyword arguments forwarded to self.retriever.forward.
-
-        Returns:
-            aipc (float):
-                Absolute difference between the area under the mean MoRF curve and the
-                area under the mean LeRF curve. A larger value indicates a greater
-                separation between the two perturbation strategies.
-        '''
-        
-        # perturbation curve most relevant first:
-        self.morf = self.perturbe(data, True, k, method, step=step, desc='Computing MoRF', **kwargs)
-
-        # perturbation curve least relevant first:
-        self.lerf = self.perturbe(data, False, k, method, step=step, desc='Computing LeRF', **kwargs)
-
-        # set last value to mean max_error:
-        max_err = 0.5 * (self.morf[:,-1] + self.lerf[:,-1])
-        self.morf[:,-1] = max_err
-        self.lerf[:,-1] = max_err
-
-        # normalize:
-        if normalize:
-            self.morf /= max_err[:,None]
-            self.lerf /= max_err[:,None]
-
-        # return area inside curves:
-        return self.get_aipc()
-
-    def perturbe(self, data:Dict[str, List], descending:bool, k:int=5, method:str='intGrad', *, step:int=1, desc:str='Computing perturbations', **kwargs):
-        pass
-
-    def get_aipc(self, *, k:Optional[int]=None) -> float:
-        '''Compute the area inside the pertubation curves (AIPC) between the mean MORF
-        and LERF curves using the trapezoidal rule over self.xs.
-
-        Args:
-            k (int, optional):  Number of top documents (rows) to consider from self.morf and self.lerf.
-                                If None (default), all available documents (len(self.morf)) are used.
-        
-        Returns:
-            aipc (float):
-                Aarea inside the pertubation curves (|∫ mean(self.morf[:k], axis=0) dx - ∫ mean(self.lerf[:k], axis=0) dx|)
-        '''
-        
-        # set k to max available docs if unset:
-        if k is None: k = len(self.morf)
-
-        # return aipc:
-        return np.abs(
-            np.trapezoid(self.morf[:k].mean(axis=0), self.xs) -
-            np.trapezoid(self.lerf[:k].mean(axis=0), self.xs)
-        )
- 
-    def plot(self, ax:plt.Axes, *, k:Optional[int]=None) -> None:
-        pass

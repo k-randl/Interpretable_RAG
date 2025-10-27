@@ -1,6 +1,6 @@
 # %%
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '5,6,7'
 import sys
 sys.path.insert(0, "..")
 
@@ -36,13 +36,14 @@ sample = sample.map(lambda item: {'query':item['query'], 'context':item['passage
 #====================================================================================================#
 
 import torch
-from resources.retrieval_online import ExplainableAutoModelForRetrieval
-from resources.faithfulllness import AIPCForRetrieval
+from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
+from src.faithfullness.retrieval import AIPCForRetrieval
 
 retriever = ExplainableAutoModelForRetrieval.from_pretrained(
     'facebook/dragon-plus-query-encoder',
     'facebook/dragon-plus-context-encoder'
 ).to('cuda' if torch.cuda.is_available() else 'cpu')
+retriever.tokenizer.model_max_length = 256
 
 aipc = AIPCForRetrieval(retriever, query_format='{query}')
 
@@ -50,10 +51,10 @@ aipc = AIPCForRetrieval(retriever, query_format='{query}')
 import json
 import matplotlib.pyplot as plt
 
-results_dragon = {'gradIn':{}, 'intGrad':{}}
+results_dragon = {'intGrad':{}, 'gradIn':{}}
 
 for method in results_dragon:
-    aipc(sample, method=method, step=1, k=5)
+    aipc(sample, method=method, step=10, k=5)
 
     for k in range(5):
         # get aipc:
@@ -62,7 +63,7 @@ for method in results_dragon:
         # plot pc:
         fig, ax = plt.subplots(1, 1)
         aipc.plot(ax, k=k+1)
-        plt.safefig(os.path.join(results_path, f'dragon_{method}_k{k+1:d}.pdf'))
+        plt.savefig(os.path.join(results_path, f'dragon_{method}_k{k+1:d}.pdf'))
 
 with open(os.path.join(results_path, 'aipc.json'), 'w') as file:
     json.dump(results_dragon, file)
@@ -72,8 +73,8 @@ with open(os.path.join(results_path, 'aipc.json'), 'w') as file:
 #====================================================================================================#
 
 import torch
-from resources.retrieval_online import ExplainableAutoModelForRetrieval
-from resources.faithfulllness import AIPCForRetrieval
+from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
+from src.faithfullness.retrieval import AIPCForRetrieval
 
 retriever = ExplainableAutoModelForRetrieval.from_pretrained(
     'Snowflake/snowflake-arctic-embed-l-v2.0',
@@ -86,10 +87,10 @@ aipc = AIPCForRetrieval(retriever, query_format='query: {query}')
 import json
 import matplotlib.pyplot as plt
 
-results_snowflake = {'gradIn':{}, 'intGrad':{}}
+results_snowflake = {'intGrad':{}, 'gradIn':{}}
 
 for method in results_snowflake:
-    aipc(sample, method=method, step=1, k=5)
+    aipc(sample, method=method, step=10, k=5)
 
     for k in range(5):
         # get aipc:
@@ -98,7 +99,7 @@ for method in results_snowflake:
         # plot pc:
         fig, ax = plt.subplots(1, 1)
         aipc.plot(ax, k=k+1)
-        plt.safefig(os.path.join(results_path, f'snowflake_{method}_k{k+1:d}.pdf'))
+        plt.savefig(os.path.join(results_path, f'snowflake_{method}_k{k+1:d}.pdf'))
 
 with open(os.path.join(results_path, 'aipc.json'), 'w') as file:
     json.dump(results_snowflake, file)
