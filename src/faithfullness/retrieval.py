@@ -2,7 +2,9 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.autonotebook import tqdm
-from typing import Optional, Dict, List
+
+from typing import Optional, Dict, List, Tuple
+from numpy.typing import NDArray
 
 from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
 
@@ -31,7 +33,7 @@ class AIPCForRetrieval:
         self.query_format = query_format
         self.xs           = np.arange(0., 1.01, .01)
 
-    def __call__(self, data:Dict[str, List], k:int=5, method:str='intGrad', *, step:int=1, normalize:bool=True, **kwargs) -> float:
+    def __call__(self, data:Dict[str, List], k:int=5, method:str='intGrad', *, step:int=1, normalize:bool=True, method_args:Dict[str, any]={}, **kwargs) -> float:
         '''Compute a faithfulness score by comparing area-under-curve (AUC) values for two
         perturbation strategies: perturbing most-relevant features first (MoRF) and
         perturbing least-relevant features first (LeRF).
@@ -43,16 +45,17 @@ class AIPCForRetrieval:
         - Returns the absolute difference between the two AUC values.
 
         Args:
-            data (Dict[str, List]):     Input data structure expected by self.perturbe (typically a mapping of
-                                        input fields to lists/arrays of instances and any required metadata).
-            k (int, optional):          Number of elements/features to consider during perturbation (e.g. top-k).
-                                        Defaults to 5.
-            method (str, optional):     Name of the attribution/importance method to use (forwarded to
-                                        self.perturbe). Defaults to 'intGrad'.
-            step (int, optional):       Perturbation granularity / number of features to remove per perturbation
-                                        step (forwarded to self.perturbe). Defaults to 1.
-            normalize (bool, optional): If `True`, y axis is normalized.
-            **kwargs:                   Additional keyword arguments forwarded to self.retriever.forward.
+            data (Dict[str, List]):       Input data structure expected by self.perturbe (typically a mapping of
+                                          input fields to lists/arrays of instances and any required metadata).
+            k (int, optional):            Number of elements/features to consider during perturbation (e.g. top-k).
+                                          Defaults to 5.
+            method (str, optional):       Name of the attribution/importance method to use (forwarded to
+                                          self.perturbe). Defaults to 'intGrad'.
+            step (int, optional):         Perturbation granularity / number of features to remove per perturbation
+                                          step (forwarded to self.perturbe). Defaults to 1.
+            normalize (bool, optional):   If `True`, y axis is normalized.
+            method_args (dict, optional): Keyword arguments forwarded to `method`.
+            **kwargs:                     Additional keyword arguments forwarded to self.retriever.forward.
 
         Returns:
             aipc (float):
@@ -62,10 +65,10 @@ class AIPCForRetrieval:
         '''
         
         # perturbation curve most relevant first:
-        self.morf = self.perturbe(data, True, k, method, step=step, desc='Computing MoRF', **kwargs)
+        self.morf = self.perturbe(data, True, k, method, step=step, method_args=method_args, desc='Computing MoRF', **kwargs)
 
         # perturbation curve least relevant first:
-        self.lerf = self.perturbe(data, False, k, method, step=step, desc='Computing LeRF', **kwargs)
+        self.lerf = self.perturbe(data, False, k, method, step=step, method_args=method_args, desc='Computing LeRF', **kwargs)
 
         # set last value to mean max_error:
         max_err = 0.5 * (self.morf[:,-1] + self.lerf[:,-1])
@@ -74,13 +77,14 @@ class AIPCForRetrieval:
 
         # normalize:
         if normalize:
-            self.morf /= max_err[:,None]
-            self.lerf /= max_err[:,None]
+            max_err   = np.abs(max_err[:,None])
+            self.morf /= max_err
+            self.lerf /= max_err
 
         # return area inside curves:
         return self.get_aipc()
 
-    def perturbe(self, data:Dict[str, List], descending:bool, k:int=5, method:str='intGrad', *, step:int=1, desc:str='Computing perturbations', **kwargs):
+    def perturbe(self, data:Dict[str, List], descending:bool, k:int=5, method:str='intGrad', *, step:int=1, method_args:Dict[str, any]={}, desc:str='Computing perturbations', **kwargs):
         '''Compute perturbation-based fidelity curves by progressively masking context tokens
         and measuring the change in retrieval similarity.
         For each (query, context) pair in `data` this method:
@@ -98,20 +102,21 @@ class AIPCForRetrieval:
             curves stacked into a NumPy array.
 
         Args:
-             data (Dict[str, List]):    A dict with keys 'query' and 'context', each mapping
-                                        to a list of tokenized inputs (or inputs compatible with the retriever).
-                                        The lengths of these lists should match.
-             descending (bool):         If True, treat larger relevancy scores as more important
-                                        (i.e., mask tokens with larger relevancy first). If False, mask the
-                                        least-relevant tokens first.
-             k (int, optional):         Number of top retrieved contexts to consider per query.
-                                        Defaults to 5.
-             method (str, optional):    Name of the explanation method to call on the
-                                        retriever. Defaults to 'IntGrad'.
-             step (int, optional):      Number of additional tokens to mask at
-                                        each perturbation step. Must be >= 1. Defaults to 1.
-             desc (str, optional):      Optional description for the tqdm progress bar.
-             **kwargs:                  Additional keyword arguments forwarded to self.retriever.forward.
+            data (Dict[str, List]):       A dict with keys 'query' and 'context', each mapping
+                                          to a list of tokenized inputs (or inputs compatible with the retriever).
+                                          The lengths of these lists should match.
+            descending (bool):            If True, treat larger relevancy scores as more important
+                                          (i.e., mask tokens with larger relevancy first). If False, mask the
+                                          least-relevant tokens first.
+            k (int, optional):            Number of top retrieved contexts to consider per query.
+                                          Defaults to 5.
+            method (str, optional):       Name of the explanation method to call on the
+                                          retriever. Defaults to 'IntGrad'.
+            step (int, optional):         Number of additional tokens to mask at
+                                          each perturbation step. Must be >= 1. Defaults to 1.
+            method_args (dict, optional): Keyword arguments forwarded to `method`.
+            desc (str, optional):         Optional description for the tqdm progress bar.
+             **kwargs:                    Additional keyword arguments forwarded to self.retriever.forward.
 
         Returns:
              numpy.ndarray:
@@ -133,7 +138,7 @@ class AIPCForRetrieval:
             )
 
             # calculate relevancy scores:
-            relevancy:torch.Tensor = getattr(self.retriever, method)()['context']
+            relevancy:torch.Tensor = getattr(self.retriever, method)(**method_args)['context']
 
             with torch.no_grad():
                 # get original input:
@@ -193,32 +198,85 @@ class AIPCForRetrieval:
             np.trapezoid(self.morf[:k].mean(axis=0), self.xs) -
             np.trapezoid(self.lerf[:k].mean(axis=0), self.xs)
         )
- 
-    def plot(self, ax:plt.Axes, *, k:Optional[int]=None) -> None:
-        '''Render averaged MoRF and LeRF fidelity curves on a Matplotlib axis.
-        This method computes the mean of the first `k` rows of `self.morf` and
-        `self.lerf` along the first axis and plots the resulting MoRF and LeRF
-        curves against `self.xs`. The area between the two curves is filled to
-        visualize the gap, an equal aspect ratio is enforced, and axis labels
-        and a legend are added.
+
+    def plot_lerf(self, ax:plt.Axes, *, k:Optional[int]=None, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+        '''Plot the LeRF curve on a matplotlib axis.
+
+        Compute the mean of the stored LeRF values across the first dimension for the first
+        `k` documents and plot the resulting curve against self.xs on the provided Axes.
 
         Args:
             ax (matplotlib.axes.Axes):  The axes on which to draw the plot.
-            k (int, optional):          Number of top documents (rows) to consider from self.morf and self.lerf.
-                                        If None (default), all available documents (len(self.morf)) are used.
+            k (int, optional):          Number of top documents (rows) to consider.
+                                        If None (default) all available rows are used.
+            label (str, optional):      Label to apply to the plotted line (default: 'LeRF').
+            **kwargs:                   Additional keyword arguments forwarded to matplotlib.axes.Axes.plot
+                                        (e.g., color, linestyle, linewidth).
+        
+        Returns:
+            `Tuple[numpy.ndarray, numpy.ndarray]` of x and y yalues of the plotted curve.
+        '''
+
+
+        # set k to max available docs if unset:
+        if k is None: k = len(self.lerf)
+
+        # calculate means and convert to percent:
+        xs = self.xs * 100.
+        ys = self.lerf[:k].mean(axis=0) * 100.
+
+        # plot to axis:
+        ax.plot(xs, ys, label=label, **kwargs)
+
+        return xs, ys
+
+    def plot_morf(self, ax:plt.Axes, *, k:Optional[int]=None, label:str='MoRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+        '''Plot the MoRF curve on a matplotlib axis.
+
+        Compute the mean of the stored MoRF values across the first dimension for the first
+        `k` documents and plot the resulting curve against self.xs on the provided Axes.
+
+        Args:
+            ax (matplotlib.axes.Axes):  The axes on which to draw the plot.
+            k (int, optional):          Number of top documents (rows) to consider.
+                                        If None (default) all available rows are used.
+            label (str, optional):      Label to apply to the plotted line (default: 'MoRF').
+            **kwargs:                   Additional keyword arguments forwarded to matplotlib.axes.Axes.plot
+                                        (e.g., color, linestyle, linewidth).
+        
+        Returns:
+            `Tuple[numpy.ndarray, numpy.ndarray]` of x and y yalues of the plotted curve.
         '''
 
         # set k to max available docs if unset:
         if k is None: k = len(self.morf)
 
-        # calculate means:
-        ys_morf = self.morf[:k].mean(axis=0)
-        ys_lerf = self.lerf[:k].mean(axis=0)
+        # calculate means and convert to percent:
+        xs = self.xs * 100.
+        ys = self.morf[:k].mean(axis=0) * 100.
 
         # plot to axis:
-        ax.plot(self.xs, ys_morf, label='MoRF')
-        ax.plot(self.xs, ys_lerf, label='LeRF')
-        ax.fill_between(self.xs, ys_morf, ys_lerf, color='lightgray')
+        ax.plot(xs, ys, label=label, **kwargs)
+
+        return xs, ys
+
+    def plot(self, ax:plt.Axes, *, k:Optional[int]=None) -> None:
+        '''Render averaged MoRF and LeRF fidelity curves on a Matplotlib axis.
+        This method computes the mean of the first `k` documents and plots the
+        resulting MoRF and LeRF curves. The area between the two curves is filled to
+        visualize the gap, an equal aspect ratio is enforced, and axis labels
+        and a legend are added.
+
+        Args:
+            ax (matplotlib.axes.Axes):  The axes on which to draw the plot.
+            k (int, optional):          Number of top documents (rows) to consider.
+                                        If None (default), all available documents are used.
+        '''
+
+        # plot to axis:
+        _, ys_morf = self.plot_morf(ax, k=k)
+        _, ys_lerf = self.plot_lerf(ax, k=k)
+        ax.fill_between(self.xs*100., ys_morf, ys_lerf, color='lightgray')
         ax.set_aspect(1)
         ax.legend()
         ax.set_xlabel('Masked Tokens [%]')
