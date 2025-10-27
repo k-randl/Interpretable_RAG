@@ -283,6 +283,12 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                 intGrad['query']   += (batch_qry_embeds.grad.detach().sum(dim=(0)) * qry_mult).sum(dim=-1).cpu()
                 intGrad['context'] += (batch_ctx_embeds.grad.detach().sum(dim=(0)) * ctx_mult).sum(dim=-1).cpu()
 
+            # free some memory:
+            del batch_qry_embeds
+            del batch_ctx_embeds
+            del batch_qry_similarity
+            del batch_ctx_similarity
+
         # calculate total attribition scaled by number of used tokens:
         total_qry = (in_qry_similarity - bl_qry_similarity) / qry_attention_mask.detach().cpu().numpy().mean(axis=1)
         total_ctx = (in_ctx_similarity - bl_ctx_similarity) / ctx_attention_mask.detach().cpu().numpy().mean(axis=1)
