@@ -1,21 +1,21 @@
-# File di cache e di sistema
+# Cache and system files
 .idea/
 __pycache__/
 *.py[cod]
 *$py.class
 .ipynb_checkpoints/
 
-# Artefatti di build
+# Build artifacts
 build/
 dist/
 *.egg-info/
 
-# File di dati generati o temporanei
+# Generated or temporary data files
 *.xlsx
 *.pkl
 data/*/
 
-# Cartelle di output
+# Output folders
 outputs_evaluation/
 outputs_retrieved/
 results/
@@ -23,11 +23,13 @@ plots/
 summaries/
 index_snowflake/
 
-# Cartella con file vecchi
+# Folder with old files
 old/
 
-# File specifici da ignorare
+# External resources
 src/longdocfactscore/*
+
+# Specific files to ignore
 EFRA Validation dataset - Context Relevancy V2_modified.csv
 align_data.py
 generation.old.py
