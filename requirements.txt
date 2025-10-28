@@ -1,3 +1,5 @@
+accellerate
+ipython
 matplotlib
 nltk
 numpy
