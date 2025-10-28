@@ -96,7 +96,7 @@ class ExplainableAutoModelForRAG:
         return chat
     
     @property
-    def retriever_document_importance(self) -> NDArray[np.float_]:
+    def retriever_document_importance(self) -> NDArray[np.float64]:
         '''Normalized document importance estimated by the retriever.'''
 
         if not hasattr(self, 'retrieved_sim'):
@@ -108,7 +108,7 @@ class ExplainableAutoModelForRAG:
         return doc_importance_retriever
     
     @property
-    def generator_document_importance(self) -> NDArray[np.float_]:
+    def generator_document_importance(self) -> NDArray[np.float64]:
         '''Normalized document importance of the generator.'''
         #doc_importance_generator = self.generator.get_shapley_values('context', 'token').sum(axis=1)
         doc_importance_generator = self.generator.get_shapley_values('context', 'sequence')[:,0]
@@ -117,12 +117,12 @@ class ExplainableAutoModelForRAG:
         return doc_importance_generator
     
     @property
-    def mean_document_importance(self) -> NDArray[np.float_]:
+    def mean_document_importance(self) -> NDArray[np.float64]:
         '''Mean normalized document importance of the rag pipeline.'''
         return (self.retriever_document_importance + self.generator_document_importance) / 2.
     
     @property
-    def retriever_query_importance(self) -> NDArray[np.float_]:
+    def retriever_query_importance(self) -> NDArray[np.float64]:
         '''Normalized word importance of the query for retrieving.'''
 
         # get special tokens:
@@ -157,7 +157,7 @@ class ExplainableAutoModelForRAG:
         return qry_importance_retriever
     
     @property
-    def generator_query_importance(self) -> NDArray[np.float_]:
+    def generator_query_importance(self) -> NDArray[np.float64]:
         '''Normalized word importance of the query during generation.'''
         #qry_importance_generator = self.generator.get_shapley_values('query', 'token').sum(axis=1)
         qry_importance_generator = self.generator.get_shapley_values('query', 'sequence')[:,0]
@@ -166,6 +166,6 @@ class ExplainableAutoModelForRAG:
         return qry_importance_generator
     
     @property
-    def mean_query_importance(self) -> NDArray[np.float_]:
+    def mean_query_importance(self) -> NDArray[np.float64]:
         '''Mean word importance of the query for the rag pipeline.'''
         return (self.retriever_query_importance + self.generator_query_importance) / 2.

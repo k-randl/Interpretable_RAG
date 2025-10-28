@@ -19,7 +19,7 @@ from typing import List, Literal, Tuple, Callable, Optional, Union
 # General plotting functions:                                        #
 #====================================================================#
 
-def plot_token_vbars(ax:Axes, scores:NDArray[np.float_], tokens:List[str], document_names:Optional[List[str]]=None, *,
+def plot_token_vbars(ax:Axes, scores:NDArray[np.float64], tokens:List[str], document_names:Optional[List[str]]=None, *,
         normalize:bool=False,
         skip_tokens:List[str]=[],
         cmap:str='tab10',
@@ -29,7 +29,7 @@ def plot_token_vbars(ax:Axes, scores:NDArray[np.float_], tokens:List[str], docum
 
     Args:
         ax (matplotlib.axes.Axes):   `matplotlib.axes.Axes` object.
-        scores (NDArray[np.float_]): A 2D array of attribution scores with shape `(len(documents), len(tokens))`,
+        scores (NDArray[np.float64]): A 2D array of attribution scores with shape `(len(documents), len(tokens))`,
                                      where each row represents a document and each column corresponds to a token's
                                      attribution score.
         tokens (List[str]):          A list of token strings corresponding to the scores. Length must match the number
@@ -87,7 +87,7 @@ def plot_token_vbars(ax:Axes, scores:NDArray[np.float_], tokens:List[str], docum
     for tick_loc in range(len(tokens)):
         ax.axvline(x=tick_loc, color='lightgray', linewidth=0.5, zorder=0)
 
-def highlight_dominant_passages(scores:NDArray[np.float_], tokens:List[str], title:str, document_names:Optional[List[str]]=None, *,
+def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], title:str, document_names:Optional[List[str]]=None, *,
         threshold:float=0.0,
         total:Optional[float]=None,
         skip_tokens:List[str]=[],
@@ -99,7 +99,7 @@ def highlight_dominant_passages(scores:NDArray[np.float_], tokens:List[str], tit
     at least `threshold` of the total positive attribution scores at that token.
 
     Args:
-        scores (NDArray[np.float_]):    A 2D array of attribution scores with shape `(len(documents), len(tokens))`,
+        scores (NDArray[np.float64]):    A 2D array of attribution scores with shape `(len(documents), len(tokens))`,
                                         where each row represents a document and each column corresponds to a token's attribution score.
         tokens (List[str]):             A list of token strings corresponding to the scores.
                                         Length must match the number of columns in `scores`.
@@ -188,7 +188,7 @@ def highlight_dominant_passages(scores:NDArray[np.float_], tokens:List[str], tit
     
     return html_text, html_legend
 
-def plot_document_vbars(ax:Axes, scores:NDArray[np.float_], document_names:Optional[List[str]]=None, *,
+def plot_document_vbars(ax:Axes, scores:NDArray[np.float64], document_names:Optional[List[str]]=None, *,
         normalize:bool=False,
         cmap:str='tab10',
         **kwargs
@@ -197,7 +197,7 @@ def plot_document_vbars(ax:Axes, scores:NDArray[np.float_], document_names:Optio
 
     Args:
         ax (matplotlib.axes.Axes):   `matplotlib.axes.Axes` object.
-        scores (NDArray[np.float_]): A 1D array of attribution scores with shape `(len(documents),)`,
+        scores (NDArray[np.float64]): A 1D array of attribution scores with shape `(len(documents),)`,
                                      where each item represents a document's attribution score.
         document_names (List[str]):  An optional list of names of the documents.
         normalize (bool):            If `True`, normalizes the attribution scores across documents so
@@ -242,7 +242,7 @@ def plot_document_vbars(ax:Axes, scores:NDArray[np.float_], document_names:Optio
     for tick_loc in ax.get_yticks(minor=False):
         ax.axhline(y=tick_loc, color='lightgray', linewidth=0.5, zorder=0)
 
-def plot_waterfall(ax:Axes, scores:NDArray[np.float_], x_labels:Optional[List[str]], *,
+def plot_waterfall(ax:Axes, scores:NDArray[np.float64], x_labels:Optional[List[str]], *,
         base_value:float=0.0,
         normalize:bool=False,
         cmap:str='tab10',
@@ -252,7 +252,7 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float_], x_labels:Optional[List[st
     
     Args:
         ax (matplotlib.axes.Axes):   `matplotlib.axes.Axes` object.
-        scores (NDArray[np.float_]): A 1D array of attribution scores with shape `(len(documents),)`,
+        scores (NDArray[np.float64]): A 1D array of attribution scores with shape `(len(documents),)`,
                                      where each item represents a document's attribution score.
         x_labels (List[str]):        The list of x-axis labels.
         base_value (float):          Base value to start the waterfall from (default: `0.0`).
