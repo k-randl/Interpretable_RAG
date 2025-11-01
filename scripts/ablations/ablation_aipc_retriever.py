@@ -9,9 +9,11 @@ RESULTS_PATH = os.path.join(os.path.dirname(__file__), 'results', 'aipc_retrieve
 os.makedirs(RESULTS_PATH, exist_ok=True)
 
 # parameters:
-METHODS      = {'intGrad':{'num_steps':100, 'batch_size':32, 'verbose':False},
-                'intGrad':{'num_steps':50,  'batch_size':32, 'verbose':False},
-                'gradIn': {}}
+METHODS      = [('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False}),
+                ('intGrad', {'num_steps':50,  'batch_size':16, 'verbose':False}),
+                ('intGrad', {'num_steps':10,  'batch_size':16, 'verbose':False}),
+                ('gradIn',  {}),
+                ('aGrad',   {})]
 STEP_SIZE    = 1
 NUM_DOCS     = 5
 
@@ -37,6 +39,66 @@ sample = dataset.shuffle(seed=42).select(range(200))
 # Set dataset format:
 sample = sample.map(lambda item: {'query':item['query'], 'context':item['passages']['passage_text']})
 
+# %%
+import os
+import json
+import pickle
+import matplotlib.pyplot as plt
+
+def test(aipc, name):
+    # Load curves file if it exists:
+    curves_path, curves = os.path.join(RESULTS_PATH, f'curves_{name}.pkl'), {}
+    if os.path.exists(curves_path):
+        with open(curves_path, 'rb') as file:
+            curves = pickle.load(file)
+
+    # Load scores file if it exists:
+    scores_path, scores = os.path.join(RESULTS_PATH, f'scores_{name}.json'), {}
+    if os.path.exists(scores_path):
+        with open(scores_path, 'r') as file:
+            scores = json.load(file)
+
+    # Test methods:
+    for method, kwargs in METHODS:
+        # get key:
+        if method == 'intGrad': key = f'intGrad (n = {kwargs["num_steps"]:d})'
+        else:                   key = method
+
+        # skip method if already computed:
+        if (key in curves) and (key in scores):
+            continue
+
+        # run faithfullness test:
+        aipc(sample,
+            method=method, method_args=kwargs,
+            step=STEP_SIZE, k=NUM_DOCS,
+            output_attentions=True, output_hidden_states=True
+        )
+
+        # save curves:
+        curves[key] = {
+            'xs':   aipc.xs,
+            'morf': aipc.morf,
+            'lerf': aipc.lerf
+        }
+        with open(curves_path, 'wb') as file:
+            pickle.dump(curves, file)
+
+        # save scores:
+        scores[key] = {}
+        for k in range(NUM_DOCS):
+            # get aipc:
+            scores[key][f'k = {k+1:d}'] = aipc.get_aipc(k=k+1)
+
+            # plot pc:
+            fig, ax = plt.subplots(1, 1)
+            aipc.plot(ax, k=k+1)
+            if method == 'intGrad': plt.savefig(os.path.join(RESULTS_PATH, f'{name}_{method}_n{kwargs["num_steps"]:d}_k{k+1:d}.pdf'))
+            else:                   plt.savefig(os.path.join(RESULTS_PATH, f'{name}_{method}_k{k+1:d}.pdf'))
+
+        with open(scores_path, 'w') as file:
+            json.dump(scores, file)
+
 # %%% ===============================================================================================#
 # Load Dragon Pipeline:                                                                              #
 #====================================================================================================#
@@ -52,44 +114,7 @@ retriever = ExplainableAutoModelForRetrieval.from_pretrained(
 retriever.tokenizer.model_max_length = 256
 
 aipc = AIPCForRetrieval(retriever, query_format='{query}')
-
-# %%
-import json
-import pickle
-import matplotlib.pyplot as plt
-
-scores_dragon = {m:{} for m in METHODS}
-curves_dragon = {m:{} for m in METHODS}
-
-for method in METHODS:
-    # get key:
-    if method == 'intGrad': key = f'intGrad (n = {METHODS[method]["num_steps"]:d})'
-    else:                   key = method
-
-    # run faithfullness test:
-    aipc(sample, method=method, method_args=METHODS[method], step=STEP_SIZE, k=NUM_DOCS)
-
-    for k in range(NUM_DOCS):
-        # get aipc:
-        scores_dragon[key][f'k = {k+1:d}'] = aipc.get_aipc(k=k+1)
-        curves_dragon[key] = {
-            'xs':   aipc.xs,
-            'morf': aipc.morf,
-            'lerf': aipc.lerf
-        }
-
-        # plot pc:
-        fig, ax = plt.subplots(1, 1)
-        aipc.plot(ax, k=k+1)
-        if method == 'intGrad': plt.savefig(os.path.join(RESULTS_PATH, f'dragon_{key}_n{METHODS[method]["num_steps"]:d}_k{k+1:d}.pdf'))
-        else:                   plt.savefig(os.path.join(RESULTS_PATH, f'dragon_{key}_k{k+1:d}.pdf'))
-
-with open(os.path.join(RESULTS_PATH, 'scores_dragon.json'), 'w') as file:
-    json.dump(scores_dragon, file)
-
-with open(os.path.join(RESULTS_PATH, 'curves_dragon.json'), 'wb') as file:
-    pickle.dump(curves_dragon, file)
-
+test(aipc, 'dragon')
 
 # %%% ===============================================================================================#
 # Load Snowflake Pipeline:                                                                           #
@@ -105,64 +130,30 @@ retriever = ExplainableAutoModelForRetrieval.from_pretrained(
 ).to('cuda' if torch.cuda.is_available() else 'cpu')
 
 aipc = AIPCForRetrieval(retriever, query_format='query: {query}')
+test(aipc, 'snowflake')
 
 # %%
 import json
 import pickle
 import matplotlib.pyplot as plt
 
-scores_snowflake = {m:{} for m in METHODS}
-curves_snowflake = {m:{} for m in METHODS}
-
-for method in METHODS:
-    # get key:
-    if method == 'intGrad': key = f'intGrad (n = {METHODS[method]["num_steps"]:d})'
-    else:                   key = method
-
-    # run faithfullness test:
-    aipc(sample, method=method, method_args=METHODS[method], step=STEP_SIZE, k=NUM_DOCS)
-
-    for k in range(NUM_DOCS):
-        # get aipc:
-        scores_snowflake[method][f'k = {k+1:d}'] = aipc.get_aipc(k=k+1)
-        curves_snowflake[method] = {
-            'xs':   aipc.xs,
-            'morf': aipc.morf,
-            'lerf': aipc.lerf
-        }
-
-        # plot pc:
-        fig, ax = plt.subplots(1, 1)
-        aipc.plot(ax, k=k+1)
-        if method == 'intGrad': plt.savefig(os.path.join(RESULTS_PATH, f'snowflake_{key}_n{METHODS[method]["num_steps"]:d}_k{k+1:d}.pdf'))
-        else:                   plt.savefig(os.path.join(RESULTS_PATH, f'snowflake_{key}_k{k+1:d}.pdf'))
-
-with open(os.path.join(RESULTS_PATH, 'scores_snowflake.json'), 'w') as file:
-    json.dump(scores_snowflake, file)
-
-with open(os.path.join(RESULTS_PATH, 'curves_snowflake.json'), 'wb') as file:
-    pickle.dump(curves_snowflake, file)
-
-# %%
-import json
-import pickle
-import matplotlib.pyplot as plt
-
-with open(os.path.join(RESULTS_PATH, 'curves_dragon.json'), 'rb') as file:
+with open(os.path.join(RESULTS_PATH, 'curves_dragon.pkl'), 'rb') as file:
     curves_dragon = pickle.load(file)
 
-with open(os.path.join(RESULTS_PATH, 'curves_snowflake.json'), 'rb') as file:
+with open(os.path.join(RESULTS_PATH, 'curves_snowflake.pkl'), 'rb') as file:
     curves_snowflake = pickle.load(file)
 
 fig, axs = plt.subplots(2, 2)
-for method in METHODS:
+for method in set(list(curves_dragon.keys()) + list(curves_snowflake.keys())):
     # Dragon:
-    axs[0,0].plot(curves_dragon[method]['xs'] * 100.,    curves_dragon[method]['lerf'].mean(axis=0) * 100.,    label=method)
-    axs[1,0].plot(curves_dragon[method]['xs'] * 100.,    curves_dragon[method]['morf'].mean(axis=0) * 100.,    label=method)
+    if method in curves_dragon:
+        axs[0,0].plot(curves_dragon[method]['xs'] * 100.,    curves_dragon[method]['lerf'].mean(axis=0) * 100.,    label=method)
+        axs[1,0].plot(curves_dragon[method]['xs'] * 100.,    curves_dragon[method]['morf'].mean(axis=0) * 100.,    label=method)
 
     # Snowflake:
-    axs[0,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['lerf'].mean(axis=0) * 100., label=method)
-    axs[1,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['morf'].mean(axis=0) * 100., label=method)
+    if method in curves_snowflake:
+        axs[0,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['lerf'].mean(axis=0) * 100., label=method)
+        axs[1,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['morf'].mean(axis=0) * 100., label=method)
 
 axs[0,0].set_aspect(1)
 axs[0,1].set_aspect(1)
@@ -185,3 +176,4 @@ axs[0,1].set_xticklabels([])
 axs[0,1].legend()
 plt.tight_layout()
 plt.savefig('aipc_retriever.pdf')
+# %%

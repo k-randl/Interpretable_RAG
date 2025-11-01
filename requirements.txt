@@ -1,4 +1,5 @@
-accellerate
+accelerate
+datasets
 ipython
 matplotlib
 nltk

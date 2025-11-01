@@ -532,7 +532,7 @@ class GeneratorExplanation(GeneratorExplanationBase):
 # Generic Model Class:                                                  #
 #=======================================================================#
 
-class ExplainableAutoModelForGeneration:
+class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCMeta):
     @staticmethod
     def from_pretrained(pretrained_model_name_or_path:str, *args, **kwargs):
         """ Instantiates an ExplainableAutoModelForGeneration from a pre-trained model configuration.
@@ -555,7 +555,7 @@ class ExplainableAutoModelForGeneration:
         assert issubclass(T, transformers.PreTrainedModel)
 
         # generic class definition:
-        class _ExplainableAutoModelForGeneration(T, GeneratorExplanationBase):
+        class _ExplainableAutoModelForGeneration(T, ExplainableAutoModelForGeneration):
             def __init__(self, config, *inputs, **kwargs):
                 super().__init__(config, *inputs, **kwargs)
                 self._tokenizer:transformers.PreTrainedTokenizer = transformers.AutoTokenizer.from_pretrained(config.name_or_path)
@@ -774,7 +774,7 @@ class ExplainableAutoModelForGeneration:
 
             @property
             def gen_bow_probs(self) -> NDArray[np.float64]:
-                """Average probability of each token in the vocabualry of being generated given the original input."""
+                """Average probability of each token in the vocabulary of being generated given the original input."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_bow_probs`!')
@@ -785,12 +785,12 @@ class ExplainableAutoModelForGeneration:
                 # get probabilities:
                 probs = logits2probs(self._gen_logits[:, focus, :], normalization='softmax')
 
-                # return accumulated probability of each token in the vocabualry:
+                # return accumulated probability of each token in the vocabulary:
                 return probs.mean(dim=1).float().numpy()
             
             @property
             def cmp_bow_probs(self) -> NDArray[np.float64]:
-                """Average probability of each token in the vocabualry of being generated given the compared input."""
+                """Average probability of each token in the vocabulary of being generated given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
                     raise AttributeError(
@@ -804,13 +804,13 @@ class ExplainableAutoModelForGeneration:
                 # get probabilities:
                 probs = [logits2probs(t[:, focus, :], normalization='softmax') for t in self._exp_logits]
 
-                # return accumulated probability of each token in the vocabualry:
+                # return accumulated probability of each token in the vocabulary:
                 return [t.mean(dim=1).float().numpy() for t in probs]
             
 
             #@property
             def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
-                """Average probability of each token in the vocabualry of being generated given the original input."""
+                """Average probability of each token in the vocabulary of being generated given the original input."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_nucleus_probs`!')
@@ -821,12 +821,12 @@ class ExplainableAutoModelForGeneration:
                 # get probabilities:
                 probs = logits2probs(self._gen_logits[:, focus, :], normalization='softmax')
 
-                # return accumulated probability of each token in the vocabualry:
+                # return accumulated probability of each token in the vocabulary:
                 return _nucleus_sampling(probs.float(),p=p).mean(dim=1).numpy()
 
             #@property
             def cmp_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
-                """Average probability of each token in the vocabualry of being generated given the compared input."""
+                """Average probability of each token in the vocabulary of being generated given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
                     raise AttributeError(
@@ -840,7 +840,7 @@ class ExplainableAutoModelForGeneration:
                 # get probabilities:
                 probs = [logits2probs(t[:, focus, :], normalization='softmax') for t in self._exp_logits]
 
-                # return accumulated probability of each token in the vocabualry:
+                # return accumulated probability of each token in the vocabulary:
                 return [_nucleus_sampling(t.float(),p=p).mean(dim=1).numpy() for t in probs]
 
             #===============================================================#
@@ -1131,8 +1131,7 @@ class ExplainableAutoModelForGeneration:
                     # generate probabilities:
                     self.compare(
                         [self.tokenizer.apply_chat_template(prmpt, tokenize=False) for prmpt in prompts_batch],
-                        'last' if conditional else None,
-                        **kwargs
+                        'last' if conditional else None
                     )
 
                     # print empty line:
@@ -1353,6 +1352,142 @@ class ExplainableAutoModelForGeneration:
             pretrained_model_name_or_path=pretrained_model_name_or_path,
             *args, **kwargs
         )
+
+    # Abstract properties for documentation purposes:
+    #---------------------------------------------------------------#
+    @property
+    @abstractmethod
+    def gen_token_probs(self) -> NDArray[np.float64]:
+        """Probability of each token in the original generation."""
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
+    @property
+    @abstractmethod
+    def cmp_token_probs(self) -> NDArray[np.float64]:
+        """Probability of each token in the original generation given the compared input."""
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
+
+    @property
+    @abstractmethod
+    def gen_sequence_prob(self) -> NDArray[np.float64]:
+        """Total probability of generating the original sequence."""
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
+    @property
+    @abstractmethod
+    def cmp_sequence_probs(self) -> NDArray[np.float64]:
+        """Total probability of generating the original sequence given the compared input."""
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
+
+    @property
+    @abstractmethod
+    def gen_bow_probs(self) -> NDArray[np.float64]:
+        """Average probability of each token in the vocabulary of being generated given the original input."""
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+    
+    @property
+    @abstractmethod
+    def cmp_bow_probs(self) -> NDArray[np.float64]:
+        """Average probability of each token in the vocabulary of being generated given the compared input."""
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+    
+
+    #@property
+    @abstractmethod
+    def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
+        """Average probability of each token in the vocabulary of being generated given the original input."""
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
+    #@property
+    @abstractmethod
+    def cmp_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
+        """Average probability of each token in the vocabulary of being generated given the compared input."""
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
+    # Abstract methods for documentation purposes:
+    #---------------------------------------------------------------#
+    @abstractmethod
+    def generate(self, inputs:List[str], **kwargs) -> List[str]:
+        """Generates continuations of the passed input prompt(s).
+
+        Args:
+            inputs:             The string(s) used as a prompt for the generation.
+            generation_config:  The generation configuration to be used as base parametrization for the generation call.
+            stopping_criteria:  Custom stopping criteria that complements the default stopping criteria built from arguments and ageneration config.
+            kwargs:             Ad hoc parametrization of `generation_config` and/or additional model-specific kwargs.
+
+        Returns:
+            List of generated strings.
+        """
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+    
+    @abstractmethod
+    def compare(self, inputs:List[str], outputs:Optional[Union[List[str], torch.LongTensor, Literal['last']]]=None, batch_size:int=1, **kwargs) -> torch.LongTensor:
+        """Calculates the probability `p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_n|t_0...t_(n-1))` of
+        a specific output `outputs = [t_0, t_1, ..., t_n]` to happen given an input prompt `inputs`.
+
+        Args:
+            inputs:     List of input propmts. If `outputs` is specified, `compare(...)` calculates the
+                        probability `p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_n|t_0...t_(n-1))` for each
+                        token in `outputs = [t_0, t_1, ..., t_n]` given ``. Otherwise, it calculates the
+                        unconditional probability (similar to `generate(...)`).
+            outputs:    List of tokens `t_i` or (strings containing those) for which to compute the probability.
+                        If set to `'last'`, the last generated sequence will be used (optional).
+            batch_size: Batch size. Ignored if `len(inputs) > 1` or `outputs` not specified (optional).
+
+        Returns:
+            Tensor of generated token ids .
+        """
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+    
+    @abstractmethod
+    def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', conditional:bool=True, system:Optional[str]=None, **kwargs):
+        """Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
+
+        Args:
+            query (str):        The user's query.
+            contexts (list):    A list of strings representing the retrieved documents.
+            batch_size (int):   The batch size for generating perturbations (default: `32`).
+            max_samples (int):  Maximum number of samples used for computing SHAP atribution values.
+                                If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
+                                If `inf` is passed, always computes the precise SHAP values.
+                                If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
+            conditional (bool): Whether to compute the compared values conditioned on the original generation (default: `True`).
+            system (str):       An optional system prompt.
+
+        Returns:
+            A list of generated chats.
+        """
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
+    @abstractmethod
+    def get_shapley_values(self,
+            key:Union[Literal['query', 'context'], None],
+            aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
+            num_samples:int=100,
+            sample_size:int=10,
+            **kwargs
+        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+        """Generates Shapley feature attribution values for the chosen aggregation method.
+
+        Args:
+            key (str):          Explanation key. Can either be `'query'` or `'context'`.
+                                If `None` returns a dictionary of both.
+            aggregation (str):  Aggregation method for probabilities (default: `'token'`).
+            num_samples (int):  Number of samples for Monte-Carlo approximation.
+                                Ignored in case of precise calculation (default: `100`).
+            sample_size (int):  Size of samples for Monte-Carlo approximation.
+                                Ignored in case of precise calculation (default: `10`).
+
+        Returns:
+            A dicionary containing the following two keys (if `key` is specified) or one of the following:
+            - `'query'`: a `numpy.ndarray` containing the Shapley values for the query
+            - `'context'`: a `numpy.ndarray` containing the Shapley values for the contexts.
+        """
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
 
 #=======================================================================#
 # Context Managers:                                                     #
