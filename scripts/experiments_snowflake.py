@@ -18,18 +18,21 @@ rag = ExplainableAutoModelForRetrieval.from_pretrained(
     add_pooling_layer = False
 ).to('cuda' if torch.cuda.is_available() else 'cpu')
 queries = topics['query'].tolist()
-
+OUTPUT_DIR = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/results/retrieval_explanation_23_10'
 #%%
 # Create RAG model:
 list_of_importance_scores = []
 for qid, query in tqdm.tqdm(enumerate(queries), total=len(queries), desc='Processing queries'):
     contexts = retrieval_results[retrieval_results['query_id'] == qid]['retrieved_text'].tolist()
     rag('query: ' + query, contexts, output_attentions=True, output_hidden_states=True)
+    rag.save_values(OUTPUT_DIR+f'/query_{qid}.pkl')
+    '''
     importance_score = rag.aGrad()
     in_tokens = rag.in_tokens
     importance_score['query_in_tokens'] = rag.in_tokens['query']
     importance_score['context_in_tokens'] = rag.in_tokens['context']
     pickle.dump(importance_score, open(f'/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/index_snowflake/importance_scores/importance_scores_{qid}.pkl', 'wb'))
+    '''
     ### Save the importance scores for each query and context
     ### the importance scores are dictionaries with keys 'query' and 'context' 
     ### where 'query' is a list of scores for the query and 'context' is a list of scores for each context
