@@ -63,7 +63,7 @@ class AIPCForRetrieval:
                 area under the mean LeRF curve. A larger value indicates a greater
                 separation between the two perturbation strategies.
         '''
-        
+
         # perturbation curve most relevant first:
         self.morf = self.perturbe(data, True, k, method, step=step, method_args=method_args, desc='Computing MoRF', **kwargs)
 
@@ -138,7 +138,10 @@ class AIPCForRetrieval:
             )
 
             # calculate relevancy scores:
-            relevancy:torch.Tensor = getattr(self.retriever, method)(**method_args)['context']
+            if   method == 'random': relevancy = torch.rand(self.retriever._x['context'].shape)
+            elif method == 'grad':   relevancy = [doc.mean(axis=-1) for doc in self.retriever.grad(**method_args)['context']]
+            elif method == 'aGrad':  relevancy = [doc.mean(axis=0) for doc in self.retriever.aGrad(**method_args)['context']]
+            else:                    relevancy = getattr(self.retriever, method)(**method_args)['context']
 
             with torch.no_grad():
                 # get original input:

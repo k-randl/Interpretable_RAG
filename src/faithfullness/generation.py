@@ -4,56 +4,10 @@ import matplotlib.pyplot as plt
 from tqdm.autonotebook import tqdm
 from typing import Optional, Dict, List
 
-from typing import Optional, Dict, List, Tuple, Literal
+from typing import Optional, Dict, List, Tuple
 from numpy.typing import NDArray
 
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration, generate_permutations, create_rag_prompt
-
-def get_all_shapley_values(generator:ExplainableAutoModelForGeneration, qry:str, ctx:List[str], num_mc_samples:int, mc_sample_size:int, **kwargs) -> Tuple[NDArray[np.float64], List[Tuple[int, NDArray[np.float64]]], List[Tuple[int, NDArray[np.float64]]]]:
-    
-    result = {}
-
-    # Generate precise explanations:
-    output = generator.explain_generate(
-        query=qry,
-        contexts=ctx[:5],
-        max_samples=64,
-        batch_size=64,
-        conditional=True,
-        **kwargs
-    )
-
-    # Get shapley values for the generated tokens:
-    result['Precise'] = generator.get_shapley_values('context', 'token')
-
-    # Generate approximated explanations:
-    assert output == generator.explain_generate(
-        query=qry,
-        contexts=ctx[:5],
-        max_samples=60,
-        batch_size=64,
-        conditional=True,
-        **kwargs
-    )
-
-    # Get the shap parameters:
-    indices = generator._shap_cache['context']['indices'].copy()
-    sets    = generator._shap_cache['context']['sets'].copy()
-
-    # Get shapley values for the generated tokens:
-    for max_samples in range(mc_sample_size, 31, 5):
-        # Set the number of samples:
-        sample_indices = np.random.choice(len(indices)-2, size=max_samples-2, replace=False) + 1 # skip the first and last indices
-        generator._shap_cache['context']['indices'] = np.concatenate([indices[:1], indices[sample_indices], indices[-1:]])
-        generator._shap_cache['context']['sets']    = np.concatenate([sets[:1], sets[sample_indices], sets[-1:]])
-
-        # Get kernel shapley values:
-        result[f'Kernel (n = {max_samples:d})'] = generator.get_shapley_values('context', 'token', num_samples=1, sample_size=max_samples)
-
-        # Get Monte Carlo approximated shapley values:
-        result[f'Monte Carlo (n = {max_samples:d})'] = generator.get_shapley_values('context', 'token', num_samples=num_mc_samples, sample_size=mc_sample_size)
-
-    return result
 
 #=======================================================================#
 # Generator Explanation Faithfullness:                                  #
@@ -120,12 +74,53 @@ class AIPCForGeneration:
 
         # calculate explanations:
         self.morf, self.lerf = {}, {}
-        for i, (qry, ctx) in tqdm(enumerate(zip(data['query'], data['context'])), total=num_queries, desc='Computing perturbations'):
+        for i, (qry, ctx) in enumerate(tqdm(zip(data['query'], data['context']), total=num_queries, desc='Computing perturbations')):
 
             # calculate relevancy scores:
-            relevancy = get_all_shapley_values(
-                self.generator, qry, ctx, num_mc_samples, mc_sample_size, **kwargs
+            relevancy = {}
+
+            # Generate precise explanations:
+            self.generator.explain_generate(
+                query=qry,
+                contexts=ctx[:5],
+                max_samples=64,
+                batch_size=batch_size,
+                conditional=True,
+                **kwargs
             )
+
+            # Get shapley values for the generated tokens:
+            relevancy['Precise'] = self.generator.get_shapley_values('context', 'token')
+
+            # Get random baseline:
+            relevancy['Random'] = np.random.random(relevancy['Precise'].shape)
+
+            # Generate approximated explanations:
+            self.generator.explain_generate(
+                query=qry,
+                contexts=ctx[:5],
+                max_samples=60,
+                batch_size=batch_size,
+                conditional=True,
+                **kwargs
+            )
+
+            # Get the shap parameters:
+            indices = self.generator._shap_cache['context']['indices'].copy()
+            sets    = self.generator._shap_cache['context']['sets'].copy()
+
+            # Get shapley values for the generated tokens:
+            for max_samples in range(mc_sample_size, 31, 5):
+                # Set the number of samples:
+                sample_indices = np.random.choice(len(indices)-2, size=max_samples-2, replace=False) + 1 # skip the first and last indices
+                self.generator._shap_cache['context']['indices'] = np.concatenate([indices[:1], indices[sample_indices], indices[-1:]])
+                self.generator._shap_cache['context']['sets']    = np.concatenate([sets[:1], sets[sample_indices], sets[-1:]])
+
+                # Get kernel shapley values:
+                relevancy[f'Kernel (n = {max_samples:d})'] = self.generator.get_shapley_values('context', 'token', num_samples=1, sample_size=max_samples)
+
+                # Get Monte Carlo approximated shapley values:
+                relevancy[f'Monte Carlo (n = {max_samples:d})'] = self.generator.get_shapley_values('context', 'token', num_samples=num_mc_samples, sample_size=mc_sample_size)
 
             for key in relevancy:
                 # generate prompts for perturbed inputs:
@@ -136,12 +131,12 @@ class AIPCForGeneration:
 
                 # generate comparison output:
                 num_batches = int(np.ceil(len(perturbed_prompts) / batch_size))
-                for i in range(num_batches):
+                for j in range(num_batches):
                     # print batch number:
-                    if num_batches > 1: print(f'Batch {i+1:d} of {num_batches:d}:')
+                    if num_batches > 1: print(f'Batch {j+1:d} of {num_batches:d}:')
 
                     # get prompts of this batch:
-                    prompts_batch = perturbed_prompts[i * batch_size:(i+1) * batch_size]
+                    prompts_batch = perturbed_prompts[j * batch_size:(j+1) * batch_size]
 
                     # generate probabilities:
                     self.generator.compare(
@@ -153,12 +148,12 @@ class AIPCForGeneration:
                 probs = np.stack([p.flatten() for p in self.generator.cmp_token_probs])[-permutations.max()-1:]
 
                 # perturbation curve most relevant first:
-                if key not in self.morf: self.morf[key] = np.empty((num_queries, num_points), dtype=float)
-                self.morf[i] = self._make_pc(relevancy[key], True, permutations, new_items, probs, step=step).mean(axis=0)
+                if key not in self.morf: self.morf[key] = np.full((num_queries, num_points), np.nan, dtype=float)
+                self.morf[key][i] = self._make_pc(relevancy[key], True, permutations, new_items, probs, step=step).mean(axis=0)
 
                 # perturbation curve least relevant first:
-                if key not in self.lerf: self.lerf[key] = np.empty((num_queries, num_points), dtype=float)
-                self.lerf[i] = self._make_pc(relevancy[key], False, permutations, new_items, probs, step=step).mean(axis=0)
+                if key not in self.lerf: self.lerf[key] = np.full((num_queries, num_points), np.nan, dtype=float)
+                self.lerf[key][i] = self._make_pc(relevancy[key], False, permutations, new_items, probs, step=step).mean(axis=0)
 
         for key in self.morf:
             # set first value to mean:
@@ -198,38 +193,33 @@ class AIPCForGeneration:
 
         return ys
 
-    def get_aipc(self, key:str, *, k:Optional[int]=None) -> float:
+    def get_aipc(self, key:str) -> float:
         '''Compute the area inside the pertubation curves (AIPC) between the mean MORF
         and LERF curves using the trapezoidal rule over self.xs.
 
         Args:
-            k (int, optional):  Number of top documents (rows) to consider from self.morf and self.lerf.
-                                If None (default), all available documents (len(self.morf)) are used.
+            key (str):
+                Identifier used to select which set of perturbation curves to use from the instance.
         
         Returns:
             aipc (float):
-                Aarea inside the pertubation curves (|∫ mean(self.morf[:k], axis=0) dx - ∫ mean(self.lerf[:k], axis=0) dx|)
+                Aarea inside the pertubation curves (|∫ mean(self.morf[key], axis=0) dx - ∫ mean(self.lerf[key], axis=0) dx|)
         '''
         
-        # set k to max available docs if unset:
-        if k is None: k = len(self.morf)
-
         # return aipc:
         return np.abs(
-            np.trapezoid(self.morf[key][:k].mean(axis=0), self.xs) -
-            np.trapezoid(self.lerf[key][:k].mean(axis=0), self.xs)
+            np.trapezoid(self.morf[key].mean(axis=0), self.xs) -
+            np.trapezoid(self.lerf[key].mean(axis=0), self.xs)
         )
  
-    def plot_lerf(self, ax:plt.Axes, key:str, *, k:Optional[int]=None, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def plot_lerf(self, ax:plt.Axes, key:str, *, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         '''Plot the LeRF curve on a matplotlib axis.
 
-        Compute the mean of the stored LeRF values across the first dimension for the first
-        `k` documents and plot the resulting curve against self.xs on the provided Axes.
+        Compute the mean of the stored LeRF values across the first dimension for the first documents
+        and plotd the resulting curve against self.xs on the provided Axes.
 
         Args:
             ax (matplotlib.axes.Axes):  The axes on which to draw the plot.
-            k (int, optional):          Number of top documents (rows) to consider.
-                                        If None (default) all available rows are used.
             label (str, optional):      Label to apply to the plotted line (default: 'LeRF').
             **kwargs:                   Additional keyword arguments forwarded to matplotlib.axes.Axes.plot
                                         (e.g., color, linestyle, linewidth).
@@ -238,29 +228,23 @@ class AIPCForGeneration:
             `Tuple[numpy.ndarray, numpy.ndarray]` of x and y yalues of the plotted curve.
         '''
 
-
-        # set k to max available docs if unset:
-        if k is None: k = len(self.lerf[key])
-
         # calculate means and convert to percent:
         xs = self.xs * 100.
-        ys = self.lerf[key][:k].mean(axis=0) * 100.
+        ys = self.lerf[key].mean(axis=0) * 100.
 
         # plot to axis:
         ax.plot(xs, ys, label=label, **kwargs)
 
         return xs, ys
 
-    def plot_morf(self, ax:plt.Axes, key:str, *, k:Optional[int]=None, label:str='MoRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def plot_morf(self, ax:plt.Axes, key:str, *, label:str='MoRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         '''Plot the MoRF curve on a matplotlib axis.
 
-        Compute the mean of the stored MoRF values across the first dimension for the first
-        `k` documents and plot the resulting curve against self.xs on the provided Axes.
+        Compute the mean of the stored MoRF values across the first dimension for the documents
+        and plots the resulting curve against self.xs on the provided Axes.
 
         Args:
             ax (matplotlib.axes.Axes):  The axes on which to draw the plot.
-            k (int, optional):          Number of top documents (rows) to consider.
-                                        If None (default) all available rows are used.
             label (str, optional):      Label to apply to the plotted line (default: 'MoRF').
             **kwargs:                   Additional keyword arguments forwarded to matplotlib.axes.Axes.plot
                                         (e.g., color, linestyle, linewidth).
@@ -269,34 +253,29 @@ class AIPCForGeneration:
             `Tuple[numpy.ndarray, numpy.ndarray]` of x and y yalues of the plotted curve.
         '''
 
-        # set k to max available docs if unset:
-        if k is None: k = len(self.morf[key])
-
         # calculate means and convert to percent:
         xs = self.xs * 100.
-        ys = self.morf[key][:k].mean(axis=0) * 100.
+        ys = self.morf[key].mean(axis=0) * 100.
 
         # plot to axis:
         ax.plot(xs, ys, label=label, **kwargs)
 
         return xs, ys
 
-    def plot(self, ax:plt.Axes, key:str, *, k:Optional[int]=None) -> None:
+    def plot(self, ax:plt.Axes, key:str) -> None:
         '''Render averaged MoRF and LeRF fidelity curves on a Matplotlib axis.
-        This method computes the mean of the first `k` documents and plots the
-        resulting MoRF and LeRF curves. The area between the two curves is filled to
+        This method computes the mean of the documents and plots the resulting
+        MoRF and LeRF curves. The area between the two curves is filled to
         visualize the gap, an equal aspect ratio is enforced, and axis labels
         and a legend are added.
 
         Args:
             ax (matplotlib.axes.Axes):  The axes on which to draw the plot.
-            k (int, optional):          Number of top documents (rows) to consider.
-                                        If None (default), all available documents are used.
         '''
 
         # plot to axis:
-        _, ys_morf = self.plot_morf(ax, key, k=k)
-        _, ys_lerf = self.plot_lerf(ax, key, k=k)
+        _, ys_morf = self.plot_morf(ax, key)
+        _, ys_lerf = self.plot_lerf(ax, key)
         ax.fill_between(self.xs*100., ys_morf, ys_lerf, color='lightgray')
         ax.set_aspect(1)
         ax.legend()

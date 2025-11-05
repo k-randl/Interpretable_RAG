@@ -119,7 +119,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         return grad
 
     def aGrad(self, filter_special_tokens:bool=True):
-        '''AGrad (`-da ⊙ a`) scores of the last batch.
+        '''AGrad (`da ⊙ a`) scores of the last batch.
 
         Args:
             filter_special_tokens:  If `True`, set the importance of special tokens to 0.
@@ -131,7 +131,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         da = {key:self._da[key][:,-1,:,0,:] for key in self._da}   # shape: (bs x n_layers x n_heads x n_outputs x n_inputs)
 
         # compute importance:
-        aGrad = {key:-da[key] * a[key] for key in da}
+        aGrad = {key:da[key] * a[key] for key in da}
 
         if filter_special_tokens:
             # set the importance of special tokens to 0.

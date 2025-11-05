@@ -252,7 +252,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         return grad
 
     def aGrad(self, filter_special_tokens:bool=True):
-        '''AGrad (`-da ⊙ a`) scores of the last batch.
+        '''AGrad (`da ⊙ a`) scores of the last batch.
 
         Args:
             filter_special_tokens:  If `True`, set the importance of special tokens to 0.
@@ -264,7 +264,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         da = {key:self._da[key] for key in self._da}   # shape: (bs x n_heads x n_inputs)
 
         # compute importance:
-        aGrad = {key:[-_da * _a for _da, _a in zip(da[key], a[key], strict=True)] for key in da}
+        aGrad = {key:[_da * _a for _da, _a in zip(da[key], a[key], strict=True)] for key in da}
 
         if not filter_special_tokens: print('WARNING: `filter_special_tokens` is not used in offline retrieval.')
 

@@ -1,6 +1,5 @@
 # %%
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8'
 import sys
 sys.path.insert(0, "../..")
 
@@ -52,7 +51,7 @@ def test(aipc, name):
     scores_path, scores = os.path.join(RESULTS_PATH, f'scores_{name}.json'), {}
     if os.path.exists(scores_path):
         with open(scores_path, 'r') as file:
-            scores = json.dump(file)
+            scores = json.load(file)
 
     # run faithfullness test:
     aipc(sample,
@@ -76,15 +75,12 @@ def test(aipc, name):
             pickle.dump(curves, file)
 
         # save scores:
-        scores[method] = {}
-        for k in range(NUM_DOCS):
-            # get aipc:
-            scores[method][f'k = {k+1:d}'] = aipc.get_aipc(method, k=k+1)
+        scores[method] = aipc.get_aipc(method)
 
-            # plot pc:
-            fig, ax = plt.subplots(1, 1)
-            aipc.plot(ax, method, k=k+1)
-            plt.savefig(os.path.join(RESULTS_PATH, f'{name}_{method}_k{k+1:d}.pdf'))
+        # plot pc:
+        fig, ax = plt.subplots(1, 1)
+        aipc.plot(ax, method)
+        plt.savefig(os.path.join(RESULTS_PATH, f'{name}_{method}.pdf'))
 
         with open(scores_path, 'w') as file:
             json.dump(scores, file)
@@ -113,41 +109,48 @@ import json
 import pickle
 import matplotlib.pyplot as plt
 
-with open(os.path.join(RESULTS_PATH, 'curves_dragon.pkl'), 'rb') as file:
-    curves_dragon = pickle.load(file)
-
-with open(os.path.join(RESULTS_PATH, 'curves_snowflake.pkl'), 'rb') as file:
-    curves_snowflake = pickle.load(file)
+methods = []
+with open(os.path.join(RESULTS_PATH, 'curves_llama8b.pkl'), 'rb') as file:
+    curves_llama8b = pickle.load(file)
+    methods.extend(list(curves_llama8b.keys()))
 
 fig, axs = plt.subplots(2, 2)
-for method in set(list(curves_dragon.keys()) + list(curves_snowflake.keys())):
-    # Dragon:
-    axs[0,0].plot(curves_dragon[method]['xs'] * 100.,    curves_dragon[method]['lerf'].mean(axis=0) * 100.,    label=method)
-    axs[1,0].plot(curves_dragon[method]['xs'] * 100.,    curves_dragon[method]['morf'].mean(axis=0) * 100.,    label=method)
+for method in set(methods):
+    # Llama 8b:
+    axs[0,0].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['lerf'].mean(0) * 100.,    label=method)
+    axs[1,0].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['morf'].mean(0) * 100.,    label=method)
 
-    # Snowflake:
-    axs[0,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['lerf'].mean(axis=0) * 100., label=method)
-    axs[1,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['morf'].mean(axis=0) * 100., label=method)
+    # Llama 8b:
+    axs[0,1].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['lerf'].mean(0) * 100.,    label=method)
+    axs[1,1].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['morf'].mean(0) * 100.,    label=method)
 
-axs[0,0].set_aspect(1)
-axs[0,1].set_aspect(1)
-axs[1,0].set_aspect(1)
-axs[1,1].set_aspect(1)
+for row in range(2):
+    # Paint arrow for LeRF plot:
+    axs[0,row].arrow(50, 50, 30, -30, width=5, head_length=10, ec='white', color='lightblue')
+    axs[0,row].text(65, 30, 'better', ha='center', va='bottom', rotation=-45, color='lightblue', zorder=0)
 
-axs[0,0].set_title('Dragon')
-axs[0,1].set_title('Snowflake')
+    # Paint arrow for MoRF plot:
+    axs[1,row].arrow(50, 50, -30, 30 , width=5, head_length=10, ec='white', color='lightblue')
+    axs[1,row].text(35, 60, 'better', ha='center', va='bottom', rotation=-45, color='lightblue', zorder=0)
 
+    # Set aspect ratio to 1. on all plots:
+    axs[0,row].set_aspect(1)
+    axs[1,row].set_aspect(1)
+
+    # Set x-labels:
+    axs[1,row].set_xlabel('Masked Tokens [%]')
+    axs[0,row].set_xticklabels([])
+
+# Set y-labels:
 axs[0,0].set_ylabel('Normalized $\Delta$ LeRF [%]')
 axs[1,0].set_ylabel('Normalized $\Delta$ MoRF [%]')
 axs[0,1].set_yticklabels([])
 axs[1,1].set_yticklabels([])
 
-axs[1,0].set_xlabel('Masked Tokens [%]')
-axs[1,1].set_xlabel('Masked Tokens [%]')
-axs[0,0].set_xticklabels([])
-axs[0,1].set_xticklabels([])
+# Set titles:
+axs[0,0].set_title('Llama-8B')
+axs[0,1].set_title('Snowflake')
 
 axs[0,1].legend()
 plt.tight_layout()
-plt.savefig('aipc_retriever.pdf')
-# %%
+plt.savefig('aipc_generator.pdf')

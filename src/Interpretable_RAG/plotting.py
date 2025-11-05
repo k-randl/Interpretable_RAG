@@ -99,8 +99,10 @@ def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], ti
     at least `threshold` of the total positive attribution scores at that token.
 
     Args:
-        scores (NDArray[np.float64]):    A 2D array of attribution scores with shape `(len(documents), len(tokens))`,
+        scores (NDArray[np.float64]):   A 2D array of attribution scores with shape `(len(documents), len(tokens))`,
                                         where each row represents a document and each column corresponds to a token's attribution score.
+                                        In case this is a 3D array, the first dimension will be interpreted as different versions of
+                                        attribution scores.  
         tokens (List[str]):             A list of token strings corresponding to the scores.
                                         Length must match the number of columns in `scores`.
         document_names (List[str]):     An optional list of names of the documents.
@@ -316,7 +318,7 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float64], x_labels:Optional[List[s
 from .retrieval import RetrieverExplanationBase
 
 def plot_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='gradIn',
+        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
         absolute:bool=True,
         figsize: Tuple[int, int] = (12, 6),
         cmap:str='tab10',
@@ -385,7 +387,7 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, document_nam
     else: return fig
 
 def higlight_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='gradIn',
+        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
         threshold:float=0.0,
         token_processor:Optional[Callable[[str],str]]=None,
         cmap:str='tab10',
@@ -471,7 +473,7 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
     else: return html_str
 
 def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *, 
-        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='gradIn',
+        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
         normalize:bool=True,
         threshold:float=.9,
         figsize: Tuple[int, int] = (12, 6),
@@ -542,7 +544,7 @@ def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, docu
     else: return fig
 
 def visualize_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='gradIn',
+        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
         cmap:str='tab10',
         show:bool=True,
         **kwargs
@@ -861,12 +863,12 @@ def plot_document_importance_rag(explanation:ExplainableAutoModelForRAG, documen
     """Plot document importance.
 
     Args:
-        explanation (ExplainableAutoModelForRA): An object containing the necessary information for plotting.
-        document_names (List[str]):              An optional list of names of the documents.
-        figsize ((int, int)):                    The size of the figure.
-        mean_color (str):                        The color used for the mean values.
-        cmap (str):                              The name of a matplotlib colormap used for highlighting.
-        show (bool):                             If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+        explanation (ExplainableAutoModelForRAG): An object containing the necessary information for plotting.
+        document_names (List[str]):               An optional list of names of the documents.
+        figsize ((int, int)):                     The size of the figure.
+        mean_color (str):                         The color used for the mean values.
+        cmap (str):                               The name of a matplotlib colormap used for highlighting.
+        show (bool):                              If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
         `matplotlib.figure.Figure` object if `show == False`.

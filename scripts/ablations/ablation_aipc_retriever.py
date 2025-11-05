@@ -13,7 +13,9 @@ METHODS      = [('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False})
                 ('intGrad', {'num_steps':50,  'batch_size':16, 'verbose':False}),
                 ('intGrad', {'num_steps':10,  'batch_size':16, 'verbose':False}),
                 ('gradIn',  {}),
-                ('aGrad',   {})]
+                ('aGrad',   {}),
+                ('grad',    {}),
+                ('random',  {})]
 STEP_SIZE    = 1
 NUM_DOCS     = 5
 
@@ -155,25 +157,34 @@ for method in set(list(curves_dragon.keys()) + list(curves_snowflake.keys())):
         axs[0,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['lerf'].mean(axis=0) * 100., label=method)
         axs[1,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['morf'].mean(axis=0) * 100., label=method)
 
-axs[0,0].set_aspect(1)
-axs[0,1].set_aspect(1)
-axs[1,0].set_aspect(1)
-axs[1,1].set_aspect(1)
 
-axs[0,0].set_title('Dragon')
-axs[0,1].set_title('Snowflake')
+for row in range(2):
+    # Paint arrow for LeRF plot:
+    axs[0,row].arrow(50, -50, 30, 30, width=5, head_length=10, ec='white', color='lightblue')
+    axs[0,row].text(60, -40, 'better', ha='center', va='bottom', rotation=45, color='lightblue', zorder=0)
 
+    # Paint arrow for MoRF plot:
+    axs[1,row].arrow(50, -50, -30, -30 , width=5, head_length=10, ec='white', color='lightblue')
+    axs[1,row].text(30, -70, 'better', ha='center', va='bottom', rotation=45, color='lightblue', zorder=0)
+
+    # Set aspect ratio to 1. on all plots:
+    axs[0,row].set_aspect(1)
+    axs[1,row].set_aspect(1)
+
+    # Set x-labels:
+    axs[1,row].set_xlabel('Masked Tokens [%]')
+    axs[0,row].set_xticklabels([])
+
+# Set y-labels:
 axs[0,0].set_ylabel('Normalized $\Delta$ LeRF [%]')
 axs[1,0].set_ylabel('Normalized $\Delta$ MoRF [%]')
 axs[0,1].set_yticklabels([])
 axs[1,1].set_yticklabels([])
 
-axs[1,0].set_xlabel('Masked Tokens [%]')
-axs[1,1].set_xlabel('Masked Tokens [%]')
-axs[0,0].set_xticklabels([])
-axs[0,1].set_xticklabels([])
+# Set titles:
+axs[0,0].set_title('Dragon')
+axs[0,1].set_title('Snowflake')
 
 axs[0,1].legend()
 plt.tight_layout()
 plt.savefig('aipc_retriever.pdf')
-# %%

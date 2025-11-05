@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from scipy.stats import spearmanr
 from .retrieval_offline import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOfflineRetrieval
 from .retrieval_online  import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOnlineRetrieval
 from .generation import ExplainableAutoModelForGeneration
@@ -94,7 +95,7 @@ class ExplainableAutoModelForRAG:
 
         # generate response:
         return chat
-    
+
     @property
     def retriever_document_importance(self) -> NDArray[np.float64]:
         '''Normalized document importance estimated by the retriever.'''
@@ -106,7 +107,7 @@ class ExplainableAutoModelForRAG:
         doc_importance_retriever /= np.abs(doc_importance_retriever).sum()
 
         return doc_importance_retriever
-    
+
     @property
     def generator_document_importance(self) -> NDArray[np.float64]:
         '''Normalized document importance of the generator.'''
@@ -115,12 +116,25 @@ class ExplainableAutoModelForRAG:
         doc_importance_generator /= np.abs(doc_importance_generator).sum()
 
         return doc_importance_generator
-    
+
     @property
     def mean_document_importance(self) -> NDArray[np.float64]:
         '''Mean normalized document importance of the rag pipeline.'''
         return (self.retriever_document_importance + self.generator_document_importance) / 2.
-    
+
+    @property
+    def document_agreement(self) -> NDArray[np.float64]:
+        '''Document importance disagreement between retriever and generator.'''
+
+        # get normalized importance rankings:
+        ret = np.argsort(self.retriever_document_importance)
+        gen = np.argsort(self.generator_document_importance)
+
+        # compute spearman correlation:
+        r, p = spearmanr(ret, gen)
+
+        return r
+
     @property
     def retriever_query_importance(self) -> NDArray[np.float64]:
         '''Normalized word importance of the query for retrieving.'''
@@ -155,7 +169,7 @@ class ExplainableAutoModelForRAG:
         qry_importance_retriever /= np.abs(qry_importance_retriever).sum()
 
         return qry_importance_retriever
-    
+
     @property
     def generator_query_importance(self) -> NDArray[np.float64]:
         '''Normalized word importance of the query during generation.'''
@@ -164,8 +178,21 @@ class ExplainableAutoModelForRAG:
         qry_importance_generator /= np.abs(qry_importance_generator).sum()
 
         return qry_importance_generator
-    
+
     @property
     def mean_query_importance(self) -> NDArray[np.float64]:
         '''Mean word importance of the query for the rag pipeline.'''
         return (self.retriever_query_importance + self.generator_query_importance) / 2.
+
+    @property
+    def query_agreement(self) -> NDArray[np.float64]:
+        '''Word importance agreement of the query between retriever and generator.'''
+
+        # get normalized importance rankings:
+        ret = np.argsort(self.retriever_query_importance)
+        gen = np.argsort(self.generator_query_importance)
+
+        # compute spearman correlation:
+        r, p = spearmanr(ret, gen)
+
+        return r
