@@ -87,7 +87,7 @@ def run_single_experiment(exp_type: str, context_dict: dict, queries_df: pd.Data
         
         # Save explainability data
         save_file = save_dir / f"{args.model_id.split('/')[-1]}_qid_{query_id}.pkl"
-        model.save_values(str(save_file))
+        model.save_values(str(save_file), batch_size=16)
         
         results_log.append({'query_id': query_id, 'query': query, 'contexts': context})
 

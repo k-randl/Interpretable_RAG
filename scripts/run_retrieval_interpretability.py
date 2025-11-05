@@ -76,7 +76,7 @@ def main():
         
         # Save the intermediate values (attentions, hidden states)
         output_path = os.path.join(args.output_dir, f'query_{qid}.pkl')
-        model.save_values(output_path)
+        model.save_values(output_path, batch_size=16)
 
         # Optionally, calculate and save importance scores
         if args.calculate_importance:
