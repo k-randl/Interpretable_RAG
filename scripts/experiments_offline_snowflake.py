@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from resources.retrieval_offline import ExplainableAutoModelForContextEncoding, ExplainableAutoModelForRetrieval
+from src.Interpretable_RAG.retrieval_offline import ExplainableAutoModelForContextEncoding, ExplainableAutoModelForRetrieval
 
 # %%
 # We use msmarco query and passages as an example
