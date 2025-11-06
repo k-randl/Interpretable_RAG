@@ -25,7 +25,7 @@ list_of_importance_scores = []
 for qid, query in tqdm.tqdm(enumerate(queries), total=len(queries), desc='Processing queries'):
     contexts = retrieval_results[retrieval_results['query_id'] == qid]['retrieved_text'].tolist()
     rag('query: ' + query, contexts, output_attentions=True, output_hidden_states=True)
-    rag.save_values(OUTPUT_DIR+f'/query_{qid}.pkl')
+    rag.save_values(OUTPUT_DIR+f'/query_{qid}.pkl',batch_size=32)
     '''
     importance_score = rag.aGrad()
     in_tokens = rag.in_tokens

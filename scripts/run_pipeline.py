@@ -142,10 +142,10 @@ if __name__ == "__main__":
     main()
     
     '''python run_pipeline.py \
-    --topics_path /path/to/data/topics.tsv \
-    --ranked_list_path /path/to/data/results_snowflake_flat.csv \
-    --collection_path /path/to/data/CAST2019collection.tsv \
-    --output_path /path/to/new/results/ \
+    --topics_path /home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2019/data/topics/topics.tsv\
+    --ranked_list_path /home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/data/cast19_retrieval_results.csv \
+    --collection_path /home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2019/data/CAST2019collection.tsv \
+    --output_path /home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/results/trec19_05_11_25 \
     --num_docs_context 6 \
     --run_original \
     --run_randomized'''

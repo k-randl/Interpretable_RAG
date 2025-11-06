@@ -1,7 +1,7 @@
 #%%
 import torch
 from transformers import AutoTokenizer
-from resources.retrieval_offline import ExplainableAutoModelForContextEncoding, ExplainableAutoModelForRetrieval
+from src.Interpretable_RAG.retrieval_offline import ExplainableAutoModelForContextEncoding, ExplainableAutoModelForRetrieval
 tokenizer = AutoTokenizer.from_pretrained('facebook/dragon-plus-query-encoder')
 query_encoder = ExplainableAutoModelForContextEncoding.from_pretrained('facebook/dragon-plus-query-encoder')
 context_encoder = ExplainableAutoModelForRetrieval.from_pretrained('facebook/dragon-plus-context-encoder')
@@ -83,11 +83,11 @@ import os
 if os.path.exists(snowflake_embeddings_path):
     snowflake_embeddings = np.load(snowflake_embeddings_path)
     
-from resources.tools import *
+from src.Interpretable_RAG.tools import *
 
 create_faiss_index_flat(snowflake_embeddings, '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2019/passage_embeddings/snowflake-arctic-embed-l-v2.0/flat_index/snowflake_index_flat.index')
 # %%
-from resources.search_tools import *
+from src.Interpretable_RAG.search_tools import *
 from argparse import Namespace
 year = 2019
 model = 'snowflake'
