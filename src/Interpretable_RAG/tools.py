@@ -243,3 +243,67 @@ def apply_l2_reduction_query(query_embeddings):
     data = extended_query_embeddings / np.linalg.norm(extended_query_embeddings, axis=1, keepdims=True)
     data = np.array(data).astype(np.float32)
     return data
+
+import csv
+def find_delimiter(filepath):
+    """
+    Detects the delimiter of a file by reading the first 1024 bytes.
+    """
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            # Read a sample of the file (e.g., the first 1024 bytes)
+            sample = f.read(1024)
+            
+            # Use Sniffer to detect the dialect
+            sniffer = csv.Sniffer()
+            dialect = sniffer.sniff(sample)
+            
+            return dialect.delimiter
+    except Exception as e:
+        print(f"Could not detect delimiter: {e}")
+        return None
+    
+
+def sniff_file_dialect(filepath: str, sample_size: int = 2048):
+    """
+    Sniffs a file to detect its delimiter and whether it has a header.
+
+    Args:
+        filepath: The path to the file.
+        sample_size: How many bytes to read for the sample (default 2048).
+
+    Returns:
+        A tuple (delimiter, has_header) or (None, None) on failure.
+        - delimiter (str or None): The detected delimiter (e.g., ',', '\t').
+        - has_header (bool or None): True if a header is likely, 
+                                     False if not, None if uncertain or on error.
+    """
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            # Read a sample of the file for sniffing
+            sample = f.read(sample_size)
+            
+            # Reset file pointer just in case, though not strictly needed for 'r'
+            f.seek(0)
+            
+            # Initialize the sniffer
+            sniffer = csv.Sniffer()
+            
+            # --- Detect Delimiter ---
+            # The sniff method returns a 'Dialect' object
+            dialect = sniffer.sniff(sample)
+            delimiter = dialect.delimiter
+            
+            # --- Detect Header ---
+            # The has_header method returns True, False, or None
+            has_header = sniffer.has_header(sample)
+            
+            return delimiter, has_header
+
+    except csv.Error:
+        # This catches errors if the sniffer can't find a delimiter
+        print(f"Error: Could not detect a valid dialect for file: {filepath}")
+        return None, None
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None, None

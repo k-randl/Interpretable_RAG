@@ -8,7 +8,7 @@ import pytrec_eval
 import ir_measures
 from time import time
 from transformers import AutoModel, AutoTokenizer
-from resources.tools import embed_passages
+from .tools import embed_passages
 from argparse import Namespace
 #%%
 def generate_query_embeddings(queries, model_name, max_length=512, device='cuda'):

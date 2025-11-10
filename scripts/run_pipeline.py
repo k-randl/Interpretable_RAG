@@ -1,3 +1,4 @@
+#%%
 # run_pipeline.py
 import argparse
 import os
@@ -12,7 +13,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
-
+from src.Interpretable_RAG.tools import *
 def setup(model_id: str, device: str):
     """Loads the generative model and the tokenizer."""
     print(f"INFO: Loading model {model_id}...")
@@ -27,9 +28,9 @@ def setup(model_id: str, device: str):
 def load_data(topics_path: Path, ranked_list_path: Path, collection_path: Path, top_k: int):
     """Loads the queries and the retrieved documents."""
     print("INFO: Loading input data...")
-    queries_df = pd.read_csv(topics_path, names=['query_id', 'query'], sep='\t')
+    sep, has_header = sniff_file_dialect(topics_path)
+    queries_df = pd.read_csv(topics_path, names=['query_id', 'query'], sep=sep, header=0 if has_header else None)
     ranked_passages_df = pd.read_csv(ranked_list_path)
-    
     # If the passage text is not already present, join it from the collection
     if 'retrieved_text' not in ranked_passages_df.columns:
         collection_df = pd.read_csv(collection_path, sep='\t', names=['id', 'text'])
@@ -120,9 +121,12 @@ def main():
     args = parser.parse_args()
 
     # 1. Model setup
-    model = setup(args.model_id, 'cuda' if torch.cuda.is_available() else 'cpu')
+    model = setup(args.model_id)
 
     # 2. Data loading and preparation
+    #sep, has_header = sniff_file_dialect(args.topics_path)
+    #queries_df = pd.read_csv(args.topics_path,  sep=sep, header=0 if has_header else None, names=['query_id', 'query'])
+    #contexts = pd.read_csv(args.ranked_list_path).groupby('query_id')['retrieved_text'].apply(list).to_dict()
     queries_df, contexts = load_data(args.topics_path, args.ranked_list_path, args.collection_path, args.num_docs_context * 2) # We load a few more documents for randomization
     context_variations = create_context_variations(contexts, args.num_docs_context)
 
@@ -137,15 +141,27 @@ def main():
         run_single_experiment('no_duplicates', context_variations['no_duplicates'], queries_df, model, args)
         
     print("\nPipeline completed.")
-
+#%%
 if __name__ == "__main__":
     main()
     
     '''python run_pipeline.py \
-    --topics_path /home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2019/data/topics/topics.tsv\
-    --ranked_list_path /home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/data/cast19_retrieval_results.csv \
-    --collection_path /home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2019/data/CAST2019collection.tsv \
-    --output_path /home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/results/trec19_05_11_25 \
+    --topics_path data/topics/topics_efra.tsv\
+    --ranked_list_path data/retrieval_results/retrieval_results_efra_chunks.csv\
+    --collection_path data/eval_datasets/aligned_validation_data.csv \
+    --output_path results/generation/efra_chunks_10_11_2025/ \
     --num_docs_context 6 \
     --run_original \
     --run_randomized'''
+    
+    
+'''
+    topics_path = data/topics/topics_efra.tsv
+    ranked_list_path = data/retrieval_results/retrieval_results_efra_chunks.csv
+    collection_path = data/eval_datasets/aligned_validation_data.csv
+    output_path = results/generation/efra_chunks_10_11_2025/
+    num_docs_context = 6
+    run_original = True
+    run_randomized = True
+    
+'''
