@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 from src.Interpretable_RAG.tools import *
-def setup(model_id: str, device: str):
+def setup(model_id: str):
     """Loads the generative model and the tokenizer."""
     print(f"INFO: Loading model {model_id}...")
     model = ExplainableAutoModelForGeneration.from_pretrained(
@@ -83,12 +83,12 @@ def run_single_experiment(exp_type: str, context_dict: dict, queries_df: pd.Data
             max_new_tokens=args.max_gen_len,
             batch_size=2**len(context),
             do_sample=False,
-            max_samples=2**len(context) * 2 # For precise SHAP calculation
+            max_samples='inf' # For precise SHAP calculation
         )
         
         # Save explainability data
         save_file = save_dir / f"{args.model_id.split('/')[-1]}_qid_{query_id}.pkl"
-        model.save_values(str(save_file), batch_size=16)
+        model.save_values(str(save_file))
         
         results_log.append({'query_id': query_id, 'query': query, 'contexts': context})
 
