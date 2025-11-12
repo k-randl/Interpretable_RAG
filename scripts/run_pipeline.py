@@ -2,6 +2,7 @@
 # run_pipeline.py
 import argparse
 import os
+import time
 import torch
 import pandas as pd
 import numpy as np
@@ -14,6 +15,31 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 from src.Interpretable_RAG.tools import *
+
+
+def parse_max_samples(value: str):
+    """Parse the max_samples argument allowing ints, 'auto' or 'inf'."""
+    if isinstance(value, (int, float)):
+        ivalue = int(value)
+        if ivalue < 1:
+            raise argparse.ArgumentTypeError("max_samples must be a positive integer.")
+        return ivalue
+
+    value = value.strip().lower()
+    if value in {"auto", "inf"}:
+        return value
+
+    try:
+        ivalue = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "max_samples must be either a positive integer, 'auto', or 'inf'."
+        ) from exc
+
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError("max_samples must be a positive integer.")
+
+    return ivalue
 def setup(model_id: str):
     """Loads the generative model and the tokenizer."""
     print(f"INFO: Loading model {model_id}...")
@@ -63,8 +89,9 @@ def run_single_experiment(exp_type: str, context_dict: dict, queries_df: pd.Data
     print(f"--- Starting Experiment: {exp_type.upper()} ---")
     save_dir = args.output_path / exp_type
     save_dir.mkdir(parents=True, exist_ok=True)
-    
+
     results_log = []
+    processed_queries = 0
 
     for _, row in tqdm(queries_df.iterrows(), total=len(queries_df), desc=f"Generation for '{exp_type}'"):
         query_id = row['query_id']
@@ -75,22 +102,33 @@ def run_single_experiment(exp_type: str, context_dict: dict, queries_df: pd.Data
             continue
             
         context = context_dict[query_id]
-        BATCH_SIZE = 8
+        print(
+            f"INFO: Processing query_id={query_id} "
+            f"with {len(context)} contexts | max_samples={args.max_samples} | max_gen_len={args.max_gen_len}"
+        )
+        start_time = time.time()
         # Run generation and explainability
         model.explain_generate(
             query,
             context,
             max_new_tokens=args.max_gen_len,
-            batch_size=BATCH_SIZE,
+            batch_size=args.batch_size,
             do_sample=False,
-            max_samples='inf' # For precise SHAP calculation
+            max_samples=args.max_samples
         )
+        elapsed = time.time() - start_time
+        print(f"INFO: Completed query_id={query_id} in {elapsed:.1f}s")
         
         # Save explainability data
         save_file = save_dir / f"{args.model_id.split('/')[-1]}_qid_{query_id}.pkl"
         model.save_values(str(save_file))
         
         results_log.append({'query_id': query_id, 'query': query, 'contexts': context})
+        processed_queries += 1
+
+        if args.max_queries is not None and processed_queries >= args.max_queries:
+            print(f"INFO: Reached max_queries limit ({args.max_queries}). Stopping experiment '{exp_type}'.")
+            break
 
     # Save a CSV log with the inputs used
     log_df = pd.DataFrame(results_log)
@@ -112,7 +150,19 @@ def main():
     # Experiment parameters
     parser.add_argument("--num_docs_context", type=int, default=6, help="Number of documents to use as context.")
     parser.add_argument("--max_gen_len", type=int, default=300, help="Maximum length of the generated response.")
-    
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for generation.")
+    parser.add_argument(
+        "--max_samples",
+        type=parse_max_samples,
+        default="auto",
+        help="Maximum number of SHAP samples ('auto', 'inf', or positive integer).",
+    )
+    parser.add_argument(
+        "--max_queries",
+        type=int,
+        default=None,
+        help="Optional cap on the number of queries to process for quicker debugging.",
+    )
     # Flags to control which experiments to run
     parser.add_argument("--run_original", action='store_true', help="Run the experiment with the original contexts.")
     parser.add_argument("--run_randomized", action='store_true', help="Run with contexts in random order.")
