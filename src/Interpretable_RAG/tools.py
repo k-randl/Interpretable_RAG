@@ -8,22 +8,15 @@ from tqdm.auto import tqdm
 
 
 
-"""
-Generates a qrels file in TREC format with binary relevance (1 relevant document per query).
-
-Parameters:
-- df (pd.DataFrame): DataFrame containing query-document relevance information.
-- qid_col (str): Column name for query IDs.
-- doc_id_col (str): Column name for relevant document IDs.
-- output_file (str): path of the output qrels file.
-
-Returns:
-- None: Writes a qrels file to disk.
-"""
-
-
 def create_qrels_file(df, qid_col="qid", doc_id_col="doc_id", sep= ',', output_file="qrels.qrel"):
+    """Generates a qrels file in TREC format with binary relevance (1 relevant document per query).
 
+        Args:
+            df (pd.DataFrame):  DataFrame containing query-document relevance information.
+            qid_col (str):      Column name for query IDs.
+            doc_id_col (str):   Column name for relevant document IDs.
+            output_file (str):  path of the output qrels file.
+    """
     # Ensure the DataFrame contains only unique qid-doc_id pairs
     df = df[[qid_col, doc_id_col]].drop_duplicates()
     df.columns = ['qid','doc_id']
@@ -39,20 +32,16 @@ def create_qrels_file(df, qid_col="qid", doc_id_col="doc_id", sep= ',', output_f
 
 
 #### GENERATE TOPICS FILE ####
-"""
-Generates a topics file in TREC format with a query per line.
-
-Parameters:
-- df (pd.DataFrame): DataFrame containing query information.
-- qid_col (str): Column name for query IDs.
-- query_col (str): Column name for queries.
-- output_file (str): Name of the output topics file.
-
-Returns:
-- None: Writes a topics file to disk.
-"""
 def create_topics_file(df, qid_col="qid", query_col="query", output_file="topics.csv", sep = ","):
-    
+    """Generates a topics file in TREC format with a query per line.
+
+    Args:
+        df (pd.DataFrame):  DataFrame containing query information.
+        qid_col (str):      Column name for query IDs.
+        query_col (str):    Column name for queries.
+        output_file (str):  Name of the output topics file.
+    """
+
     # Save to file
     df[[qid_col, query_col]].to_csv(output_file, sep=sep, index=False, header=False)
     
@@ -246,9 +235,7 @@ def apply_l2_reduction_query(query_embeddings):
 
 import csv
 def find_delimiter(filepath):
-    """
-    Detects the delimiter of a file by reading the first 1024 bytes.
-    """
+    """Detects the delimiter of a file by reading the first 1024 bytes."""
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             # Read a sample of the file (e.g., the first 1024 bytes)
@@ -265,8 +252,7 @@ def find_delimiter(filepath):
     
 
 def sniff_file_dialect(filepath: str, sample_size: int = 2048):
-    """
-    Sniffs a file to detect its delimiter and whether it has a header.
+    """Sniffs a file to detect its delimiter and whether it has a header.
 
     Args:
         filepath: The path to the file.
