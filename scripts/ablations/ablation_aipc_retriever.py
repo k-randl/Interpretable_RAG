@@ -145,17 +145,17 @@ with open(os.path.join(RESULTS_PATH, 'curves_dragon.pkl'), 'rb') as file:
 with open(os.path.join(RESULTS_PATH, 'curves_snowflake.pkl'), 'rb') as file:
     curves_snowflake = pickle.load(file)
 
-fig, axs = plt.subplots(2, 2)
+fig, axs = plt.subplots(2, 3)
 for method in set(list(curves_dragon.keys()) + list(curves_snowflake.keys())):
     # Dragon:
     if method in curves_dragon:
-        axs[0,0].plot(curves_dragon[method]['xs'] * 100.,    curves_dragon[method]['lerf'].mean(axis=0) * 100.,    label=method)
-        axs[1,0].plot(curves_dragon[method]['xs'] * 100.,    curves_dragon[method]['morf'].mean(axis=0) * 100.,    label=method)
+        axs[0,0].plot(curves_dragon[method]['xs'] * 100.,    curves_dragon[method]['lerf'].mean(axis=0) * 100., label=method)
+        axs[1,0].plot(curves_dragon[method]['xs'] * 100.,    curves_dragon[method]['morf'].mean(axis=0) * 100.)
 
     # Snowflake:
     if method in curves_snowflake:
-        axs[0,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['lerf'].mean(axis=0) * 100., label=method)
-        axs[1,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['morf'].mean(axis=0) * 100., label=method)
+        axs[0,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['lerf'].mean(axis=0) * 100.)
+        axs[1,1].plot(curves_snowflake[method]['xs'] * 100., curves_snowflake[method]['morf'].mean(axis=0) * 100.)
 
 
 for row in range(2):
@@ -185,6 +185,10 @@ axs[1,1].set_yticklabels([])
 axs[0,0].set_title('Dragon')
 axs[0,1].set_title('Snowflake')
 
-axs[0,1].legend()
+# Deactivate third column:
+axs[0,-1].axis('off')
+axs[1,-1].axis('off')
+
+fig.legend(loc='center right', ncols=1)
 plt.tight_layout()
 plt.savefig('aipc_retriever.pdf')
