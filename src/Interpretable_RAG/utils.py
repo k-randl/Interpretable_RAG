@@ -108,6 +108,148 @@ def tokens2words(tokens:List[str], *, token_processor:Optional[Callable[[str],st
 
     return words
 
+def flatten_token_attributions(attribution:List[float], tokens:List[str], *, token_processor:Optional[Callable[[str],str]]=None):
+    """Flatten token-level attributions to a character-level attribution array.
+    Each element of `attribution` is assumed to correspond to the token at the
+    same position in `tokens`.
+
+    Args:
+        attribution (List[float]):
+            A sequence of scalar attribution scores, one per token.
+        tokens (List[str]):
+            A sequence of token strings corresponding to `attribution`.
+        token_processor ((str) -> str, optional):
+            If provided, a function applied to each token string before counting its
+            characters and appending to the output text (for example, to normalize white spaces). If None, the raw token strings are used.
+
+    Returns:
+        out (Tuple[np.ndarray, str]):
+            A tuple `(attribution, text)`, where...
+            - `attribution` is a 1-D numpy array of floats whose length equals the
+            total number of characters in `text`. Each token's attribution value
+            from `attribution` is repeated for each character of the corresponding
+            processed token.
+            - `text` is the concatenated string produced by joining all processed
+            tokens in order.
+
+    Example:
+        >>> attribution = [0.1, -0.2]
+        >>> tokens = ["Hello", " world"]
+        >>> flatten_token_attributions(attribution, tokens)
+        # returns (array([0.1,0.1,0.1,0.1,0.1, -0.2, -0.2, -0.2, -0.2, -0.2, -0.2]),
+        #          "Hello world")
+    """
+
+    attribution_out, txt_out = [], ''
+    for a, s in zip(attribution, tokens, strict=True):
+        if token_processor is not None:
+            s = token_processor(s)
+        
+        attribution_out += [a]*len(s)
+        txt_out += s
+
+    return np.array(attribution_out), txt_out
+
+def match_token_attributions(
+        ret_attribution:List[float], ret_tokens:List[str],
+        gen_attribution:List[float], gen_tokens:List[str],
+        *,
+        ret_token_processor:Optional[Callable[[str],str]]=None,
+        gen_token_processor:Optional[Callable[[str],str]]=None
+    ):
+    """Align and match token-level attributions from retriever and generator.
+
+    This function:
+    - flattens token attributions to character-level attribution arrays using the
+      provided token processors,
+    - finds the overlapping substring between the flattened retriever and
+      generator texts,
+    - extracts the aligned character-level attribution vectors for the common
+      substring,
+    - groups adjacent characters that share identical retriever and generator
+      attribution values into tokens,
+    - normalizes the resulting retriever and generator attribution arrays so
+      each sums to 1.
+
+    Args:
+        ret_attribution (List[float]):                Attribution values for retriever tokens.
+        ret_tokens (List[str]):                       Retriever token strings corresponding to ret_attribution.
+        gen_attribution (List[float]):                Attribution values for generator tokens.
+        gen_tokens (List[str]):                       Generator token strings corresponding to gen_attribution.
+        ret_token_processor ((str) -> str, optional): Optional function applied to each retriever token before flattening.
+        gen_token_processor ((str) -> str, optional): Optional function applied to each generator token before flattening.
+
+    Returns:
+        Tuple[List[str], np.ndarray, np.ndarray]:
+            A tuple `(out_tokens, out_ret_attr, out_gen_attr)`, where ...
+            - `out_tokens` is a list of grouped character sequences (strings).
+            - `out_ret_attr` is a 1-D numpy array of normalized retriever attributions per group (sums to 1).
+            - `out_gen_attr`is a 1-D numpy array of normalized generator attributions per group (sums to 1).
+
+    Raises:
+        ValueError: if no overlapping substring can be found between the flattened
+                    retriever and generator texts.
+
+    Example:
+        >>> ret_attr = [0.1, 0.2]
+        >>> ret_toks = ["Hello", " world"]
+        >>> gen_attr = [0.05, 0.25]
+        >>> gen_toks = ["Hello", " world"]
+        >>> match_token_attributions(ret_attr, ret_toks, gen_attr, gen_toks)
+        (['Hello world'], array([0.33333333, 0.66666667]), array([0.16666667, 0.83333333]))
+    """
+
+    # flatten retreiver input:
+    ret_attr, ret_txt = flatten_token_attributions(
+        ret_attribution, ret_tokens,
+        token_processor = ret_token_processor
+    )
+
+    # flatten generator input:
+    gen_attr, gen_txt = flatten_token_attributions(
+        gen_attribution, gen_tokens,
+        token_processor = gen_token_processor
+    )
+
+    # find position of generator text in retriever text:
+    offset = gen_txt.find(ret_txt)
+    if offset >= 0:
+        gen_txt  = gen_txt[offset:offset+len(ret_txt)]
+        gen_attr = gen_attr[offset:offset+len(ret_txt)]
+
+    else:
+        # if not found: find position of retriever query in generator query:
+        offset = ret_txt.find(gen_txt)
+        if offset >= 0:
+            ret_txt  = ret_txt[offset:offset+len(gen_txt)]
+            ret_attr = ret_attr[offset:offset+len(gen_txt)]
+
+        # if still not found raise ValueError:
+        else: raise ValueError()
+
+    assert gen_txt == ret_txt
+
+    # combine:
+    out_tokens   = [gen_txt[0]]
+    out_gen_attr = [gen_attr[0]]
+    out_ret_attr = [ret_attr[0]]
+    for i in range(1, len(gen_txt)):
+        if gen_attr[i] != out_gen_attr[-1] or ret_attr[i] != out_ret_attr[-1]:
+            out_tokens.append('')
+            out_gen_attr.append(gen_attr[i])
+            out_ret_attr.append(ret_attr[i])
+
+        out_tokens[-1] += gen_txt[i]
+
+    # normalize:
+    out_ret_attr = np.array(out_ret_attr)
+    out_ret_attr /= out_ret_attr.sum()
+
+    out_gen_attr = np.array(out_gen_attr)
+    out_gen_attr /= out_gen_attr.sum()
+
+    return out_tokens, out_ret_attr, out_gen_attr
+
 #====================================================================================================#
 # Messy transformers convenience functions:                                                          #
 #====================================================================================================#
