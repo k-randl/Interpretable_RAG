@@ -450,7 +450,7 @@ class GeneratorExplanation(GeneratorExplanationBase):
                     
 
                     # avoid multiple instances of the tokenizer:
-                    if tokenizer is None: tokenizer = result[0].tokenizer
+                    if tokenizer is None: tokenizer = result[item].tokenizer
 
                 except Exception as e:
                     print(f'WARNING: Could not load "{item}": {e}')
