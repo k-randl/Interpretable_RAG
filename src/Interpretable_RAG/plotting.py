@@ -419,20 +419,20 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
         method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
         threshold:float=0.0,
         token_processor:Optional[Callable[[str],str]]=None,
-        cmap:str='tab10',
+        cmap:str='ragbin',
         show:bool=True,
         **kwargs
     ) -> Union[str,None]:
     """Highlights tokens in a text sequence that are important for retrieving the document.
 
     Args:
-        explanation (RetrieverExplanationBase): An object containing the necessary information for plotting.
-        document_names (List[str]):             An optional list of names of the documents.
-        method (str):                           The method for calculating token importance.
-        threshold (float):                      Minimum importance for highlighting in the intervall `[0., 1.)` (default: `0.`).
-        token_processor ((str) -> str):         An optional function applied to each token before printing.
-        cmap (str):                             The name of a matplotlib colormap used for highlighting.
-        show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+        explanation (RetrieverExplanationBase):   An object containing the necessary information for plotting.
+        document_names (List[str], optional):     An optional list of names of the documents.
+        method (str, optional):                   The method for calculating token importance.
+        threshold (float, optional):              Minimum importance for highlighting in the intervall `[0., 1.)` (default: `0.`).
+        token_processor ((str) -> str, optional): An optional function applied to each token before printing.
+        cmap (str, optional):                     The name of a matplotlib colormap used for highlighting.
+        show (bool, optional):                    If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
         A HTML-formatted string with spans highlighting important tokens if `show == False`.
@@ -574,7 +574,7 @@ def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, docu
 
 def visualize_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
         method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
-        cmap:str='tab10',
+        cmap:str='ragbin',
         show:bool=True,
         **kwargs
     ) -> Union[Figure, str, None]:
@@ -584,7 +584,7 @@ def visualize_importance_retriever(explanation:RetrieverExplanationBase, documen
         explanation (RetrieverExplanationBase): An object containing the necessary information for plotting.
         document_names (List[str]):             An optional list of names of the documents.
         method (str):                           The method for calculating token importance.
-        cmap (str):                             The name of a matplotlib colormap used for highlighting.
+        cmap (str, optional):                   The name of a matplotlib colormap used for highlighting.
         show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
@@ -678,19 +678,21 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
 def higlight_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         threshold:float=.5,
         token_processor:Optional[Callable[[str],str]]=None,
-        show:bool=True,
-        cmap:str='tab10'
+        query_cmap:str='ragbin',
+        document_cmap:str='tab10',
+        show:bool=True
     ) -> str:
     """Highlights tokens in a text sequence where a single document contributes
     at least `threshold` of the total positive SHAP value at that token.
 
     Args:
-        explanation (GeneratorExplanationBase): An object containing the necessary information for plotting.
-        document_names (List[str]):             An optional list of names of the documents.
-        threshold (float):                      Minimum attribution for highlighting in the intervall `[0., 1.)` (default: `0.5`).
-        token_processor ((str) -> str):         An optional function applied to each token before printing.
-        cmap (str):                             The name of a matplotlib colormap used for highlighting.
-        show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+        explanation (GeneratorExplanationBase):   An object containing the necessary information for plotting.
+        document_names (List[str], optional):     An optional list of names of the documents.
+        threshold (float, optional):              Minimum attribution for highlighting in the intervall `[0., 1.)` (default: `0.5`).
+        token_processor ((str) -> str, optional): An optional function applied to each token before printing.
+        query_cmap (str, optional):               The name of a matplotlib colormap used for highlighting of the query attributions.
+        document_cmap (str, optional):            The name of a matplotlib colormap used for highlighting of different documents.
+        show (bool, optional):                    If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
         A HTML-formatted string with spans highlighting dominant SHAP regions if `show == False`.
@@ -725,7 +727,7 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
         threshold       = threshold,
         skip_tokens     = special_tokens,
         legend          = False,
-        cmap            = cmap
+        cmap            = query_cmap
     )
 
     # create response html:
@@ -737,7 +739,7 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
         threshold       = threshold,
         skip_tokens     = special_tokens,
         token_processor = token_processor,
-        cmap            = cmap
+        cmap            = document_cmap
     )
 
     # Build, display, and return final HTML:
@@ -830,7 +832,8 @@ def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, doc
 
 def visualize_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
-        cmap:str='tab10',
+        primary_cmap:str='tab10',
+        secondary_cmap:str='ragbin',
         show:bool=True,
         **kwargs
     ) -> Union[Figure, str, None]:
@@ -840,7 +843,8 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
         explanation (RetrieverExplanationBase): An object containing the necessary information for plotting.
         document_names (List[str]):             An optional list of names of the documents.
         aggregation (str):                      Aggregation method for probabilities (default: `'token'`).
-        cmap (str):                             The name of a matplotlib colormap used for highlighting.
+        primary_cmap (str, optional):           The name of a matplotlib colormap used for highlighting of different documents.
+        secondary_cmap (str, optional):         The name of a matplotlib colormap used for highlighting of the query attributions.
         show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
@@ -851,7 +855,8 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
         return higlight_attribution_generator(
             explanation    = explanation,
             document_names = document_names,
-            cmap           = cmap,
+            query_cmap     = secondary_cmap,
+            document_cmap  = primary_cmap,
             show           = show,
             **kwargs
         )
@@ -862,7 +867,7 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
             document_names = document_names,
             aggregation    = aggregation,
             normalize      = kwargs.get('normalize', True),
-            cmap           = cmap,
+            cmap           = primary_cmap,
             show           = show,
             **kwargs
         )
@@ -872,7 +877,7 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
             explanation    = explanation,
             document_names = document_names,
             aggregation    = aggregation,
-            cmap           = cmap,
+            cmap           = primary_cmap,
             show           = show,
             **kwargs
         )
@@ -967,9 +972,9 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
         retriever_token_processor:Optional[Callable[[str],str]]=None,
         generator_token_processor:Optional[Callable[[str],str]]=None,
         retriever_method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
-        show:bool=True,
         query_cmap:str='ragbin',
         document_cmap:str='tab10',
+        show:bool=True,
         **kwargs
     ) -> str:
     """Highlights tokens in a text sequence where a single document contributes
@@ -989,7 +994,7 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
         retriever_method (str, optional):
             The method for calculating retriever token importance.
         query_cmap (str, optional):
-            The name of a matplotlib colormap used for highlighting of binary scales.
+            The name of a matplotlib colormap used for highlighting of the query attributions.
         document_cmap (str, optional):
             The name of a matplotlib colormap used for highlighting of different documents.
         show (bool, optional):

@@ -93,7 +93,8 @@ def run_experiment(exp_type: str, context_dict: dict, queries_df: pd.DataFrame, 
             top_p=1,
             temperature=0.7,
             num_beams=1,
-            max_samples=2**num_docs_context*2
+            max_samples_query='auto',
+            max_samples_context='inf'
         )
         
         # Build the filename based on the experiment type

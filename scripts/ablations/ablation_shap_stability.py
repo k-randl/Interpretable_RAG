@@ -68,7 +68,8 @@ for query, contexts in tqdm(sample_texts[START:]):
         max_new_tokens=256,
         do_sample=False,
         num_beams=1,
-        max_samples=60,
+        max_samples_query='auto',
+        max_samples_context=30,
         batch_size=64,
         conditional=True
     )

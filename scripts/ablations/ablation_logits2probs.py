@@ -50,7 +50,8 @@ for item in tqdm(sample):
         do_sample=False,
         top_p=1,
         num_beams=1,
-        max_samples=64,
+        max_samples_query='auto',
+        max_samples_context='inf',
         batch_size=64,
         conditional=True
     )
