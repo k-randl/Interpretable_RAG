@@ -1266,6 +1266,10 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             def _get_shapley_values_monte_carlo(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float64]:
                 assert precise is False, 'Monte Carlo SHAP values can only be calculated for approximate values!'
 
+                # Adjust sample_size to not exceed the number of available coalitions
+                if sample_size > len(indices):
+                    sample_size = len(indices)
+
                 # Generate Shapley values for `num_samples` samples of `sample_size` documents:
                 attributions = []
                 for _ in range(num_samples):
