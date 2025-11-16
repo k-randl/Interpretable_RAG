@@ -2,11 +2,13 @@ import numpy as np
 import pandas as pd
 import spacy
 import pickle
+import matplotlib as mpl
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 from html import escape
 from IPython.display import display, HTML
+from src.Interpretable_RAG.utils import match_token_attributions
 
 from .utils import decode_chat_template, nucleus_sample_tokens
 
@@ -14,6 +16,13 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from numpy.typing import NDArray
 from typing import List, Literal, Tuple, Callable, Optional, Union
+
+#====================================================================#
+# Custom colormao specifications:                                    #
+#====================================================================#
+
+cmap = mcolors.ListedColormap(["#00dddd", "#dd00dd"], name='ragbin')
+mpl.colormaps.register(cmap=cmap, force=True)
 
 #====================================================================#
 # General plotting functions:                                        #
@@ -89,9 +98,10 @@ def plot_token_vbars(ax:Axes, scores:NDArray[np.float64], tokens:List[str], docu
 
 def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], title:str, document_names:Optional[List[str]]=None, *,
         threshold:float=0.0,
-        total:Optional[float]=None,
+        max_score:Optional[float]=None,
         skip_tokens:List[str]=[],
         token_processor:Optional[Callable[[str],str]]=None,
+        color_mode:Literal['winner_takes_it_all', 'average']='winner_takes_it_all',
         legend:bool=True,
         cmap:str='tab10'
     ) -> Tuple[str, str]:
@@ -99,16 +109,14 @@ def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], ti
     at least `threshold` of the total positive attribution scores at that token.
 
     Args:
-        scores (NDArray[np.float64]):   A 2D array of attribution scores with shape `(len(documents), len(tokens))`,
+        scores (NDArray[np.float64]):   A 1D or 2D array of attribution scores with shape `([len(documents),] len(tokens))`,
                                         where each row represents a document and each column corresponds to a token's attribution score.
-                                        In case this is a 3D array, the first dimension will be interpreted as different versions of
-                                        attribution scores.  
         tokens (List[str]):             A list of token strings corresponding to the scores.
                                         Length must match the number of columns in `scores`.
         document_names (List[str]):     An optional list of names of the documents.
         title (str):                    The title of the produced html table row.
         threshold (float):              Minimum attribution for highlighting in the intervall `[0., 1.]` (default: `0.0`).
-        total (float):                  Optional Maximum attribution for highlighting (default: `None`).
+        max_score (float):              Optional Maximum attribution for highlighting (default: `None`).
         skip_tokens (List[str]):        An optional list of tokens that will not be printed.
         token_processor ((str) -> str): An otional function applied to each token before printing.
         legend (bool):                  Whether to create a legend for the plot (default: `True`).
@@ -122,35 +130,56 @@ def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], ti
     if (threshold >= 1.) or (threshold < 0.):
         raise ValueError(f'Parameter `threshold` must be in intervall `[0,1))` but is `{threshold:.2f}`.')
 
+    # check dimenisons of `scores` input:
+    num_dims = scores.ndim
+    if   num_dims == 1: scores = np.stack([scores, -scores])
+    elif num_dims != 2: raise ValueError(f"Parameter `scores` must have 2 dimensions abut has {num_dims:d}.")
+
     # extract only on positive contributions:
     scores_pos = np.maximum(scores, 0)
     num_docs, num_tokens = scores_pos.shape
 
-    if total == None: total = scores_pos.sum(axis=0) if num_docs > 1 else scores_pos.max()
-    total = np.maximum(total, 1e-9) # make sure that total > 0
+    # check color mode parameter:
+    if color_mode == 'winner_takes_it_all':
+        # set non maximal scores to nan:
+        token_docs = scores_pos == scores_pos.max(axis=0, keepdims=True)
+        scores_pos[~token_docs] = np.nan
 
-    token_docs = scores_pos.argmax(axis=0)
-    token_vals = scores_pos[token_docs, np.arange(num_tokens)] / total
+    elif color_mode != 'average':
+        raise ValueError(f'Unknown `color_mode` "{color_mode}"')
+
+    # compute document influence per token:
+    token_totals = np.nansum(scores_pos, initial=0., axis=0, keepdims=True)
+    token_totals = np.maximum(token_totals, 1e-9) # make sure that token_sum > 0
+    token_vals = scores_pos / token_totals
     token_vals = np.maximum((token_vals - threshold) / (1. - threshold), 0.)
-    token_docs[token_vals == 0.] = -1
+    
+    # compute alpha values:
+    alphas = np.nanmean(scores_pos, axis=0)
+    alphas /= alphas.max() if max_score == None else max_score
+    alphas *= 255.
 
     # prepare color map
     cmap = cm.get_cmap(cmap)
-    rgb_colors = [mcolors.to_hex(cmap(i)) for i in range(num_docs)]
+    rgb_colors = np.array([mcolors.to_rgb(cmap(i)) for i in range(num_docs)])*255.
 
     # build highlighed HTML:
     html_tokens = []
-    for tok, doc, val in zip(tokens, token_docs, token_vals):
+    for tok, val, alpha in zip(tokens, token_vals.T, alphas):
         if tok in skip_tokens: continue
 
         if token_processor is not None:
             tok = token_processor(tok)
 
-        html_tokens.append(
-            f'<span style="background-color:{rgb_colors[doc]}{int((val)*255):02x}; padding:0px; border-radius:3px;">' +
-            escape(tok) +
-            '</span>'
-        )
+        if not np.isnan(val).all():
+            r,g,b = np.nanmean(np.stack([c*v for c,v in zip(rgb_colors, val)]), axis=0).astype(int)
+            html_tokens.append(
+                f'<span style="background-color:#{r:02x}{g:02x}{b:02x}{int(alpha):02x}; padding:0px; border-radius:3px;">' +
+                escape(tok) +
+                '</span>'
+            )
+
+        else: html_tokens.append(escape(tok))
 
     html_text = (
         '<tr style="border-top: 1px solid">\n' +
@@ -182,7 +211,7 @@ def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], ti
         '   </td>\n' +
         '   <td style="text-align:left; vertical-align:top">\n' +
         '       <div style="line-height:1">' +
-                    ''.join([f'<div style="background-color:{c}; text-align: center; padding:3px; margin:3px; border-radius:3px; float:left;"><i>{document_names[i]}</i><br><small>({document_vals[i] * 100.:.0f}%)</small></div>' for i, c in enumerate(rgb_colors)]) +
+                    ''.join([f'<div style="background-color:#{int(r):02x}{int(g):02x}{int(b):02x}; text-align: center; padding:3px; margin:3px; border-radius:3px; float:left;"><i>{document_names[i]}</i><br><small>({document_vals[i] * 100.:.0f}%)</small></div>' for i, (r, g, b) in enumerate(rgb_colors)]) +
                 '</div>\n' +
         '   </td>\n' +
         '</tr>\n'
@@ -390,20 +419,20 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
         method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
         threshold:float=0.0,
         token_processor:Optional[Callable[[str],str]]=None,
-        cmap:str='tab10',
+        cmap:str='ragbin',
         show:bool=True,
         **kwargs
     ) -> Union[str,None]:
     """Highlights tokens in a text sequence that are important for retrieving the document.
 
     Args:
-        explanation (RetrieverExplanationBase): An object containing the necessary information for plotting.
-        document_names (List[str]):             An optional list of names of the documents.
-        method (str):                           The method for calculating token importance.
-        threshold (float):                      Minimum importance for highlighting in the intervall `[0., 1.)` (default: `0.`).
-        token_processor ((str) -> str):         An optional function applied to each token before printing.
-        cmap (str):                             The name of a matplotlib colormap used for highlighting.
-        show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+        explanation (RetrieverExplanationBase):   An object containing the necessary information for plotting.
+        document_names (List[str], optional):     An optional list of names of the documents.
+        method (str, optional):                   The method for calculating token importance.
+        threshold (float, optional):              Minimum importance for highlighting in the intervall `[0., 1.)` (default: `0.`).
+        token_processor ((str) -> str, optional): An optional function applied to each token before printing.
+        cmap (str, optional):                     The name of a matplotlib colormap used for highlighting.
+        show (bool, optional):                    If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
         A HTML-formatted string with spans highlighting important tokens if `show == False`.
@@ -428,7 +457,7 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
 
     # plot query:
     html = highlight_dominant_passages(
-        scores          = scores['query'][0].numpy()[None,:], 
+        scores          = scores['query'][0].numpy(), 
         tokens          = explanation.in_tokens['query'][0],
         title           = 'Query',
         threshold       = threshold,
@@ -441,11 +470,11 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
     # plot contexts:
     for i, s in enumerate(scores['context']):
         html += highlight_dominant_passages(
-            scores          = s.numpy()[None,:], 
+            scores          = s.numpy(), 
             tokens          = explanation.in_tokens['context'][i],
             title           = document_names[i],
             threshold       = threshold,
-            total           = np.concatenate(scores['context']).max(),
+            max_score       = np.concatenate(scores['context']).max(),
             skip_tokens     = special_tokens,
             token_processor = token_processor,
             legend          = False,
@@ -545,7 +574,7 @@ def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, docu
 
 def visualize_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
         method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
-        cmap:str='tab10',
+        cmap:str='ragbin',
         show:bool=True,
         **kwargs
     ) -> Union[Figure, str, None]:
@@ -555,7 +584,7 @@ def visualize_importance_retriever(explanation:RetrieverExplanationBase, documen
         explanation (RetrieverExplanationBase): An object containing the necessary information for plotting.
         document_names (List[str]):             An optional list of names of the documents.
         method (str):                           The method for calculating token importance.
-        cmap (str):                             The name of a matplotlib colormap used for highlighting.
+        cmap (str, optional):                   The name of a matplotlib colormap used for highlighting.
         show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
@@ -649,19 +678,21 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
 def higlight_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         threshold:float=.5,
         token_processor:Optional[Callable[[str],str]]=None,
-        show:bool=True,
-        cmap:str='tab10'
+        query_cmap:str='ragbin',
+        document_cmap:str='tab10',
+        show:bool=True
     ) -> str:
     """Highlights tokens in a text sequence where a single document contributes
     at least `threshold` of the total positive SHAP value at that token.
 
     Args:
-        explanation (GeneratorExplanationBase): An object containing the necessary information for plotting.
-        document_names (List[str]):             An optional list of names of the documents.
-        threshold (float):                      Minimum attribution for highlighting in the intervall `[0., 1.)` (default: `0.5`).
-        token_processor ((str) -> str):         An optional function applied to each token before printing.
-        cmap (str):                             The name of a matplotlib colormap used for highlighting.
-        show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+        explanation (GeneratorExplanationBase):   An object containing the necessary information for plotting.
+        document_names (List[str], optional):     An optional list of names of the documents.
+        threshold (float, optional):              Minimum attribution for highlighting in the intervall `[0., 1.)` (default: `0.5`).
+        token_processor ((str) -> str, optional): An optional function applied to each token before printing.
+        query_cmap (str, optional):               The name of a matplotlib colormap used for highlighting of the query attributions.
+        document_cmap (str, optional):            The name of a matplotlib colormap used for highlighting of different documents.
+        show (bool, optional):                    If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
         A HTML-formatted string with spans highlighting dominant SHAP regions if `show == False`.
@@ -689,17 +720,17 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
 
     # create query html:
     html_query = highlight_dominant_passages(
-        scores          = shap_values['query'].mean(axis=1, keepdims=True).T,
+        scores          = shap_values['query'].mean(axis=1),
         tokens          = explanation.qry_tokens,
         title           = 'Query',
         document_names  = document_names,
         threshold       = threshold,
         skip_tokens     = special_tokens,
         legend          = False,
-        cmap            = cmap
+        cmap            = query_cmap
     )
 
-    # create context html:
+    # create response html:
     html_response, html_legend = highlight_dominant_passages(
         scores          = shap_values['context'][:,response['content']],
         tokens          = explanation.gen_tokens[response['content']],
@@ -708,7 +739,7 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
         threshold       = threshold,
         skip_tokens     = special_tokens,
         token_processor = token_processor,
-        cmap            = cmap
+        cmap            = document_cmap
     )
 
     # Build, display, and return final HTML:
@@ -801,7 +832,8 @@ def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, doc
 
 def visualize_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
-        cmap:str='tab10',
+        primary_cmap:str='tab10',
+        secondary_cmap:str='ragbin',
         show:bool=True,
         **kwargs
     ) -> Union[Figure, str, None]:
@@ -811,7 +843,8 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
         explanation (RetrieverExplanationBase): An object containing the necessary information for plotting.
         document_names (List[str]):             An optional list of names of the documents.
         aggregation (str):                      Aggregation method for probabilities (default: `'token'`).
-        cmap (str):                             The name of a matplotlib colormap used for highlighting.
+        primary_cmap (str, optional):           The name of a matplotlib colormap used for highlighting of different documents.
+        secondary_cmap (str, optional):         The name of a matplotlib colormap used for highlighting of the query attributions.
         show (bool):                            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
 
     Returns:
@@ -822,7 +855,8 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
         return higlight_attribution_generator(
             explanation    = explanation,
             document_names = document_names,
-            cmap           = cmap,
+            query_cmap     = secondary_cmap,
+            document_cmap  = primary_cmap,
             show           = show,
             **kwargs
         )
@@ -833,7 +867,7 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
             document_names = document_names,
             aggregation    = aggregation,
             normalize      = kwargs.get('normalize', True),
-            cmap           = cmap,
+            cmap           = primary_cmap,
             show           = show,
             **kwargs
         )
@@ -843,7 +877,7 @@ def visualize_attribution_generator(explanation:GeneratorExplanationBase, docume
             explanation    = explanation,
             document_names = document_names,
             aggregation    = aggregation,
-            cmap           = cmap,
+            cmap           = primary_cmap,
             show           = show,
             **kwargs
         )
@@ -932,6 +966,144 @@ def plot_document_importance_rag(explanation:ExplainableAutoModelForRAG, documen
 
     if show: fig.show()
     else: return fig
+
+def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_names:Optional[List[str]]=None, *,
+        threshold:float=.5,
+        retriever_token_processor:Optional[Callable[[str],str]]=None,
+        generator_token_processor:Optional[Callable[[str],str]]=None,
+        retriever_method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
+        query_cmap:str='ragbin',
+        document_cmap:str='tab10',
+        show:bool=True,
+        **kwargs
+    ) -> str:
+    """Highlights tokens in a text sequence where a single document contributes
+    at least `threshold` of the total positive SHAP value at that token.
+
+    Args:
+        explanation (ExplainableAutoModelForRAG):
+            An object containing the necessary information for plotting.
+        document_names (List[str]):
+            An optional list of names of the documents.
+        threshold (float, optional):
+            Minimum attribution for highlighting in the intervall `[0., 1.)` (default: `0.5`).
+        retriever_token_processor ((str) -> str, optional):
+            Optional function applied to each retriever token before printing.
+        generator_token_processor ((str) -> str, optional):
+            Optional function applied to each generator token before printing.
+        retriever_method (str, optional):
+            The method for calculating retriever token importance.
+        query_cmap (str, optional):
+            The name of a matplotlib colormap used for highlighting of the query attributions.
+        document_cmap (str, optional):
+            The name of a matplotlib colormap used for highlighting of different documents.
+        show (bool, optional):
+            If `True` shows the plot directly, if `False` the plot is returned instead (default: `True`).
+
+    Returns:
+        A HTML-formatted string with spans highlighting dominant SHAP regions if `show == False`.
+    """
+
+    # get retriever scores:
+    if   retriever_method == 'grad':    retriever_attr = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.retriever.grad(**kwargs).items()}
+    elif retriever_method == 'gradIn':  retriever_attr = explanation.retriever.gradIn(**kwargs)
+    elif retriever_method == 'aGrad':   retriever_attr = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.retriever.aGrad(**kwargs).items()}
+    elif retriever_method == 'intGrad': retriever_attr = explanation.retriever.intGrad(**kwargs)
+    else: raise ValueError()
+
+    # compute absolute:
+    retriever_attr = {key:[np.abs(doc) for doc in docs] for key, docs in retriever_attr.items()}
+
+    # get generator attribution scores:
+    generator_attr = explanation.generator.get_shapley_values(None, 'token')
+
+    # get special tokens:
+    retriever_special_tokens = set(explanation.retriever.tokenizer.special_tokens_map.values())
+    generator_special_tokens = set(explanation.generator.tokenizer.special_tokens_map.values())
+
+    # fallback for document names:
+    if document_names is None:
+        document_names = [f'Document {i+1:d}' for i in range(len(retriever_attr['context']))]
+    elif len(document_names) != len(retriever_attr['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
+
+    # get indices of the actual content:
+    # (excluding chat template specific tokens) 
+    response = decode_chat_template(
+        explanation.generator.gen_tokens,
+        explanation.generator.model_name_or_path,
+        return_indices=True
+    )[0]
+
+    # create role:
+    role = explanation.generator.gen_tokens[response['role']]
+    if generator_token_processor is not None:
+        role = [generator_token_processor(t) for t in role]
+    role = ''.join(role).strip().capitalize()
+
+    # create query html:
+    cmb_qry, ret_qry_attr, gen_qry_attr = match_token_attributions(
+        retriever_attr['query'][0].numpy(),   explanation.retriever._in_tokens['query'][0],
+        generator_attr['query'].mean(axis=1), explanation.generator.qry_tokens,
+        ret_token_processor = retriever_token_processor,
+        gen_token_processor = generator_token_processor
+    )
+    html = highlight_dominant_passages(
+        scores          = np.stack([ret_qry_attr, gen_qry_attr]),
+        tokens          = cmb_qry,
+        title           = 'Query',
+        document_names  = document_names,
+        color_mode      = 'average',
+        legend          = False,
+        cmap            = query_cmap
+    )
+
+    # plot contexts:
+    for i, s in enumerate(retriever_attr['context']):
+        html += highlight_dominant_passages(
+            scores          = s.numpy(), 
+            tokens          = explanation.retriever.in_tokens['context'][i],
+            title           = document_names[i],
+            threshold       = threshold,
+            max_score       = np.concatenate(retriever_attr['context']).max(),
+            skip_tokens     = retriever_special_tokens,
+            token_processor = retriever_token_processor,
+            legend          = False,
+            cmap            = query_cmap
+        )
+
+    # create response html:
+    html_response, html_legend = highlight_dominant_passages(
+        scores          = generator_attr['context'][:,response['content']],
+        tokens          = explanation.generator.gen_tokens[response['content']],
+        title           = role,
+        document_names  = document_names,
+        threshold       = threshold,
+        skip_tokens     = generator_special_tokens,
+        token_processor = generator_token_processor,
+        cmap            = document_cmap
+    )
+
+    # Build, display, and return final HTML:
+    html_str = (
+        '<!DOCTYPE html>\n' +
+        '<html>\n' +
+        '<head>\n' +
+        '<title>Generated Text</title>\n' +
+        '</head>\n' +
+
+        '<body>\n' +
+        '<table>\n' +
+        html +
+        html_response +
+        html_legend +
+        '</table>\n' +
+        '</body>\n' +
+
+        '</html>'
+    )
+
+    if show: display(HTML(html_str))
+    else: return html_str
 
 #====================================================================#
 # (New) Plots for Part-of-Speech (POS) Analysis                      #

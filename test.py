@@ -62,7 +62,8 @@ if do_original:
             top_p=1,
             temperature=0.7,
             num_beams=1,
-            max_samples=2**num_docs_context
+            max_samples_query='auto',
+            max_samples_context='inf'
         )
         model.save_values( os.path.join(NEW_PATH,f'{MODEL_ID.split('/')[-1]}_top{num_docs_context}_input_{i}.pkl'))
         input_dict['queries'].append(query)
@@ -90,7 +91,8 @@ if do_random:
             top_p=1,
             temperature=0.7,
             num_beams=1,
-            max_samples=2**num_docs_context
+            max_samples_query='auto',
+            max_samples_context='inf'
         )
         model.save_values(os.path.join(NEW_PATH, f'{MODEL_ID.split('/')[-1]}_top{num_docs_context}_input_{i}_randomized.pkl'))
         input_dict['queries'].append(query)
@@ -120,7 +122,8 @@ if do_no_duplicates:
             top_p=1,
             temperature=0.7,
             num_beams=1,
-            max_samples=2**num_docs_context
+            max_samples_query='auto',
+            max_samples_context='inf'
         )
         model.save_values(os.path.join(NEW_PATH,f'{MODEL_ID.split('/')[-1]}_top{num_docs_context}_input_{i}_no_duplicates.pkl'))
         input_dict['queries'].append(query)

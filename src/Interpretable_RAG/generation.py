@@ -447,10 +447,10 @@ class GeneratorExplanation(GeneratorExplanationBase):
                             model_name_or_path=model_name_or_path,
                             tokenizer=tokenizer
                         )
-                    
+
 
                     # avoid multiple instances of the tokenizer:
-                    if tokenizer is None: tokenizer = result[0].tokenizer
+                    if tokenizer is None: tokenizer = result[item].tokenizer
 
                 except Exception as e:
                     print(f'WARNING: Could not load "{item}": {e}')
@@ -534,7 +534,7 @@ class GeneratorExplanation(GeneratorExplanationBase):
 
 class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCMeta):
     @staticmethod
-    def from_pretrained(pretrained_model_name_or_path:str, *args, **kwargs):
+    def from_pretrained(pretrained_model_name_or_path:str, *args, **kwargs) -> 'ExplainableAutoModelForGeneration':
         """ Instantiates an ExplainableAutoModelForGeneration from a pre-trained model configuration.
 
         Args:
@@ -1053,19 +1053,30 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 return torch.argmax(self._exp_logits[-1], dim=-1)
 
 
-            def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', conditional:bool=True, system:Optional[str]=None, **kwargs):
+            def explain_generate(self, query:str, contexts:List[str], *,
+                    batch_size:int=32,
+                    max_samples_query:Union[int, Literal['inf', 'auto']]='auto',
+                    max_samples_context:Union[int, Literal['inf', 'auto']]='auto',
+                    conditional:bool=True,
+                    system:Optional[str]=None,
+                    **kwargs
+                ):
                 """Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
 
                 Args:
-                    query (str):        The user's query.
-                    contexts (list):    A list of strings representing the retrieved documents.
-                    batch_size (int):   The batch size for generating perturbations (default: `32`).
-                    max_samples (int):  Maximum number of samples used for computing SHAP atribution values.
-                                        If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
-                                        If `inf` is passed, always computes the precise SHAP values.
-                                        If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
-                    conditional (bool): Whether to compute the compared values conditioned on the original generation (default: `True`).
-                    system (str):       An optional system prompt.
+                    query (str):                The user's query.
+                    contexts (list):            A list of strings representing the retrieved documents.
+                    batch_size (int):           The batch size for generating perturbations (default: `32`).
+                    max_samples_query (int):    Maximum number of samples used for computing SHAP atribution values for the query.
+                                                If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
+                                                If `inf` is passed, always computes the precise SHAP values.
+                                                If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
+                    max_samples_context (int):  Maximum number of samples used for computing SHAP atribution values for the context documents.
+                                                If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
+                                                If `inf` is passed, always computes the precise SHAP values.
+                                                If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
+                    conditional (bool):         Whether to compute the compared values conditioned on the original generation (default: `True`).
+                    system (str):               An optional system prompt.
 
                 Returns:
                     A list of generated chats.
@@ -1088,8 +1099,11 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 )
 
                 # generate perturbed prompts:
-                if   max_samples == 'auto': max_samples = batch_size
-                elif max_samples == 'inf':  max_samples = MAXINT
+                if   max_samples_query == 'auto': max_samples_query = int(batch_size//2 + 1)
+                elif max_samples_query == 'inf':  max_samples_query = MAXINT
+
+                if   max_samples_context == 'auto': max_samples_context = int(batch_size//2 + 1)
+                elif max_samples_context == 'inf':  max_samples_context = MAXINT
 
                 self._qry_tokens = query.split()
                 self._qry_tokens[1:] = [' ' + t for t in self._qry_tokens[1:]]
@@ -1098,12 +1112,12 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 self._shap_cache['query'], perturbed_prompts['query'] = self.__generate_prompts(
                     self._qry_tokens,                                                        # permute the query
                     lambda items:create_rag_prompt(''.join(items), contexts, system=system), # build a prompt for each permutation
-                    int(max_samples//2 + 1)
+                    max_samples_query
                 )
                 self._shap_cache['context'], perturbed_prompts['context'] = self.__generate_prompts(
                     contexts,                                                    # permute the contexts
                     lambda items:create_rag_prompt(query, items, system=system), # build a prompt for each permutation
-                    int(max_samples//2 + 1)
+                    max_samples_context
                 )
 
                 # combine prompt lists comparison output:
@@ -1443,19 +1457,30 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
     
     @abstractmethod
-    def explain_generate(self, query:str, contexts:List[str], *, batch_size:int=32, max_samples:Union[int, Literal['inf', 'auto']]='auto', conditional:bool=True, system:Optional[str]=None, **kwargs):
+    def explain_generate(self, query:str, contexts:List[str], *,
+            batch_size:int=32,
+            max_samples_query:Union[int, Literal['inf', 'auto']]='auto',
+            max_samples_contexts:Union[int, Literal['inf', 'auto']]='auto',
+            conditional:bool=True,
+            system:Optional[str]=None,
+            **kwargs
+        ):
         """Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
 
         Args:
-            query (str):        The user's query.
-            contexts (list):    A list of strings representing the retrieved documents.
-            batch_size (int):   The batch size for generating perturbations (default: `32`).
-            max_samples (int):  Maximum number of samples used for computing SHAP atribution values.
-                                If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
-                                If `inf` is passed, always computes the precise SHAP values.
-                                If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
-            conditional (bool): Whether to compute the compared values conditioned on the original generation (default: `True`).
-            system (str):       An optional system prompt.
+            query (str):                The user's query.
+            contexts (list):            A list of strings representing the retrieved documents.
+            batch_size (int):           The batch size for generating perturbations (default: `32`).
+            max_samples_query (int):    Maximum number of samples used for computing SHAP atribution values for the query.
+                                        If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
+                                        If `inf` is passed, always computes the precise SHAP values.
+                                        If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
+            max_samples_contexts (int): Maximum number of samples used for computing SHAP atribution values for the context documents.
+                                        If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
+                                        If `inf` is passed, always computes the precise SHAP values.
+                                        If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
+            conditional (bool):         Whether to compute the compared values conditioned on the original generation (default: `True`).
+            system (str):               An optional system prompt.
 
         Returns:
             A list of generated chats.

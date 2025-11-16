@@ -84,7 +84,8 @@ class AIPCForGeneration:
                 query=qry,
                 contexts=ctx[:5],
                 max_samples=64,
-                batch_size=batch_size,
+                max_samples_query='auto',
+                max_samples_context='inf',
                 conditional=True,
                 **kwargs
             )
@@ -99,7 +100,8 @@ class AIPCForGeneration:
             self.generator.explain_generate(
                 query=qry,
                 contexts=ctx[:5],
-                max_samples=60,
+                max_samples_query='auto',
+                max_samples_context=30,
                 batch_size=batch_size,
                 conditional=True,
                 **kwargs

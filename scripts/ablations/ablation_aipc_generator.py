@@ -118,13 +118,13 @@ fig, axs = plt.subplots(2, 2)
 for method in set(methods):
     # Llama 8b:
     axs[0,0].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['lerf'].mean(0) * 100.,    label=method)
-    axs[1,0].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['morf'].mean(0) * 100.,    label=method)
+    axs[1,0].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['morf'].mean(0) * 100.)
 
     # Llama 8b:
-    axs[0,1].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['lerf'].mean(0) * 100.,    label=method)
-    axs[1,1].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['morf'].mean(0) * 100.,    label=method)
+    #axs[0,1].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['lerf'].mean(0) * 100.)
+    #axs[1,1].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['morf'].mean(0) * 100.)
 
-for row in range(2):
+for row in range(1):
     # Paint arrow for LeRF plot:
     axs[0,row].arrow(50, 50, 30, -30, width=5, head_length=10, ec='white', color='lightblue')
     axs[0,row].text(65, 30, 'better', ha='center', va='bottom', rotation=-45, color='lightblue', zorder=0)
@@ -149,8 +149,12 @@ axs[1,1].set_yticklabels([])
 
 # Set titles:
 axs[0,0].set_title('Llama-8B')
-axs[0,1].set_title('Snowflake')
+#axs[0,1].set_title('Snowflake')
 
-axs[0,1].legend()
+# Deactivate third column:
+axs[0,-1].axis('off')
+axs[1,-1].axis('off')
+
+fig.legend(loc='center right', ncols=1)
 plt.tight_layout()
 plt.savefig('aipc_generator.pdf')

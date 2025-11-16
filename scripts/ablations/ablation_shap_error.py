@@ -63,7 +63,8 @@ for query, contexts in tqdm(sample_texts[START:]):
         do_sample=False,
         top_p=1,
         num_beams=1,
-        max_samples=64,
+        max_samples_query='auto',
+        max_samples_context='inf',
         batch_size=64,
         conditional=True
     )
@@ -79,7 +80,8 @@ for query, contexts in tqdm(sample_texts[START:]):
         do_sample=False,
         top_p=1,
         num_beams=1,
-        max_samples=60,
+        max_samples_query='auto',
+        max_samples_context=30,
         batch_size=64,
         conditional=True
     )

@@ -114,7 +114,8 @@ def run_single_experiment(exp_type: str, context_dict: dict, queries_df: pd.Data
             max_new_tokens=args.max_gen_len,
             batch_size=args.batch_size,
             do_sample=False,
-            max_samples=args.max_samples
+            max_samples_query=args.max_samples_query,
+            max_samples_context=args.max_samples_context
         )
         elapsed = time.time() - start_time
         print(f"INFO: Completed query_id={query_id} in {elapsed:.1f}s")
@@ -152,10 +153,16 @@ def main():
     parser.add_argument("--max_gen_len", type=int, default=300, help="Maximum length of the generated response.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for generation.")
     parser.add_argument(
-        "--max_samples",
+        "--max_samples_query",
         type=parse_max_samples,
         default="auto",
-        help="Maximum number of SHAP samples ('auto', 'inf', or positive integer).",
+        help="Maximum number of SHAP samples for the query ('auto', 'inf', or positive integer).",
+    )
+    parser.add_argument(
+        "--max_samples_context",
+        type=parse_max_samples,
+        default="auto",
+        help="Maximum number of SHAP samples for the contexts ('auto', 'inf', or positive integer).",
     )
     parser.add_argument(
         "--max_queries",
