@@ -180,6 +180,7 @@ def main():
     queries_df, contexts = load_data(args.topics_path, args.ranked_list_path, args.collection_path, args.num_docs_context * 2) # We load a few more documents for randomization
     context_variations = create_context_variations(contexts, args.num_docs_context)
 
+   
     # 3. Execution of the selected experiments
     if args.run_original:
         run_single_experiment('original', context_variations['original'], queries_df, model, args)

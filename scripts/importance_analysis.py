@@ -15,6 +15,7 @@ import numpy as np  # For numerical operations (though not explicitly used here,
 import pandas as pd  # For creating and manipulating dataframes (e.g., for the final CSV)
 import torch  # PyTorch library, used for tensor operations (handling the gradient scores)
 from tqdm import tqdm  # For displaying progress bars during loops
+import textwrap  # For formatting qualitative text snippets
 
 
 # --- 2. GLOBAL CONSTANTS ---
@@ -113,6 +114,35 @@ def parse_args() -> argparse.Namespace:
         "--plot-side-by-side",
         action="store_true",
         help="When plotting, add figures with query and context tokens side by side.",
+    )
+    parser.add_argument(
+        "--qual-query-id",
+        type=int,
+        default=None,
+        help="If set, produce a qualitative report for the given query id.",
+    )
+    parser.add_argument(
+        "--qual-top-contexts",
+        type=int,
+        default=3,
+        help="Number of top-ranked contexts to include in the qualitative example.",
+    )
+    parser.add_argument(
+        "--qual-output",
+        type=Path,
+        default=Path("qualitative_report.md"),
+        help="Destination file (Markdown) for the qualitative example summary.",
+    )
+    parser.add_argument(
+        "--overall-stats",
+        action="store_true",
+        help="Compute dataset-level overlap metrics between queries and contexts.",
+    )
+    parser.add_argument(
+        "--overall-stats-csv",
+        type=Path,
+        default=Path("importance_overlap_stats.csv"),
+        help="Where to store per-query overlap statistics when --overall-stats is enabled.",
     )
     return parser.parse_args()
 
@@ -299,6 +329,19 @@ def _gather_top_items(
     return items_sorted
 
 
+def _build_token_entries(tokens: Sequence[str], scores: Sequence[float]) -> List[tuple[int, str, float, float]]:
+    entries: List[tuple[int, str, float, float]] = []
+    for idx, (token, score) in enumerate(zip(tokens, scores)):
+        if token in SPECIAL_TOKENS:
+            continue
+        clean = clean_token(token)
+        if not clean:
+            continue
+        score_f = float(score)
+        entries.append((idx, clean, score_f, abs(score_f)))
+    return entries
+
+
 def plot_joint_token_scores(
     query_id: int,
     grad_type: str,
@@ -381,6 +424,163 @@ def plot_joint_token_scores(
     filename = f"q{query_id:04d}_context_{context_index}_{grad_type}_joint.png"
     plt.savefig(plot_dir / filename, dpi=200)
     plt.close()
+
+
+def write_qualitative_report(
+    query_id: int,
+    data: dict,
+    top_contexts: int,
+    output_path: Path,
+    grad_type: str,
+) -> None:
+    selected_contexts = data["contexts"][:top_contexts]
+    query_entries = _build_token_entries(data["query_tokens"], data["query_scores"])
+    query_entries_sorted = sorted(query_entries, key=lambda x: x[3], reverse=True)
+
+    context_entries_list = [
+        (_build_token_entries(ctx["tokens"], ctx["scores"]), ctx) for ctx in selected_contexts
+    ]
+
+    context_overlap_tokens = set()
+    for entries, _ctx in context_entries_list:
+        context_overlap_tokens.update(tok for _, tok, _, _ in entries)
+    query_overlap_tokens = {tok for _, tok, _, _ in query_entries if tok in context_overlap_tokens}
+
+    query_map = {}
+    for idx, tok, score, abs_score in query_entries:
+        if tok not in query_map or abs_score > query_map[tok][2]:
+            query_map[tok] = (idx, score, abs_score)
+
+    lines: List[str] = []
+    lines.append(f"# Qualitative Analysis for Query {query_id}\n")
+    lines.append("## Query\n")
+    lines.append(f"**Text:** {data['query_text']}\n")
+    lines.append("**Top tokens by absolute attribution:**\n")
+    lines.append("| Rank | Token | Pos | Score | |Overlap|\n")
+    lines.append("| --- | --- | --- | --- | --- |")
+    for rank, (pos, tok, score, abs_score) in enumerate(query_entries_sorted[: min(10, len(query_entries_sorted))], start=1):
+        overlap_flag = "✅" if tok in query_overlap_tokens else ""
+        lines.append(f"| {rank} | {tok} | {pos} | {score:.4f} | {abs_score:.4f} | {overlap_flag} |")
+
+    for entries, ctx in context_entries_list:
+        lines.append("\n---\n")
+        lines.append(f"## Context {ctx['index']} (top-{ctx['index'] + 1})\n")
+        context_text = textwrap.shorten(ctx["text"], width=500, placeholder=" …")
+        lines.append(f"**Excerpt:** {context_text}\n")
+
+        context_sorted = sorted(entries, key=lambda x: x[3], reverse=True)
+        lines.append("**Top context tokens by absolute attribution:**\n")
+        lines.append("| Rank | Token | Pos | Score | |Overlap|\n")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for rank, (pos, tok, score, abs_score) in enumerate(context_sorted[: min(10, len(context_sorted))], start=1):
+            overlap_flag = "✅" if tok in query_overlap_tokens else ""
+            lines.append(f"| {rank} | {tok} | {pos} | {score:.4f} | {abs_score:.4f} | {overlap_flag} |")
+
+        lines.append("\n**Overlapping tokens with query:**\n")
+        lines.append("| Token | Query pos | Query score | Context pos | Context score |\n")
+        lines.append("| --- | --- | --- | --- | --- |")
+        overlap_rows = []
+        for pos, tok, score, _ in entries:
+            if tok in query_map:
+                q_pos, q_score, _q_abs = query_map[tok]
+                overlap_rows.append((tok, q_pos, q_score, pos, score))
+        if overlap_rows:
+            for tok, q_pos, q_score, c_pos, c_score in sorted(
+                overlap_rows, key=lambda x: abs(x[4]), reverse=True
+            ):
+                lines.append(
+                    f"| {tok} | {q_pos} | {q_score:.4f} | {c_pos} | {c_score:.4f} |"
+                )
+        else:
+            lines.append("| _No overlapping tokens in this context._ |  |  |  |  |")
+
+    lines.append("\n---\n")
+    lines.append(f"_Attribution scores computed with `{grad_type}`._\n")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def compute_overlap_statistics(analysis_data: dict) -> pd.DataFrame:
+    records = []
+    for query_id, data in analysis_data.items():
+        query_entries = _build_token_entries(data["query_tokens"], data["query_scores"])
+        contexts = data["contexts"]
+        if not query_entries or not contexts:
+            continue
+
+        query_token_count = len(query_entries)
+        query_total_abs = sum(entry[3] for entry in query_entries)
+        query_abs_by_pos = {entry[0]: entry[3] for entry in query_entries}
+
+        query_tokens_set = {entry[1] for entry in query_entries}
+        query_overlap_positions = set()
+        context_total_tokens = 0
+        context_overlap_tokens = 0
+        context_total_abs = 0.0
+        context_overlap_abs = 0.0
+
+        context_stats = []
+
+        for ctx in contexts:
+            entries = _build_token_entries(ctx["tokens"], ctx["scores"])
+            if not entries:
+                continue
+            ctx_total_tokens = len(entries)
+            ctx_total_abs = sum(entry[3] for entry in entries)
+            ctx_overlap_tokens = 0
+            ctx_overlap_abs = 0.0
+
+            for pos, token, score, abs_score in entries:
+                context_total_tokens += 1
+                context_total_abs += abs_score
+                if token in query_tokens_set:
+                    context_overlap_tokens += 1
+                    context_overlap_abs += abs_score
+                    ctx_overlap_tokens += 1
+                    ctx_overlap_abs += abs_score
+
+                    # find query entry with same token (highest abs)
+                    for q_entry in query_entries:
+                        if q_entry[1] == token:
+                            query_overlap_positions.add(q_entry[0])
+                            break
+
+            context_stats.append(
+                {
+                    "context_index": ctx["index"],
+                    "context_total_tokens": ctx_total_tokens,
+                    "context_overlap_tokens": ctx_overlap_tokens,
+                    "context_total_abs": ctx_total_abs,
+                    "context_overlap_abs": ctx_overlap_abs,
+                }
+            )
+
+        if not context_stats:
+            continue
+
+        query_overlap_count = len(query_overlap_positions)
+        query_overlap_abs = sum(query_abs_by_pos[pos] for pos in query_overlap_positions)
+
+        record = {
+            "query_id": query_id,
+            "num_contexts": len(contexts),
+            "query_token_count": query_token_count,
+            "query_overlap_token_count": query_overlap_count,
+            "query_overlap_token_pct": query_overlap_count / query_token_count if query_token_count else 0.0,
+            "query_total_abs": query_total_abs,
+            "query_overlap_abs": query_overlap_abs,
+            "query_overlap_abs_pct": query_overlap_abs / query_total_abs if query_total_abs else 0.0,
+            "context_total_tokens": context_total_tokens,
+            "context_overlap_tokens": context_overlap_tokens,
+            "context_overlap_token_pct": context_overlap_tokens / context_total_tokens if context_total_tokens else 0.0,
+            "context_total_abs": context_total_abs,
+            "context_overlap_abs": context_overlap_abs,
+            "context_overlap_abs_pct": context_overlap_abs / context_total_abs if context_total_abs else 0.0,
+        }
+        records.append(record)
+
+    return pd.DataFrame(records)
 
 
 def plot_side_by_side_token_scores(
@@ -468,6 +668,7 @@ def process_query_file(
     plot_top_k: int,
     combine_query_context: bool,
     plot_side_by_side: bool,
+    analysis_collector: Optional[dict],
 ) -> List[TokenImportance]:
     # Load the data from the pickle file
     with open(path, "rb") as f:
@@ -482,6 +683,15 @@ def process_query_file(
     results: List[TokenImportance] = list(
         extract_top_tokens(query_id, "query", 0, grad_type, tokens_query, scores_query, top_k)
     )
+    if analysis_collector is not None:
+        analysis_collector[query_id] = {
+            "query_tokens": list(tokens_query),
+            "query_clean_tokens": [clean_token(tok) for tok in tokens_query],
+            "query_scores": [float(x) for x in scores_query.tolist()],
+            "query_abs_scores": [float(abs(x)) for x in scores_query.tolist()],
+            "query_text": detokenize(tokens_query),
+            "contexts": [],
+        }
     if plot_dir is not None:
         plot_token_scores(
             query_id,
@@ -505,6 +715,17 @@ def process_query_file(
         )
         # Add the context's top tokens to the main list
         results.extend(ctx_results)
+        if analysis_collector is not None:
+            analysis_collector[query_id]["contexts"].append(
+                {
+                    "index": ctx_idx,
+                    "tokens": list(tokens_context),
+                    "clean_tokens": [clean_token(tok) for tok in tokens_context],
+                    "scores": [float(x) for x in scores_context.tolist()],
+                    "abs_scores": [float(abs(x)) for x in scores_context.tolist()],
+                    "text": detokenize(tokens_context),
+                }
+            )
         if plot_dir is not None:
             plot_token_scores(
                 query_id,
@@ -615,6 +836,9 @@ def main() -> None:
     if not files:
         raise FileNotFoundError(f"No query_*.pkl files found in {args.results_dir}")
 
+    collect_analysis = args.qual_query_id is not None or args.overall_stats
+    analysis_data = {} if collect_analysis else None
+
     # 4. Process all files
     all_entries: List[TokenImportance] = []  # List to store results from all files
     # Loop over all files, using tqdm to show a progress bar
@@ -631,6 +855,7 @@ def main() -> None:
             args.plot_top_k,
             args.combine_query_context,
             args.plot_side_by_side,
+            analysis_data,
         )
         # Add this file's results to the main list
         all_entries.extend(entries)
@@ -643,6 +868,42 @@ def main() -> None:
     
     # 6. Print a summary to the console
     print_summary(all_entries)
+
+    if args.qual_query_id is not None:
+        if analysis_data is None or args.qual_query_id not in analysis_data:
+            print(f"Warning: qualitative query id {args.qual_query_id} not found in the processed data.")
+        else:
+            write_qualitative_report(
+                args.qual_query_id,
+                analysis_data[args.qual_query_id],
+                args.qual_top_contexts,
+                args.qual_output,
+                args.grad_type,
+            )
+            print(f"Wrote qualitative report to {args.qual_output}")
+
+    if args.overall_stats:
+        if analysis_data is None:
+            print("Warning: overall statistics requested but analysis data was not collected.")
+        else:
+            stats_df = compute_overlap_statistics(analysis_data)
+            if stats_df.empty:
+                print("No overlap statistics could be computed (empty dataframe).")
+            else:
+                args.overall_stats_csv.parent.mkdir(parents=True, exist_ok=True)
+                stats_df.to_csv(args.overall_stats_csv, index=False)
+                mean_query_overlap = stats_df["query_overlap_token_pct"].mean()
+                mean_context_overlap = stats_df["context_overlap_token_pct"].mean()
+                mean_context_attr_share = stats_df["context_overlap_abs_pct"].mean()
+                mean_query_attr_share = stats_df["query_overlap_abs_pct"].mean()
+                print(f"Saved overlap statistics to {args.overall_stats_csv}")
+                print(
+                    "Dataset-level averages: "
+                    f"query token overlap {mean_query_overlap:.2%}, "
+                    f"context token overlap {mean_context_overlap:.2%}, "
+                    f"context attribution share {mean_context_attr_share:.2%}, "
+                    f"query attribution share {mean_query_attr_share:.2%}."
+                )
 
 
 # Standard Python entry point:
