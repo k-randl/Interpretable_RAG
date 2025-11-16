@@ -104,7 +104,7 @@ def run_single_experiment(exp_type: str, context_dict: dict, queries_df: pd.Data
         context = context_dict[query_id]
         print(
             f"INFO: Processing query_id={query_id} "
-            f"with {len(context)} contexts | max_samples={args.max_samples} | max_gen_len={args.max_gen_len}"
+            f"with {len(context)} contexts | max_samples_query={args.max_samples_query} | max_samples_context={args.max_samples_context} | max_gen_len={args.max_gen_len}"
         )
         start_time = time.time()
         # Run generation and explainability
@@ -153,6 +153,12 @@ def main():
     parser.add_argument("--max_gen_len", type=int, default=300, help="Maximum length of the generated response.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for generation.")
     parser.add_argument(
+        "--max_samples",
+        type=parse_max_samples,
+        default=None,
+        help="Maximum number of SHAP samples for both query and contexts. This is a shorthand for setting both --max_samples_query and --max_samples_context.",
+    )
+    parser.add_argument(
         "--max_samples_query",
         type=parse_max_samples,
         default="auto",
@@ -176,6 +182,12 @@ def main():
     parser.add_argument("--run_no_duplicates", action='store_true', help="Run with contexts without duplicates.")
 
     args = parser.parse_args()
+
+    if args.max_samples is not None:
+        if args.max_samples_query != 'auto' or args.max_samples_context != 'auto':
+            parser.error("--max_samples cannot be used with --max_samples_query or --max_samples_context")
+        args.max_samples_query = args.max_samples
+        args.max_samples_context = args.max_samples
 
     # 1. Model setup
     model = setup(args.model_id)
