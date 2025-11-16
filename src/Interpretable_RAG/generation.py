@@ -239,18 +239,18 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
     sample[-1]   = n-1 # =0b111...1
     if complementary:
         sample[1:-1:2] = np.random.choice(
-            np.arange(1,(n//2)-1),
+            (n//2)-2,
             size=((num_samples//2)-1),
             replace=False
-        )
+        ) + 1
         sample[2:-1:2] = np.invert(sample[1:-1:2]) & (n-1)
 
     else:
         sample[1:-1] = np.random.choice(
-            np.arange(1,n-1),
+            n-2,
             size=(num_samples-2),
             replace=False
-        )
+        ) + 1
 
     # generate perturbations:
     perturbations = [None] * num_samples

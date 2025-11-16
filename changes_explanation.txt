@@ -1,0 +1,23 @@
+This file explains the changes made to `src/Interpretable_RAG/generation.py` to resolve two errors encountered during the execution of `scripts/run_pipeline.py`.
+
+### 1. `ValueError` in `_get_shapley_values_monte_carlo`
+
+**Error:** `ValueError: Cannot take a larger sample than population when 'replace=False'`
+
+**Reason:**
+This error occurred in the `_get_shapley_values_monte_carlo` function. The function has a `sample_size` parameter with a default value of 10. The code attempts to take a random sample of this size from a list of `indices`. However, in some cases, the number of available `indices` was less than 10. This caused `np.random.choice` to fail because it was asked to draw a larger sample than the population size without replacement.
+
+**Change:**
+A check has been added to ensure that `sample_size` does not exceed the number of available `indices`. If `sample_size` is larger, it is adjusted to be equal to the number of `indices`. This prevents the `ValueError`.
+
+### 2. `ArrayMemoryError` in `sample_perturbations`
+
+**Error:** `numpy.core._exceptions._ArrayMemoryError: Unable to allocate 2.00 PiB for an array...`
+
+**Reason:**
+This error occurred in the `sample_perturbations` function. This function is used to generate combinations of query tokens for analysis. To do this, it calculates the total number of possible combinations (`n = 2 ** number_of_tokens`) and then tries to create an array of all possible combination indices using `np.arange(1, n-1)`.
+
+When the input query is long (e.g., 48 words), the number of combinations `n` becomes astronomically large (2^48). `np.arange` then tries to allocate an enormous amount of memory (2 Petabytes in this case) to create an array of these `n-2` numbers, which is impossible and causes the `ArrayMemoryError`.
+
+**Change:**
+The code has been modified to avoid creating this massive array in memory. Instead of passing `np.arange(1, n-1)` to `np.random.choice`, we now pass `n-2` as an integer. `np.random.choice` can then sample from the range `0` to `n-3` without allocating the full array. We then add 1 to the result to get the desired range of `1` to `n-2`. This change was applied to both branches of the `if complementary:` statement in the function.
