@@ -234,7 +234,9 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
     n = (2 ** len(items))
 
     # take sample of `num_samples` unique bitmasks (including empty and full):
-    sample = np.empty(num_samples, dtype=int)
+    # Use dtype=object to handle large integers that can overflow standard numpy int types
+    # when the number of items is > 63.
+    sample = np.empty(num_samples, dtype=object)
     sample[0]    = 0   # =0b000...0
     sample[-1]   = n-1 # =0b111...1
     if complementary:

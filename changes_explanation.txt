@@ -23,3 +23,13 @@ A subsequent fix replaced `np.arange` with a direct call to `np.random.choice(n-
 
 **Change:**
 The `sample_perturbations` function has been rewritten to be more memory-efficient. Instead of using `np.random.choice` for large ranges, the new implementation generates unique random numbers one by one using a loop and `np.random.randint`, adding them to a Python `set` to ensure uniqueness. This method has the same outcome—a random sample of unique combinations—but avoids the massive memory allocations that were causing the errors.
+
+### 3. `OverflowError` in `sample_perturbations`
+
+**Error:** `OverflowError: Python int too large to convert to C long`
+
+**Reason:**
+This error occurs when a Python integer, which can be arbitrarily large, is converted to a fixed-size C long (a 64-bit integer in NumPy). In the `sample_perturbations` function, the number of possible combinations `n` can exceed the maximum value of a 64-bit integer if the number of items is greater than 63. When the code tries to store `n-1` into a NumPy array with the default integer `dtype`, it causes an overflow.
+
+**Change:**
+The NumPy array `sample` is now created with `dtype=object`. This allows the array to hold Python `int` objects, which can handle arbitrarily large integers, thereby preventing the `OverflowError`.
