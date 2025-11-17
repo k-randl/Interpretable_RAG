@@ -33,3 +33,13 @@ This error occurs when a Python integer, which can be arbitrarily large, is conv
 
 **Change:**
 The NumPy array `sample` is now created with `dtype=object`. This allows the array to hold Python `int` objects, which can handle arbitrarily large integers, thereby preventing the `OverflowError`.
+
+### 4. `ValueError: high is out of bounds for int64` in `sample_perturbations`
+
+**Error:** `ValueError: high is out of bounds for int64`
+
+**Reason:**
+Similar to the `OverflowError`, this error occurs because `np.random.randint` cannot handle an upper bound (`high`) that is larger than the maximum value for a 64-bit integer.
+
+**Change:**
+The calls to `np.random.randint` have been replaced with `random.randint` from Python's built-in `random` module. This module works with Python's native arbitrary-precision integers and can handle the very large numbers required for long queries without overflowing. An `import random` statement was also added.

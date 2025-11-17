@@ -1,5 +1,6 @@
 import os
 import torch
+import random
 import numpy as np
 import transformers
 import tqdm
@@ -246,7 +247,7 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
         
         s = set()
         while len(s) < size:
-            s.add(np.random.randint(1, (n//2)-1)) # range is 1 to (n//2)-2
+            s.add(random.randint(1, (n//2)-2)) # range is 1 to (n//2)-2
         
         sample[1:-1:2] = np.array(list(s))
         sample[2:-1:2] = np.invert(sample[1:-1:2]) & (n-1)
@@ -258,7 +259,7 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
 
         s = set()
         while len(s) < size:
-            s.add(np.random.randint(1, n-1)) # range is 1 to n-2
+            s.add(random.randint(1, n-2)) # range is 1 to n-2
         
         sample[1:-1] = np.array(list(s))
 
