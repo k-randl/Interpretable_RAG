@@ -26,7 +26,7 @@ def plot_shapley_heatmap(shapley_values, x_labels, y_labels, title, output_path)
     cbar_kws = {'label': 'Shapley Value'}
     x_labels = [str(label) for label in x_labels]
     y_labels = [str(label) for label in y_labels]
-    im = ax.imshow(shapley_values, cmap='viridis', aspect='auto')
+    im = ax.imshow(shapley_values, cmap='RdBu_r', aspect='auto')
     ax.set_xticks(np.arange(len(x_labels)))
     ax.set_yticks(np.arange(len(y_labels)))
     ax.set_xticklabels(x_labels, rotation=90, ha='right', fontsize=8)

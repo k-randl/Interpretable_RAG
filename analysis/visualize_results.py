@@ -30,7 +30,7 @@ def plot_retrieval_heatmap(analysis, output_path):
         tokens = tokens[:min_len]
         
     plt.figure(figsize=(12, 2))
-    plt.imshow([scores], cmap='viridis', aspect='auto')
+    plt.imshow([scores], cmap='RdBu_r', aspect='auto')
     plt.xticks(range(len(tokens)), tokens, rotation=45, ha='right')
     plt.yticks([])
     plt.colorbar(label='Importance')
@@ -54,7 +54,7 @@ def plot_retrieval_heatmap(analysis, output_path):
     if c_scores is not None and len(c_scores.shape) == 2:
         plt.figure(figsize=(12, 6))
         # Plot heatmap
-        plt.imshow(c_scores, cmap='viridis', aspect='auto')
+        plt.imshow(c_scores, cmap='RdBu_r', aspect='auto')
         plt.colorbar(label='Importance')
         plt.xlabel('Token Position')
         plt.ylabel('Document Index')
@@ -100,7 +100,7 @@ def plot_generation_heatmap(analysis, output_path):
     x_labels = qry_tokens[:max_qry] if qry_tokens else range(plot_data.shape[1])
     
     plt.figure(figsize=(10, 8))
-    plt.imshow(plot_data, cmap='coolwarm', aspect='auto')
+    plt.imshow(plot_data, cmap='RdBu_r', aspect='auto')
     plt.colorbar(label='Shapley Value')
     
     if qry_tokens:
