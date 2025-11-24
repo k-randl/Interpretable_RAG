@@ -58,10 +58,20 @@ def load_data(topics_path: Path, ranked_list_path: Path, collection_path: Path, 
     queries_df = pd.read_csv(topics_path, names=['query_id', 'query'], sep=sep, header=0 if has_header else None)
     ranked_passages_df = pd.read_csv(ranked_list_path)
     # If the passage text is not already present, join it from the collection
+    # Normalize column names
+    if 'qid' in ranked_passages_df.columns:
+        ranked_passages_df = ranked_passages_df.rename(columns={'qid': 'query_id'})
+    
+    # If the passage text is not already present, join it from the collection
     if 'retrieved_text' not in ranked_passages_df.columns:
-        collection_df = pd.read_csv(collection_path, sep='\t', names=['id', 'text'])
-        ranked_passages_df = ranked_passages_df.merge(collection_df, left_on='docno', right_on='id', how='left')
-        ranked_passages_df = ranked_passages_df.rename(columns={'text': 'retrieved_text'})
+        if 'text' in ranked_passages_df.columns:
+            ranked_passages_df = ranked_passages_df.rename(columns={'text': 'retrieved_text'})
+        else:
+            if collection_path is None:
+                raise ValueError("Collection path is required when 'text' or 'retrieved_text' is missing from the ranked list.")
+            collection_df = pd.read_csv(collection_path, sep='\t', names=['id', 'text'])
+            ranked_passages_df = ranked_passages_df.merge(collection_df, left_on='docno', right_on='id', how='left')
+            ranked_passages_df = ranked_passages_df.rename(columns={'text': 'retrieved_text'})
 
     # Group the contexts by query and take the top 'top_k'
     contexts = ranked_passages_df.groupby('query_id')['retrieved_text'].apply(lambda x: x.head(top_k).tolist()).to_dict()
@@ -142,7 +152,7 @@ def main():
     # Arguments for paths
     parser.add_argument("--topics_path", type=Path, required=True, help="Path to the file with the queries (topics).")
     parser.add_argument("--ranked_list_path", type=Path, required=True, help="Path to the ranked list from the retrieval.")
-    parser.add_argument("--collection_path", type=Path, required=True, help="Path to the collection of passages.")
+    parser.add_argument("--collection_path", type=Path, required=False, default=None, help="Path to the collection of passages. Optional if ranked list contains text.")
     parser.add_argument("--output_path", type=Path, required=True, help="Base folder where to save all the results.")
 
     # Arguments for models
