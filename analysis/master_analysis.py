@@ -9,6 +9,12 @@ from collections import defaultdict, Counter
 import nltk
 from nltk import pos_tag
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = lambda x, **kwargs: x
+    print("tqdm not found. Install with 'pip install tqdm' for progress bars.")
+
 # Import existing analysis tools
 from analyze_results import load_pickle, analyze_retrieval_results, analyze_generation_results
 from generate_plots import (
@@ -326,7 +332,7 @@ def main():
     print(f"Scanning {len(files)} files...")
     
     # 2. Process Files
-    for file_path in files:
+    for file_path in tqdm(files, desc="Processing files"):
         try:
             exp_name, condition = infer_metadata(file_path)
             
