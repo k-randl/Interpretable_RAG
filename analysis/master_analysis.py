@@ -367,6 +367,9 @@ def main():
                 plot_mean_doc_importance(s_ctx, os.path.join(local_out_dir, "doc_imp.png"))
                 plot_pos_importance(gen, s_qry, s_ctx, os.path.join(local_out_dir, "pos_imp.png"))
                 plot_shapley_heatmap(s_qry, gen, qry, "Query Heatmap", os.path.join(local_out_dir, "qry_map.png"))
+
+                # Generate Generation Stats HTML
+                generate_generation_stats_html(local_out_dir, gen, qry, s_ctx, s_qry)
                 
             elif 'input' in data: # Retrieval
                 ftype = 'retrieval'
@@ -380,17 +383,128 @@ def main():
                 plot_document_relevance(analysis, os.path.join(local_out_dir, "ret_relevance.png"))
                 plot_weighted_token_overlap(analysis, os.path.join(local_out_dir, "token_overlap.png"))
                 plot_token_comparison(analysis, os.path.join(local_out_dir, "token_comp.png"))
-                
+            
+            # Extract Query Text
+            query_text = "N/A"
+            if 'qry_tokens' in data:
+                query_text = "".join(clean_token(t) for t in data['qry_tokens']).replace('Ġ', ' ')
+            elif 'input' in data and 'query' in data['input']:
+                # For retrieval, input->query is token IDs. Need tokenizer to decode?
+                # analyze_results extract query_tokens if available.
+                if 'query_tokens' in analysis:
+                     query_text = "".join(clean_token(t) for t in analysis['query_tokens']).replace('Ġ', ' ')
+
             # Log for report
             processed_files_log.append({
                 'exp': exp_name, 'cond': condition, 'name': file_clean_name,
-                'type': ftype, 'path': local_out_dir
+                'type': ftype, 'path': local_out_dir, 'query': query_text
             })
             
             # Generate Index Page
-            generate_local_index(local_out_dir, file_clean_name, ftype)
+            generate_local_index(local_out_dir, file_clean_name, ftype, query_text)
             
             print(f"Processed: {exp_name} / {condition} / {file_clean_name}")
+            
+        except Exception as e:
+            print(f"Skipping {file_path}: {e}")
+
+def generate_generation_stats_html(output_dir, gen_tokens, qry_tokens, shapley_context, shapley_query):
+    """Generates a standalone HTML file with detailed generation statistics."""
+    
+    # Calculate some stats
+    total_gen_importance = np.sum(np.abs(shapley_query), axis=1) + np.sum(np.abs(shapley_context), axis=0)
+    top_gen_indices = np.argsort(total_gen_importance)[-10:][::-1]
+    
+    stats_html = [f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Generation Stats</title>
+    <style>{REPORT_CSS}</style>
+</head>
+<body>
+    <div class="container">
+        <h1>Generation Statistics</h1>
+        <p><b>Query:</b> {" ".join(qry_tokens)}</p>
+        <p><b>Generated Text:</b> {" ".join(gen_tokens)}</p>
+        
+        <div class="experiment-block">
+            <h3>Top 10 Most 'Expensive' Generated Tokens</h3>
+            <p>Tokens that required the most attribution (Context + Query).</p>
+            <table class="stats-table">
+                <thead><tr><th>Rank</th><th>Token</th><th>Total Importance</th></tr></thead>
+                <tbody>"""]
+                
+    for i, idx in enumerate(top_gen_indices):
+        token = gen_tokens[idx] if idx < len(gen_tokens) else "N/A"
+        score = total_gen_importance[idx] if idx < len(total_gen_importance) else 0.0
+        stats_html.append(f"<tr><td>{i+1}</td><td>{token}</td><td>{score:.4f}</td></tr>")
+        
+    stats_html.append("""
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>""")
+
+    with open(os.path.join(output_dir, "gen_stats.html"), "w") as f:
+        f.write("\n".join(stats_html))
+
+def generate_local_index(file_dir, file_name, file_type, query_text=""):
+    """Generates a simple index.html for a specific query folder."""
+    
+    plots = []
+    extra_links = ""
+    
+    if file_type == 'generation':
+        plots = [
+            ("Document Importance", "doc_imp.png", "doc_importance"),
+            ("POS Importance", "pos_imp.png", "pos_distribution"),
+            ("Query Heatmap", "qry_map.png", "shapley_heatmap")
+        ]
+        extra_links = f'<a href="gen_stats.html" class="badge badge-gen" style="font-size:1em; text-decoration:none; padding:10px;">View Full Generation Stats</a>'
+        
+    else:
+        plots = [
+            ("Document Relevance", "ret_relevance.png", "doc_relevance"),
+            ("Weighted Overlap", "token_overlap.png", "token_overlap"),
+            ("Token Comparison", "token_comp.png", "top_tokens")
+        ]
+        
+    html = [f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Detail: {file_name}</title>
+    <style>{REPORT_CSS}</style>
+</head>
+<body>
+    <div class="container">
+        <a href="../../../report.html" style="display:inline-block; margin-bottom:20px; text-decoration:none; color:#3498db;">&larr; Back to Global Report</a>
+        <h1>Analysis: {file_name}</h1>
+        <div style="background:#f0f8ff; padding:15px; border-radius:5px; margin-bottom:20px;">
+            <strong>Query:</strong> {query_text}
+        </div>
+        {extra_links}
+        <div class="experiment-block">
+            <div class="plot-container">"""]
+        
+    for title, fname, key in plots:
+        if os.path.exists(os.path.join(file_dir, fname)):
+             html.append(f"""
+            <div class="plot-card">
+                <h3>{title}</h3>
+                <img src="{fname}" alt="{title}">
+            </div>""")
+            
+    html.append("""
+            </div>
+        </div>
+    </div>
+</body>
+</html>""")
+    
+    with open(os.path.join(file_dir, "index.html"), "w") as f:
+        f.write("\n".join(html))
             
         except Exception as e:
             print(f"Skipping {file_path}: {e}")
@@ -452,11 +566,10 @@ def generate_full_report(out_dir, experiments, exp_plots_map, file_log):
         html.append("</div>")
         
         # Add File List
-        html.append(f"""
-            <h3>Detailed Logs ({exp_name})</h3>
-            <table class="stats-table">
-                <thead><tr><th>Condition</th><th>File</th><th>Type</th><th>Links</th></tr></thead>
-                <tbody>""")
+        html.append(f"            <h3>Detailed Logs ({exp_name})</h3>")
+        html.append("            <table class='stats-table'>")
+        html.append("                <thead><tr><th>Condition</th><th>File</th><th>Query Text</th><th>Type</th><th>Links</th></tr></thead>")
+        html.append("                <tbody>")
         
         # Filter logs for this experiment
         exp_logs = [f for f in file_log if f['exp'] == exp_name]
@@ -465,20 +578,19 @@ def generate_full_report(out_dir, experiments, exp_plots_map, file_log):
         for log in exp_logs:
             rel_path = os.path.relpath(log['path'], out_dir)
             badge_class = "badge-gen" if log['type'] == 'generation' else "badge-ret"
-            
-            # Determine main image for quick preview link
             preview_img = "doc_imp.png" if log['type'] == 'generation' else "token_overlap.png"
+            query_text = log.get('query', 'N/A')
             
-            html.append(f"""
-            <tr>
-                <td>{log['cond']}</td>
-                <td>{log['name']}</td>
-                <td><span class="badge {badge_class}">{log['type']}</span></td>
-                <td>
-                    <a href="{rel_path}/index.html" target="_blank">Detailed View</a> | 
-                    <a href="{rel_path}/" target="_blank">Folder</a>
-                </td>
-            </tr>""")
+            html.append("            <tr>")
+            html.append(f"                <td>{log['cond']}</td>")
+            html.append(f"                <td>{log['name']}</td>")
+            html.append(f"                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='{query_text}'>{query_text}</td>")
+            html.append(f"                <td><span class='badge {badge_class}'>{log['type']}</span></td>")
+            html.append(f"                <td>")
+            html.append(f"                    <a href='{rel_path}/index.html' target='_blank'>Detailed View</a> | ")
+            html.append(f"                    <a href='{rel_path}/' target='_blank'>Folder</a>")
+            html.append("                </td>")
+            html.append("            </tr>")
             
         html.append("</tbody></table></div>")
         
