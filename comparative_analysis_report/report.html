@@ -24,7 +24,7 @@ h3 { color: #7f8c8d; }
 <body>
     <div class="container">
         <h1>RAG Pipeline Comparative Analysis</h1>
-        <p>Generated on 2025-11-26 12:36</p>
+        <p>Generated on 2025-11-26 13:10</p>
         <div class='experiment-block'><h2>Global Syntax & Logic Analysis</h2>
 <h3>Top POS Bigrams (Weighted)</h3>
 <table class='stats-table'><thead><tr><th>Type</th><th>Pattern</th><th>Mean Norm. Weight</th><th>Count</th></tr></thead><tbody>
@@ -41,10 +41,11 @@ h3 { color: #7f8c8d; }
 </tbody></table>
 <h3>Pattern Weight Summary</h3>
 <table class='stats-table'><thead><tr><th>Type</th><th>Pattern</th><th>Mean Norm. Weight</th><th>Count</th></tr></thead><tbody>
-<tr><td>generation</td><td>ADJ+NOUN</td><td>2.3216</td><td>8</td></tr>
-<tr><td>generation</td><td>ADP+NOUN</td><td>1.8592</td><td>5</td></tr>
-<tr><td>generation</td><td>DET+NOUN</td><td>1.4082</td><td>7</td></tr>
-<tr><td>retrieval</td><td>ADJ+NOUN</td><td>0.1929</td><td>6</td></tr>
+<tr><td>generation</td><td>ADJ+NOUN</td><td>1.6230</td><td>558</td></tr>
+<tr><td>generation</td><td>ADP+NOUN</td><td>1.4686</td><td>434</td></tr>
+<tr><td>generation</td><td>DET+NOUN</td><td>1.3732</td><td>458</td></tr>
+<tr><td>generation</td><td>VERB+NOUN</td><td>1.4836</td><td>188</td></tr>
+<tr><td>retrieval</td><td>ADJ+NOUN</td><td>0.6700</td><td>75</td></tr>
 </tbody></table>
 </div>
     
@@ -92,80 +93,48 @@ h3 { color: #7f8c8d; }
                     <a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_2/' target='_blank'>Folder</a>
                 </td>
             </tr>
-</tbody></table></div>
-
-        <div class="experiment-block">
-            <h2>Experiment: efra_chunks_17_11_2025</h2>
-            <div class="plot-container">
-
-                <div class="plot-card">
-                    <img src="efra_chunks_17_11_2025/compare_position.png" alt="position_bias">
-                    <div class="description"><b>Position Bias Analysis:</b> Comparison of document importance based on its position in the prompt. <br>If 'Original' and 'Randomized' both show a downward trend, the model has a <b>Primacy Bias</b> (favors the first thing it reads). <br>If 'Randomized' is flat or different, the model might be attending to content rather than position.</div>
-                </div>
-
-                <div class="plot-card">
-                    <img src="efra_chunks_17_11_2025/top_tokens.png" alt="top_tokens">
-                    <div class="description"><b>Top Influential Tokens:</b> The specific words (excluding stop words) that accumulated the most importance across all queries. These are the 'drivers' of your model's outputs.</div>
-                </div>
-
-                <div class="plot-card">
-                    <img src="efra_chunks_17_11_2025/pos_dist.png" alt="pos_distribution">
-                    <div class="description"><b>Part-of-Speech Impact:</b> Which grammatical roles drive the model's generation? High importance on Nouns/Verbs indicates content focus; high importance on Determiners/Prepositions might indicate noise.</div>
-                </div>
-</div>
-            <h3>Detailed Logs (efra_chunks_17_11_2025)</h3>
-            <table class='stats-table'>
-                <thead><tr><th>Condition</th><th>File</th><th>Query Text</th><th>Type</th><th>Links</th></tr></thead>
-                <tbody>
             <tr>
-                <td>original</td>
-                <td>Llama-3.1-8B-Instruct_qid_0</td>
-                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='As a consumer interested in food safety, can you elaborate on the essential control measures that food establishments should implement to manage foodborne illness risk factors, and how regulatory authorities assess these measures during inspections?'>As a consumer interested in food safety, can you elaborate on the essential control measures that food establishments should implement to manage foodborne illness risk factors, and how regulatory authorities assess these measures during inspections?</td>
+                <td>randomized</td>
+                <td>Llama-3.1-8B-Instruct_qid_31_1</td>
+                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='What is throat cancer?'>What is throat cancer?</td>
                 <td><span class='badge badge-gen'>generation</span></td>
                 <td>
-                    <a href='efra_chunks_17_11_2025/original/Llama-3.1-8B-Instruct_qid_0/index.html' target='_blank'>Detailed View</a> | 
-                    <a href='efra_chunks_17_11_2025/original/Llama-3.1-8B-Instruct_qid_0/' target='_blank'>Folder</a>
+                    <a href='trec19_19_11_2025/randomized/Llama-3.1-8B-Instruct_qid_31_1/index.html' target='_blank'>Detailed View</a> | 
+                    <a href='trec19_19_11_2025/randomized/Llama-3.1-8B-Instruct_qid_31_1/' target='_blank'>Folder</a>
                 </td>
             </tr>
             <tr>
-                <td>original</td>
-                <td>Llama-3.1-8B-Instruct_qid_1</td>
-                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='As a consumer interested in food safety, could you elaborate on the guidelines and good manufacturing practices (GMP) that are in place for fresh meat, poultry, and game, as well as for frozen fish products, and how these practices ensure the safety and quality of these food items?'>As a consumer interested in food safety, could you elaborate on the guidelines and good manufacturing practices (GMP) that are in place for fresh meat, poultry, and game, as well as for frozen fish products, and how these practices ensure the safety and quality of these food items?</td>
+                <td>randomized</td>
+                <td>Llama-3.1-8B-Instruct_qid_31_2</td>
+                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='Is throat cancer treatable?'>Is throat cancer treatable?</td>
                 <td><span class='badge badge-gen'>generation</span></td>
                 <td>
-                    <a href='efra_chunks_17_11_2025/original/Llama-3.1-8B-Instruct_qid_1/index.html' target='_blank'>Detailed View</a> | 
-                    <a href='efra_chunks_17_11_2025/original/Llama-3.1-8B-Instruct_qid_1/' target='_blank'>Folder</a>
+                    <a href='trec19_19_11_2025/randomized/Llama-3.1-8B-Instruct_qid_31_2/index.html' target='_blank'>Detailed View</a> | 
+                    <a href='trec19_19_11_2025/randomized/Llama-3.1-8B-Instruct_qid_31_2/' target='_blank'>Folder</a>
                 </td>
             </tr>
-</tbody></table></div>
-
-        <div class="experiment-block">
-            <h2>Experiment: trec19</h2>
-            <div class="plot-container">
+</tbody></table>
+<h3>Comparative Analysis: Original vs Randomized</h3>
+<p>Side-by-side comparison of generated responses and document importance.</p>
+<table class='stats-table'><thead><tr><th>Query ID</th><th>Query</th><th>Original</th><th>Randomized</th><th>Diff?</th><th>Orig Doc Imp</th><th>Rand Doc Imp</th></tr></thead><tbody>
+<tr>
+<td>Llama-3.1-8B-Instruct_qid_31_1</td>
+<td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='What is throat cancer?'>What is throat cancer?</td>
+<td><a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_1/index.html'>Original Report</a></td>
+<td><a href='trec19_19_11_2025/randomized/Llama-3.1-8B-Instruct_qid_31_1/index.html'>Randomized Report</a></td>
+<td><a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_1/index.html#doc_imp' target='_blank'>Compare Docs</a></td>
+<td><a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_1/doc_imp.png' target='_blank'><img src='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_1/doc_imp.png' width='200'></a></td>
+<td><a href='trec19_19_11_2025/randomized/Llama-3.1-8B-Instruct_qid_31_1/doc_imp.png' target='_blank'><img src='trec19_19_11_2025/randomized/Llama-3.1-8B-Instruct_qid_31_1/doc_imp.png' width='200'></a></td>
+</tr>
+<tr>
+<td>Llama-3.1-8B-Instruct_qid_31_2</td>
+<td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='Is throat cancer treatable?'>Is throat cancer treatable?</td>
+<td><a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_2/index.html'>Original Report</a></td>
+<td><a href='trec19_19_11_2025/randomized/Llama-3.1-8B-Instruct_qid_31_2/index.html'>Randomized Report</a></td>
+<td><a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_2/index.html#doc_imp' target='_blank'>Compare Docs</a></td>
+<td><a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_2/doc_imp.png' target='_blank'><img src='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_2/doc_imp.png' width='200'></a></td>
+<td><a href='trec19_19_11_2025/randomized/Llama-3.1-8B-Instruct_qid_31_2/doc_imp.png' target='_blank'><img src='trec19_19_11_2025/randomized/Llama-3.1-8B-Instruct_qid_31_2/doc_imp.png' width='200'></a></td>
+</tr>
+</tbody></table>
 </div>
-            <h3>Detailed Logs (trec19)</h3>
-            <table class='stats-table'>
-                <thead><tr><th>Condition</th><th>File</th><th>Query Text</th><th>Type</th><th>Links</th></tr></thead>
-                <tbody>
-            <tr>
-                <td>retrieval</td>
-                <td>query_31_1</td>
-                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title=' ▁que ry : ▁What ▁is ▁ thro at ▁cancer ? '> ▁que ry : ▁What ▁is ▁ thro at ▁cancer ? </td>
-                <td><span class='badge badge-ret'>retrieval</span></td>
-                <td>
-                    <a href='trec19/retrieval/query_31_1/index.html' target='_blank'>Detailed View</a> | 
-                    <a href='trec19/retrieval/query_31_1/' target='_blank'>Folder</a>
-                </td>
-            </tr>
-            <tr>
-                <td>retrieval</td>
-                <td>query_31_2</td>
-                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title=' ▁que ry : ▁Is ▁ thro at ▁cancer ▁treat able ? '> ▁que ry : ▁Is ▁ thro at ▁cancer ▁treat able ? </td>
-                <td><span class='badge badge-ret'>retrieval</span></td>
-                <td>
-                    <a href='trec19/retrieval/query_31_2/index.html' target='_blank'>Detailed View</a> | 
-                    <a href='trec19/retrieval/query_31_2/' target='_blank'>Folder</a>
-                </td>
-            </tr>
-</tbody></table></div>
 </div></body></html>

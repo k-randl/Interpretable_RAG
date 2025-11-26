@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Detail: Llama-3.1-8B-Instruct_qid_31_2</title>
+    <title>Generation Stats</title>
     <style>
 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #333; background-color: #f9f9f9; }
 .container { max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
@@ -23,38 +23,24 @@ h3 { color: #7f8c8d; }
 </head>
 <body>
     <div class="container">
-        <a href="../../../report.html" style="display:inline-block; margin-bottom:20px; text-decoration:none; color:#3498db;" >&larr; Back to Global Report</a>
-        <h1>Analysis: Llama-3.1-8B-Instruct_qid_31_2</h1>
-        <div style="background:#f0f8ff; padding:15px; border-radius:5px; margin-bottom:20px;">
-            <strong>Query:</strong> Is throat cancer treatable?
-        </div>
-        <a href="gen_stats.html" class="badge badge-gen" style="font-size:1em; text-decoration:none; padding:10px;">View Full Generation Stats</a>
-        <div class="experiment-block">
-            <div class="plot-container">
-
-            <div class="plot-card">
-                <h3>Document Importance</h3>
-                <img src="doc_imp.png" alt="Document Importance">
-            </div>
-
-            <div class="plot-card">
-                <h3>POS Importance</h3>
-                <img src="pos_imp.png" alt="POS Importance">
-            </div>
-
-            <div class="plot-card">
-                <h3>Query Heatmap</h3>
-                <img src="qry_map.png" alt="Query Heatmap">
-            </div>
-
-            <div class="plot-card">
-                <h3>Context Heatmap</h3>
-                <img src="ctx_map.png" alt="Context Heatmap">
-            </div>
-
-            </div>
-        </div>
+        <h1>Generation Statistics</h1>
+        <p><b>Query:</b> What is throat cancer?</p>
+        <p><b>Generated Text:</b> <|start_header_id|> assistant <|end_header_id|> ĊĊ Based on the retrieved documents , throat cancer refers to cancer ous tumors that develop in the throat , specifically in the ph ary nx ( the upper , middle , or lower part of the throat ) or the l ary nx ( the voice box ). It is a type of head and neck cancer that can be</p>
         
-    </div>
-</body>
-</html>
+        <div class="experiment-block">
+            <h3>Top 10 Most 'Expensive' Generated Tokens</h3>
+            <p>Tokens that required the most attribution (Context + Query).</p>
+            <table class="stats-table">
+                <thead><tr><th>Rank</th><th>Token</th><th>Total Importance</th></tr></thead>
+                <tbody>
+<tr><td>1</td><td><|start_header_id|></td><td>39.9523</td></tr>
+<tr><td>2</td><td>head</td><td>35.4337</td></tr>
+<tr><td>3</td><td>assistant</td><td>34.2323</td></tr>
+<tr><td>4</td><td>and</td><td>18.9493</td></tr>
+<tr><td>5</td><td>ary</td><td>17.4356</td></tr>
+<tr><td>6</td><td>cancer</td><td>16.8009</td></tr>
+<tr><td>7</td><td>throat</td><td>14.9075</td></tr>
+<tr><td>8</td><td>tumors</td><td>14.8917</td></tr>
+<tr><td>9</td><td>ph</td><td>14.8142</td></tr>
+<tr><td>10</td><td>type</td><td>14.7662</td></tr>
+</tbody></table></div></div></body></html>

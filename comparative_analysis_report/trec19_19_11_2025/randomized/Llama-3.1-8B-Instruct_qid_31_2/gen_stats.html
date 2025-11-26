@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Detail: Llama-3.1-8B-Instruct_qid_31_2</title>
+    <title>Generation Stats</title>
     <style>
 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #333; background-color: #f9f9f9; }
 .container { max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
@@ -23,38 +23,24 @@ h3 { color: #7f8c8d; }
 </head>
 <body>
     <div class="container">
-        <a href="../../../report.html" style="display:inline-block; margin-bottom:20px; text-decoration:none; color:#3498db;" >&larr; Back to Global Report</a>
-        <h1>Analysis: Llama-3.1-8B-Instruct_qid_31_2</h1>
-        <div style="background:#f0f8ff; padding:15px; border-radius:5px; margin-bottom:20px;">
-            <strong>Query:</strong> Is throat cancer treatable?
-        </div>
-        <a href="gen_stats.html" class="badge badge-gen" style="font-size:1em; text-decoration:none; padding:10px;">View Full Generation Stats</a>
-        <div class="experiment-block">
-            <div class="plot-container">
-
-            <div class="plot-card">
-                <h3>Document Importance</h3>
-                <img src="doc_imp.png" alt="Document Importance">
-            </div>
-
-            <div class="plot-card">
-                <h3>POS Importance</h3>
-                <img src="pos_imp.png" alt="POS Importance">
-            </div>
-
-            <div class="plot-card">
-                <h3>Query Heatmap</h3>
-                <img src="qry_map.png" alt="Query Heatmap">
-            </div>
-
-            <div class="plot-card">
-                <h3>Context Heatmap</h3>
-                <img src="ctx_map.png" alt="Context Heatmap">
-            </div>
-
-            </div>
-        </div>
+        <h1>Generation Statistics</h1>
+        <p><b>Query:</b> Is throat cancer treatable?</p>
+        <p><b>Generated Text:</b> <|start_header_id|> assistant <|end_header_id|> ĊĊ Based on the provided documents , the answer to the query is that throat cancer is treat able , especially when detected early . ĊĊ According to Document  1 and Document  4 , if the cancer has not spread to parts of the body outside the head and neck , about half of patients can be cured .</p>
         
-    </div>
-</body>
-</html>
+        <div class="experiment-block">
+            <h3>Top 10 Most 'Expensive' Generated Tokens</h3>
+            <p>Tokens that required the most attribution (Context + Query).</p>
+            <table class="stats-table">
+                <thead><tr><th>Rank</th><th>Token</th><th>Total Importance</th></tr></thead>
+                <tbody>
+<tr><td>1</td><td>head</td><td>31.0209</td></tr>
+<tr><td>2</td><td>,</td><td>30.6072</td></tr>
+<tr><td>3</td><td>outside</td><td>28.9953</td></tr>
+<tr><td>4</td><td><|start_header_id|></td><td>27.3180</td></tr>
+<tr><td>5</td><td>parts</td><td>24.1450</td></tr>
+<tr><td>6</td><td>half</td><td>23.1736</td></tr>
+<tr><td>7</td><td>of</td><td>20.9104</td></tr>
+<tr><td>8</td><td>about</td><td>20.2607</td></tr>
+<tr><td>9</td><td>4</td><td>20.0843</td></tr>
+<tr><td>10</td><td>body</td><td>20.0354</td></tr>
+</tbody></table></div></div></body></html>

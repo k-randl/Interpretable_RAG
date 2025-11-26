@@ -143,7 +143,8 @@ def generate_local_index(file_dir, file_name, file_type, query_text="", document
         plots = [
             ("Document Importance", "doc_imp.png", "doc_importance"),
             ("POS Importance", "pos_imp.png", "pos_distribution"),
-            ("Query Heatmap", "qry_map.png", "shapley_heatmap")
+            ("Query Heatmap", "qry_map.png", "shapley_heatmap"),
+            ("Context Heatmap", "ctx_map.png", "shapley_heatmap")
         ]
         extra_links = f'<a href="gen_stats.html" class="badge badge-gen" style="font-size:1em; text-decoration:none; padding:10px;">View Full Generation Stats</a>'
     else:
@@ -239,6 +240,11 @@ def process_file_worker(args):
             plot_mean_doc_importance(s_ctx, os.path.join(local_out_dir, "doc_imp.png"))
             plot_pos_importance(gen, s_qry, s_ctx, os.path.join(local_out_dir, "pos_imp.png"))
             plot_shapley_heatmap(s_qry, gen, qry, "Query Heatmap", os.path.join(local_out_dir, "qry_map.png"))
+            
+            # Context Heatmap
+            ctx_labels = [f"Doc {i+1}" for i in range(s_ctx.shape[0])]
+            plot_shapley_heatmap(s_ctx, gen, ctx_labels, "Context (Document) Heatmap", os.path.join(local_out_dir, "ctx_map.png"))
+            
             generate_generation_stats_html(local_out_dir, gen, qry, s_ctx, s_qry)
             
             # Compute Stats for Aggregation
@@ -562,7 +568,45 @@ def generate_full_report(out_dir, experiments, exp_plots_map, file_log, global_s
             html.append("                </td>")
             html.append("            </tr>")
             
-        html.append("</tbody></table></div>")
+        html.append("</tbody></table>")
+
+        # Comparative Analysis Section (Original vs Randomized)
+        # Only relevant for generation experiments with both conditions
+        conditions = set(f['condition'] for f in exp_logs)
+        if 'original' in conditions and 'randomized' in conditions:
+             html.append("<h3>Comparative Analysis: Original vs Randomized</h3>")
+             html.append("<p>Side-by-side comparison of generated responses and document importance.</p>")
+             html.append("<table class='stats-table'><thead><tr><th>Query ID</th><th>Query</th><th>Original</th><th>Randomized</th><th>Diff?</th><th>Orig Doc Imp</th><th>Rand Doc Imp</th></tr></thead><tbody>")
+             
+             # Match logs by name (assuming name contains query ID)
+             orig_logs = {l['name']: l for l in exp_logs if l['condition'] == 'original'}
+             rand_logs = {l['name']: l for l in exp_logs if l['condition'] == 'randomized'}
+             
+             all_names = sorted(set(list(orig_logs.keys()) + list(rand_logs.keys())))
+             
+             for name in all_names:
+                 orig = orig_logs.get(name)
+                 rand = rand_logs.get(name)
+                 
+                 if orig and rand:
+                     q_text = orig.get('query', 'N/A')
+                     orig_path = os.path.relpath(orig['path'], out_dir)
+                     rand_path = os.path.relpath(rand['path'], out_dir)
+                     
+                     # Simple link for now, maybe embed images later
+                     html.append(f"<tr>")
+                     html.append(f"<td>{name}</td>")
+                     html.append(f"<td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='{q_text}'>{q_text}</td>")
+                     html.append(f"<td><a href='{orig_path}/index.html'>Original Report</a></td>")
+                     html.append(f"<td><a href='{rand_path}/index.html'>Randomized Report</a></td>")
+                     html.append(f"<td><a href='{orig_path}/index.html#doc_imp' target='_blank'>Compare Docs</a></td>")
+                     html.append(f"<td><a href='{orig_path}/doc_imp.png' target='_blank'><img src='{orig_path}/doc_imp.png' width='200'></a></td>")
+                     html.append(f"<td><a href='{rand_path}/doc_imp.png' target='_blank'><img src='{rand_path}/doc_imp.png' width='200'></a></td>")
+                     html.append(f"</tr>")
+                     
+             html.append("</tbody></table>")
+             
+        html.append("</div>")
     html.append("</div></body></html>")
     
     with open(os.path.join(out_dir, "report.html"), "w") as f:
