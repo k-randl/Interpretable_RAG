@@ -61,7 +61,7 @@ h3 { color: #7f8c8d; }
 .badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 0.8em; color: #fff; font-weight: bold; }
 .badge-gen { background-color: #e67e22; }
 .badge-ret { background-color: #27ae60; }
-"
+"""
 
 EXPLANATIONS = {
     "position_bias": "<b>Position Bias Analysis:</b> Comparison of document importance based on its position in the prompt. <br>If 'Original' and 'Randomized' both show a downward trend, the model has a <b>Primacy Bias</b> (favors the first thing it reads). <br>If 'Randomized' is flat or different, the model might be attending to content rather than position.",
@@ -183,7 +183,7 @@ def generate_local_index(file_dir, file_name, file_type, query_text="", document
             <div class=\"plot-card\">
                 <h3>{title}</h3>
                 <img src=\"{fname}\" alt=\"{title}\">
-            </div>")
+            </div>""")
             
     html.append(f"""
             </div>
@@ -520,7 +520,7 @@ def generate_full_report(out_dir, experiments, exp_plots_map, file_log, global_s
         html.append(f"""
         <div class=\"experiment-block\">
             <h2>Experiment: {exp_name}</h2>
-            <div class=\"plot-container\">")
+            <div class=\"plot-container\">""")
             
         if exp_name in exp_plots_map:
             for img, desc_key in exp_plots_map[exp_name]:
@@ -529,7 +529,7 @@ def generate_full_report(out_dir, experiments, exp_plots_map, file_log, global_s
                 <div class=\"plot-card\">
                     <img src=\"{exp_name}/{img}\" alt=\"{desc_key}\">
                     <div class=\"description\">{desc}</div>
-                </div>")
+                </div>""")
         html.append("</div>")
         
         html.append(f"            <h3>Detailed Logs ({exp_name})</h3>")
