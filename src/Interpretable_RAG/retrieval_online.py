@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from math import ceil
 from tqdm.autonotebook import trange
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
@@ -174,7 +175,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return gradIn
 
-    def intGrad(self, filter_special_tokens:bool=True, num_steps:int=100, batch_size:int=64, verbose:bool=True):
+    def intGrad(self, filter_special_tokens:bool=True, num_steps:int=100, batch_size:int=64, base:Optional[Literal['pos', 'mask', 'pad', 'unk']]=None, output_offset:bool=False, output_coverage:bool=False, verbose:bool=True):
         '''Integrated gradient scores of the last batch.
 
         Args:
@@ -182,18 +183,24 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             num_steps:              Number of approximation steps for the Rieman approximation
                                     of the integral (default 100).
             batch_size:             Batch size used for calculating the gradients (default 64).
+            base:                   Optional value for the baseline input. Possible values are ...
+                                    - `'pos'` positional encodings only
+                                    - `'mask'` positional encodings + mask tokens
+                                    - `'pad'` positional encodings + pad tokens
+                                    - `None` zeroed embeddings (default)
+            output_offset:          If `True` returns a tuple for which the first element are the attribution scores
+                                    and the second element are the baseline predictions as a dictionary (default: `False`).
+            output_coverage:        If `True` returns a tuple for which the first element are the attribution scores
+                                    and the last element are the additivity coverage ratios as a dictionary (default: `False`).
             verbose:                If `True`, shows a progress bar.
             
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         # get the embedings:
-        in_qry_embeds = self.query_encoder.get_input_embeddings()(torch.tensor(
-            self._x['query'],
-            device=self.query_encoder.device
-        ))
-        in_ctx_embeds = self.context_encoder.get_input_embeddings()(torch.tensor(
-            self._x['context'],
-            device=self.context_encoder.device
-        ))
+        in_qry_embeds_fn = self.query_encoder.get_input_embeddings()
+        in_qry_embeds = in_qry_embeds_fn(torch.tensor(self._x['query'], device=self.query_encoder.device))
+
+        in_ctx_embeds_fn = self.context_encoder.get_input_embeddings()
+        in_ctx_embeds = in_ctx_embeds_fn(torch.tensor(self._x['context'], device=self.context_encoder.device))
 
         # get attention masks:
         qry_attention_mask = torch.tensor(self._x['query'] != self.tokenizer.pad_token_id,
@@ -201,15 +208,43 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         ctx_attention_mask = torch.tensor(self._x['context'] != self.tokenizer.pad_token_id,
                                           device=in_ctx_embeds.device, dtype=in_ctx_embeds.dtype)
 
-        # baseline is zeros with only special tokens remaining:
-        bl_qry_embeds = in_qry_embeds * qry_attention_mask[:,:,None] * torch.tensor(
-            (1 - self._special_tokens_mask['query']),
+        # get baseline embeddings:
+        bl_qry_embeds_fn = lambda t: in_qry_embeds_fn(torch.full(self._x['query'].shape, torch.tensor(t), device=self.query_encoder.device))
+        bl_ctx_embeds_fn = lambda t: in_ctx_embeds_fn(torch.full(self._x['context'].shape, t, device=self.context_encoder.device))
+        if base is None:
+            bl_qry_embeds = torch.zeros_like(in_qry_embeds)
+            bl_ctx_embeds = torch.zeros_like(in_ctx_embeds)
+
+        elif base == 'pos':
+            bl_qry_embeds = self.query_encoder.get_position_embeddings()
+            bl_ctx_embeds = self.context_encoder.get_position_embeddings()
+
+        elif base == 'mask':
+            bl_qry_embeds = bl_qry_embeds_fn(self.tokenizer.mask_token_id)
+            bl_ctx_embeds = bl_ctx_embeds_fn(self.tokenizer.mask_token_id)
+
+        elif base == 'pad':
+            bl_qry_embeds = bl_qry_embeds_fn(self.tokenizer.pad_token_id)
+            bl_ctx_embeds = bl_ctx_embeds_fn(self.tokenizer.pad_token_id)
+
+        elif base == 'unk':
+            bl_qry_embeds = bl_qry_embeds_fn(self.tokenizer.unk_token_id)
+            bl_ctx_embeds = bl_ctx_embeds_fn(self.tokenizer.unk_token_id)
+
+        else: raise ValueError(f'Parameter `base` must be one of `\'pos\'`, `\'mask\'`, `\'pad\'`, `\'unk\'`, or `None` but is {base}.')
+
+        # baseline is baseline tokens + special tokens:
+        bl_qry_mask = qry_attention_mask[:,:,None] * torch.tensor(
+            self._special_tokens_mask['query'],
             device=self.query_encoder.device
         )[:,:,None]
-        bl_ctx_embeds = in_ctx_embeds * ctx_attention_mask[:,:,None] * torch.tensor(
-            (1 - self._special_tokens_mask['context']),
+        bl_qry_embeds = torch.where(bl_qry_mask.to(torch.bool), bl_qry_embeds, in_qry_embeds)
+
+        bl_ctx_mask = ctx_attention_mask[:,:,None] * torch.tensor(
+            self._special_tokens_mask['context'],
             device=self.context_encoder.device
         )[:,:,None]
+        bl_ctx_embeds = torch.where(bl_ctx_mask.to(torch.bool), bl_ctx_embeds, in_ctx_embeds)
 
         in_qry_embeds -= bl_qry_embeds
         in_ctx_embeds -= bl_ctx_embeds
@@ -235,10 +270,37 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         in_qry_output = self._y['query'][None, :, :].to(in_qry_embeds)
         in_ctx_output = self._y['context'][None, :, :].to(in_ctx_embeds)
 
+        # get relevant tokens:
+        tkns_qry = self._x['query'].flatten()
+        tkns_ctx = self._x['context'].flatten()
+
+        if base == 'mask':
+            np.append(tkns_qry, self.tokenizer.mask_token_id)
+            np.append(tkns_ctx, self.tokenizer.mask_token_id)
+
+        elif base == 'pad':
+            np.append(tkns_qry, self.tokenizer.pad_token_id)
+            np.append(tkns_ctx, self.tokenizer.pad_token_id)
+
+        elif base == 'unk':
+            np.append(tkns_qry, self.tokenizer.unk_token_id)
+            np.append(tkns_ctx, self.tokenizer.unk_token_id)
+
+        tkns_qry = np.unique(tkns_qry)
+        tkns_ctx = np.unique(tkns_ctx)
+
+        # get embedding weights:
+        #w_qry = self.query_encoder.embeddings.word_embeddings.weight[tkns_qry].detach().T
+        #w_ctx = self.context_encoder.embeddings.word_embeddings.weight[tkns_ctx].detach().T
+
         # Riemann integrate along path:
         intGrad = {'query': 0., 'context':0.}  # Tensors of shape (n_inputs x encoding_size)
         qry_mult = in_qry_embeds / num_steps
         ctx_mult = in_ctx_embeds / num_steps
+
+        #intGrad = {'query': [], 'context':[]}  # Tensors of shape (n_inputs x encoding_size)
+        #qry_mult = torch.tensor(self._x['query'][:,:,None] == tkns_qry[None,None,:]).to(in_qry_embeds) / num_steps
+        #ctx_mult = torch.tensor(self._x['context'][:,:,None] == tkns_ctx[None,None,:]).to(in_ctx_embeds)  / num_steps
 
         iterator = None
         if verbose: iterator = trange(ceil(num_steps/chunk_size))
@@ -284,31 +346,43 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             batch_qry_similarity.sum().backward(retain_graph = True)
             batch_ctx_similarity.sum().backward(retain_graph = True)
 
-            # save gradients with regard to hidden states:
             with torch.no_grad():
-                intGrad['query']   += (batch_qry_embeds.grad.detach().sum(dim=(0)) * qry_mult).sum(dim=-1).cpu()
-                intGrad['context'] += (batch_ctx_embeds.grad.detach().sum(dim=(0)) * ctx_mult).sum(dim=-1).cpu()
+                # get gradients with regard to hidden states:
+                batch_qry_grads = batch_qry_embeds.grad.detach().reshape((-1,) + in_qry_embeds.shape)
+                batch_ctx_grads = batch_ctx_embeds.grad.detach().reshape((-1,) + in_ctx_embeds.shape)
+
+                # backpropagate to input:
+                #batch_qry_grads = batch_qry_grads @ w_qry
+                #batch_ctx_grads = batch_ctx_grads @ w_ctx
+
+                # compute partial Riemann integral for the batch:
+                intGrad['query']   += (batch_qry_grads.sum(dim=(0)) * qry_mult).sum(dim=-1).cpu()
+                intGrad['context'] += (batch_ctx_grads.sum(dim=(0)) * ctx_mult).sum(dim=-1).cpu()
 
             # free some memory:
             del batch_qry_embeds
             del batch_ctx_embeds
             del batch_qry_similarity
             del batch_ctx_similarity
-
-        # calculate total attribition scaled by number of used tokens:
-        total_qry = (in_qry_similarity - bl_qry_similarity) / qry_attention_mask.detach().cpu().numpy().mean(axis=1)
-        total_ctx = (in_ctx_similarity - bl_ctx_similarity) / ctx_attention_mask.detach().cpu().numpy().mean(axis=1)
+            del batch_qry_grads
+            del batch_ctx_grads
 
         # check additivity:
-        ratio_qry = intGrad['query'].sum() / total_qry.sum()
-        ratio_ctx = intGrad['context'].sum() / total_ctx.sum()
-        if ratio_qry < .95: print(f'WARNING: query attributions add up to only {ratio_qry*100.:.1f}% of the score. Please increase number of steps!')
-        if ratio_ctx < .95: print(f'WARNING: context attributions add up to only {ratio_ctx*100.:.1f}% of the score. Please increase number of steps!')
+        coverage_qry = intGrad['query'].sum(axis=-1) / (in_qry_similarity - bl_qry_similarity).sum()
+        coverage_ctx = intGrad['context'].sum(axis=-1) / (in_ctx_similarity - bl_ctx_similarity).squeeze()
+        if (coverage_qry < .95).any(): print(f'WARNING: query attributions add up to only {coverage_qry.min()*100.:.1f}% of the score. Please increase number of steps!')
+        if (coverage_ctx < .95).any(): print(f'WARNING: context attributions add up to only {coverage_ctx.min()*100.:.1f}% of the score. Please increase number of steps!')
 
         if filter_special_tokens:
             # set the importance of special tokens to 0.
             intGrad = {key: intGrad[key] * self._special_tokens_mask[key] for key in intGrad}
 
+        if not (output_offset or output_coverage):
+            return intGrad
+
+        result = (intGrad, )
+        if output_offset:   result = result + ({'query': bl_qry_similarity.sum(), 'context': bl_ctx_similarity.squeeze()},)
+        if output_coverage: result = result + ({'query': coverage_qry, 'context': coverage_ctx},)
         return intGrad
 
     def forward(self, query:str, contexts:List[str], k:Optional[int]=None, *, reorder:bool=False, **kwargs):

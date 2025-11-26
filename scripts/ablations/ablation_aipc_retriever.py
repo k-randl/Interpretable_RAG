@@ -9,9 +9,12 @@ RESULTS_PATH = os.path.join(os.path.dirname(__file__), 'results', 'aipc_retrieve
 os.makedirs(RESULTS_PATH, exist_ok=True)
 
 # parameters:
-METHODS      = [('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False}),
-                ('intGrad', {'num_steps':50,  'batch_size':16, 'verbose':False}),
-                ('intGrad', {'num_steps':10,  'batch_size':16, 'verbose':False}),
+METHODS      = [('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False, 'base':None}),
+                ('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False, 'base':'mask'}),
+                ('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False, 'base':'unk'}),
+                ('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False, 'base':'pad'}),
+                ('intGrad', {'num_steps':50,  'batch_size':16, 'verbose':False, 'base':'pad'}),
+                ('intGrad', {'num_steps':10,  'batch_size':16, 'verbose':False, 'base':'pad'}),
                 ('gradIn',  {}),
                 ('aGrad',   {}),
                 ('grad',    {}),

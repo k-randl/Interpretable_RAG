@@ -37,5 +37,5 @@ plot_importance_retriever(retriever, method='gradIn')
 higlight_importance_retriever(retriever, method='gradIn', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
 
 #%% Integrated Gradients:
-plot_importance_retriever(retriever, method='intGrad')
-higlight_importance_retriever(retriever, method='intGrad', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
+plot_importance_retriever(retriever, method='intGrad', base='pad')
+higlight_importance_retriever(retriever, method='intGrad', base='pad', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
