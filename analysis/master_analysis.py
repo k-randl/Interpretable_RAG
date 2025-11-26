@@ -311,6 +311,48 @@ def infer_metadata(file_path):
         pass
     return 'unknown_experiment', 'default'
 
+def generate_global_syntax_section():
+    """Reads syntax analysis CSVs and generates HTML summary."""
+    html = ["<div class='experiment-block'><h2>Global Syntax & Logic Analysis</h2>"]
+    
+    # 1. Global Syntax Logic
+    syntax_path = "analysis/global_syntax_logic_analysis.csv"
+    if os.path.exists(syntax_path):
+        try:
+            df = pd.read_csv(syntax_path)
+            
+            html.append("<h3>Top POS Bigrams (Weighted)</h3>")
+            bigrams = df[df['category'] == 'POS_BIGRAM']
+            grp_bi = bigrams.groupby(['type', 'key'])['norm_weight'].agg(['mean', 'count']).reset_index()
+            grp_bi = grp_bi[grp_bi['count'] >= 3].sort_values('mean', ascending=False).head(10)
+            
+            html.append("<table class='stats-table'><thead><tr><th>Type</th><th>Pattern</th><th>Mean Norm. Weight</th><th>Count</th></tr></thead><tbody>")
+            for _, row in grp_bi.iterrows():
+                html.append(f"<tr><td>{row['type']}</td><td>{row['key']}</td><td>{row['mean']:.4f}</td><td>{row['count']}</td></tr>")
+            html.append("</tbody></table>")
+            
+        except Exception as e:
+            html.append(f"<p>Error loading syntax analysis: {e}</p>")
+            
+    # 2. Syntax Weights
+    weights_path = "analysis/syntax_weight_analysis.csv"
+    if os.path.exists(weights_path):
+        try:
+            df = pd.read_csv(weights_path)
+            html.append("<h3>Pattern Weight Summary</h3>")
+            summary = df.groupby(['type', 'pattern'])['normalized_combined'].agg(['mean', 'count']).reset_index()
+            
+            html.append("<table class='stats-table'><thead><tr><th>Type</th><th>Pattern</th><th>Mean Norm. Weight</th><th>Count</th></tr></thead><tbody>")
+            for _, row in summary.iterrows():
+                html.append(f"<tr><td>{row['type']}</td><td>{row['pattern']}</td><td>{row['mean']:.4f}</td><td>{row['count']}</td></tr>")
+            html.append("</tbody></table>")
+            
+        except Exception as e:
+            html.append(f"<p>Error loading syntax weights: {e}</p>")
+            
+    html.append("</div>")
+    return "\n".join(html)
+
 def main():
     parser = argparse.ArgumentParser(description="Master Analysis Script")
     parser.add_argument("input_path", help="Root folder to scan")
@@ -349,6 +391,7 @@ def main():
                 data = pickle.load(f)
                 
             ftype = 'unknown'
+            documents = [] # List of strings
             
             # Analyze
             if 'gen_tokens' in data: # Generation
@@ -379,6 +422,13 @@ def main():
                 analysis = analyze_retrieval_results(data)
                 cond_stats.add_retrieval(analysis)
                 
+                # Extract Documents for retrieval
+                if 'context_tokens_list' in analysis:
+                    # Flatten list of tokens -> string per doc
+                    for doc_toks in analysis['context_tokens_list']:
+                        doc_text = "".join(clean_token(t) for t in doc_toks).replace('Ġ', ' ')
+                        documents.append(doc_text)
+                
                 # Local Plots
                 plot_document_relevance(analysis, os.path.join(local_out_dir, "ret_relevance.png"))
                 plot_weighted_token_overlap(analysis, os.path.join(local_out_dir, "token_overlap.png"))
@@ -401,12 +451,40 @@ def main():
             })
             
             # Generate Index Page
-            generate_local_index(local_out_dir, file_clean_name, ftype, query_text)
+            generate_local_index(local_out_dir, file_clean_name, ftype, query_text, documents)
             
-            print(f"Processed: {exp_name} / {condition} / {file_clean_name}")
+            # print(f"Processed: {exp_name} / {condition} / {file_clean_name}")
             
         except Exception as e:
             print(f"Skipping {file_path}: {e}")
+
+    # 3. Generate Global Plots per Experiment
+    print("\nGenerating Global Plots...")
+    exp_plots_map = defaultdict(list)
+    
+    for exp_name, accumulator in experiments.items():
+        exp_dir = os.path.join(args.output_dir, exp_name)
+        os.makedirs(exp_dir, exist_ok=True)
+        
+        # A. Comparison: Doc Position
+        if accumulator.plot_doc_position_comparison(os.path.join(exp_dir, "compare_position.png")):
+            exp_plots_map[exp_name].append(("compare_position.png", "position_bias"))
+            
+        # B. Top Tokens
+        if accumulator.plot_top_tokens(os.path.join(exp_dir, "top_tokens.png")):
+            exp_plots_map[exp_name].append(("top_tokens.png", "top_tokens"))
+            
+        # C. POS Distribution
+        if accumulator.plot_pos_distribution(os.path.join(exp_dir, "pos_dist.png")):
+             exp_plots_map[exp_name].append(("pos_dist.png", "pos_distribution"))
+
+    # 4. Generate Global Syntax Section
+    print("Generating Global Syntax Analysis...")
+    global_syntax_html = generate_global_syntax_section()
+
+    # 5. Generate HTML Report
+    generate_full_report(args.output_dir, experiments, exp_plots_map, processed_files_log, global_syntax_html)
+    print(f"Report ready at {args.output_dir}/report.html")
 
 def generate_generation_stats_html(output_dir, gen_tokens, qry_tokens, shapley_context, shapley_query):
     """Generates a standalone HTML file with detailed generation statistics."""
@@ -450,7 +528,7 @@ def generate_generation_stats_html(output_dir, gen_tokens, qry_tokens, shapley_c
     with open(os.path.join(output_dir, "gen_stats.html"), "w") as f:
         f.write("\n".join(stats_html))
 
-def generate_local_index(file_dir, file_name, file_type, query_text=""):
+def generate_local_index(file_dir, file_name, file_type, query_text="", documents=[]):
     """Generates a simple index.html for a specific query folder."""
     
     plots = []
@@ -470,6 +548,19 @@ def generate_local_index(file_dir, file_name, file_type, query_text=""):
             ("Weighted Overlap", "token_overlap.png", "token_overlap"),
             ("Token Comparison", "token_comp.png", "top_tokens")
         ]
+    
+    # Document Curtain
+    doc_html = ""
+    if documents:
+        doc_html = "<div class='experiment-block'><h3>Documents</h3>"
+        for i, doc in enumerate(documents):
+            doc_html += f"""
+            <details style="margin-bottom:10px; border:1px solid #ddd; padding:5px; border-radius:5px;">
+                <summary style="cursor:pointer; font-weight:bold;">Document {i+1} (Click to Expand)</summary>
+                <div style="padding:10px; background:#f9f9f9; font-family:monospace; white-space:pre-wrap;">{doc}</div>
+            </details>
+            """
+        doc_html += "</div>"
         
     html = [f"""<!DOCTYPE html>
 <html>
@@ -485,6 +576,7 @@ def generate_local_index(file_dir, file_name, file_type, query_text=""):
             <strong>Query:</strong> {query_text}
         </div>
         {extra_links}
+        
         <div class="experiment-block">
             <div class="plot-container">"""]
         
@@ -496,44 +588,18 @@ def generate_local_index(file_dir, file_name, file_type, query_text=""):
                 <img src="{fname}" alt="{title}">
             </div>""")
             
-    html.append("""
+    html.append(f"""
             </div>
         </div>
+        {doc_html}
     </div>
 </body>
 </html>""")
     
     with open(os.path.join(file_dir, "index.html"), "w") as f:
         f.write("\n".join(html))
-            
-        except Exception as e:
-            print(f"Skipping {file_path}: {e}")
 
-    # 3. Generate Global Plots per Experiment
-    print("\nGenerating Global Plots...")
-    exp_plots_map = defaultdict(list)
-    
-    for exp_name, accumulator in experiments.items():
-        exp_dir = os.path.join(args.output_dir, exp_name)
-        os.makedirs(exp_dir, exist_ok=True)
-        
-        # A. Comparison: Doc Position
-        if accumulator.plot_doc_position_comparison(os.path.join(exp_dir, "compare_position.png")):
-            exp_plots_map[exp_name].append(("compare_position.png", "position_bias"))
-            
-        # B. Top Tokens
-        if accumulator.plot_top_tokens(os.path.join(exp_dir, "top_tokens.png")):
-            exp_plots_map[exp_name].append(("top_tokens.png", "top_tokens"))
-            
-        # C. POS Distribution
-        if accumulator.plot_pos_distribution(os.path.join(exp_dir, "pos_dist.png")):
-             exp_plots_map[exp_name].append(("pos_dist.png", "pos_distribution"))
-
-    # 4. Generate HTML Report
-    generate_full_report(args.output_dir, experiments, exp_plots_map, processed_files_log)
-    print(f"Report ready at {args.output_dir}/report.html")
-
-def generate_full_report(out_dir, experiments, exp_plots_map, file_log):
+def generate_full_report(out_dir, experiments, exp_plots_map, file_log, global_syntax_html=""):
     html = [f"""<!DOCTYPE html>
 <html>
 <head>
@@ -544,6 +610,8 @@ def generate_full_report(out_dir, experiments, exp_plots_map, file_log):
     <div class="container">
         <h1>RAG Pipeline Comparative Analysis</h1>
         <p>Generated on {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}</p>
+        
+        {global_syntax_html}
     """]
     
     # --- Experiment Sections ---
