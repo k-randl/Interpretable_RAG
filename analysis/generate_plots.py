@@ -59,8 +59,17 @@ def plot_mean_doc_importance(shapley_context, output_path):
 
 def plot_pos_importance(gen_tokens, shapley_query, shapley_context, output_path):
     """Performs POS tagging and plots importance per POS tag."""
-    total_incoming_importance = np.sum(np.abs(shapley_query), axis=0) + np.sum(np.abs(shapley_context), axis=0)
-    pos_tagged_tokens = pos_tag(gen_tokens, tagset='universal', lang='eng')
+    # Sum over input dimensions to get importance per GENERATED token
+    q_imp = np.sum(np.abs(shapley_query), axis=1)
+    c_imp = np.sum(np.abs(shapley_context), axis=0)
+    
+    # Handle length mismatch
+    min_len = min(len(q_imp), len(c_imp))
+    q_imp = q_imp[:min_len]
+    c_imp = c_imp[:min_len]
+    
+    total_incoming_importance = q_imp + c_imp
+    pos_tagged_tokens = pos_tag(gen_tokens[:min_len], tagset='universal', lang='eng')
     pos_tags = [tag for token, tag in pos_tagged_tokens]
     min_len = min(len(pos_tags), len(total_incoming_importance))
     pos_tags = pos_tags[:min_len]

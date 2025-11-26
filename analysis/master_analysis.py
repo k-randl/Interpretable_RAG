@@ -98,7 +98,12 @@ def gini(array):
 
 # --- Helper functions for HTML generation inside workers ---
 def generate_generation_stats_html(output_dir, gen_tokens, qry_tokens, shapley_context, shapley_query):
-    total_gen_importance = np.sum(np.abs(shapley_query), axis=1) + np.sum(np.abs(shapley_context), axis=0)
+    q_imp = np.sum(np.abs(shapley_query), axis=1)
+    c_imp = np.sum(np.abs(shapley_context), axis=0)
+    
+    min_len = min(len(q_imp), len(c_imp))
+    total_gen_importance = np.sum(np.abs(shapley_query), axis=0) + np.sum(np.abs(shapley_context), axis=0)
+    
     top_gen_indices = np.argsort(total_gen_importance)[-10:][::-1]
     
     stats_html = [f"""<!DOCTYPE html>
@@ -241,10 +246,10 @@ def process_file_worker(args):
             doc_imps = np.sum(np.abs(s_ctx), axis=1)
             
             # 2. Query Impact
-            qry_imp = np.sum(np.abs(s_qry), axis=0)
+            qry_imp = np.sum(np.abs(s_qry), axis=1)
             
             # 3. Gen Impact (POS)
-            gen_imp = np.sum(np.abs(s_qry), axis=1)
+            gen_imp = np.sum(np.abs(s_qry), axis=0)
             if s_ctx.shape[1] == len(gen_imp):
                 gen_imp += np.sum(np.abs(s_ctx), axis=0)
             
@@ -537,19 +542,20 @@ def generate_full_report(out_dir, experiments, exp_plots_map, file_log, global_s
         html.append("                <thead><tr><th>Condition</th><th>File</th><th>Query Text</th><th>Type</th><th>Links</th></tr></thead>")
         html.append("                <tbody>")
         
-        exp_logs = [f for f in file_log if f['exp'] == exp_name]
-        exp_logs.sort(key=lambda x: (x['cond'], x['name']))
+        # Filter logs for this experiment
+        exp_logs = [f for f in file_log if f['exp_name'] == exp_name]
+        exp_logs.sort(key=lambda x: (x['condition'], x['name']))
         
         for log in exp_logs:
             rel_path = os.path.relpath(log['path'], out_dir)
-            badge_class = "badge-gen" if log['type'] == 'generation' else "badge-ret"
+            badge_class = "badge-gen" if log['ftype'] == 'generation' else "badge-ret"
             query_text = log.get('query', 'N/A')
             
             html.append("            <tr>")
-            html.append(f"                <td>{log['cond']}</td>")
+            html.append(f"                <td>{log['condition']}</td>")
             html.append(f"                <td>{log['name']}</td>")
             html.append(f"                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='{query_text}'>{query_text}</td>")
-            html.append(f"                <td><span class='badge {badge_class}'>{log['type']}</span></td>")
+            html.append(f"                <td><span class='badge {badge_class}'>{log['ftype']}</span></td>")
             html.append(f"                <td>")
             html.append(f"                    <a href='{rel_path}/index.html' target='_blank'>Detailed View</a> | ")
             html.append(f"                    <a href='{rel_path}/' target='_blank'>Folder</a>")
