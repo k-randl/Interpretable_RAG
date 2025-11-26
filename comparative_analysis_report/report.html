@@ -24,8 +24,7 @@ h3 { color: #7f8c8d; }
 <body>
     <div class="container">
         <h1>RAG Pipeline Comparative Analysis</h1>
-        <p>Generated on 2025-11-26 11:45</p>
-        
+        <p>Generated on 2025-11-26 12:36</p>
         <div class='experiment-block'><h2>Global Syntax & Logic Analysis</h2>
 <h3>Top POS Bigrams (Weighted)</h3>
 <table class='stats-table'><thead><tr><th>Type</th><th>Pattern</th><th>Mean Norm. Weight</th><th>Count</th></tr></thead><tbody>
@@ -51,31 +50,6 @@ h3 { color: #7f8c8d; }
     
 
         <div class="experiment-block">
-            <h2>Experiment: efra_chunks_17_11_2025</h2>
-            <div class="plot-container">
-
-                <div class="plot-card">
-                    <img src="efra_chunks_17_11_2025/compare_position.png" alt="position_bias">
-                    <div class="description"><b>Position Bias Analysis:</b> Comparison of document importance based on its position in the prompt. <br>If 'Original' and 'Randomized' both show a downward trend, the model has a <b>Primacy Bias</b> (favors the first thing it reads). <br>If 'Randomized' is flat or different, the model might be attending to content rather than position.</div>
-                </div>
-
-                <div class="plot-card">
-                    <img src="efra_chunks_17_11_2025/top_tokens.png" alt="top_tokens">
-                    <div class="description"><b>Top Influential Tokens:</b> The specific words (excluding stop words) that accumulated the most importance across all queries. These are the 'drivers' of your model's outputs.</div>
-                </div>
-
-                <div class="plot-card">
-                    <img src="efra_chunks_17_11_2025/pos_dist.png" alt="pos_distribution">
-                    <div class="description"><b>Part-of-Speech Impact:</b> Which grammatical roles drive the model's generation? High importance on Nouns/Verbs indicates content focus; high importance on Determiners/Prepositions might indicate noise.</div>
-                </div>
-</div>
-            <h3>Detailed Logs (efra_chunks_17_11_2025)</h3>
-            <table class='stats-table'>
-                <thead><tr><th>Condition</th><th>File</th><th>Query Text</th><th>Type</th><th>Links</th></tr></thead>
-                <tbody>
-</tbody></table></div>
-
-        <div class="experiment-block">
             <h2>Experiment: trec19_19_11_2025</h2>
             <div class="plot-container">
 
@@ -98,6 +72,71 @@ h3 { color: #7f8c8d; }
             <table class='stats-table'>
                 <thead><tr><th>Condition</th><th>File</th><th>Query Text</th><th>Type</th><th>Links</th></tr></thead>
                 <tbody>
+            <tr>
+                <td>original</td>
+                <td>Llama-3.1-8B-Instruct_qid_31_1</td>
+                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='What is throat cancer?'>What is throat cancer?</td>
+                <td><span class='badge badge-gen'>generation</span></td>
+                <td>
+                    <a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_1/index.html' target='_blank'>Detailed View</a> | 
+                    <a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_1/' target='_blank'>Folder</a>
+                </td>
+            </tr>
+            <tr>
+                <td>original</td>
+                <td>Llama-3.1-8B-Instruct_qid_31_2</td>
+                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='Is throat cancer treatable?'>Is throat cancer treatable?</td>
+                <td><span class='badge badge-gen'>generation</span></td>
+                <td>
+                    <a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_2/index.html' target='_blank'>Detailed View</a> | 
+                    <a href='trec19_19_11_2025/original/Llama-3.1-8B-Instruct_qid_31_2/' target='_blank'>Folder</a>
+                </td>
+            </tr>
+</tbody></table></div>
+
+        <div class="experiment-block">
+            <h2>Experiment: efra_chunks_17_11_2025</h2>
+            <div class="plot-container">
+
+                <div class="plot-card">
+                    <img src="efra_chunks_17_11_2025/compare_position.png" alt="position_bias">
+                    <div class="description"><b>Position Bias Analysis:</b> Comparison of document importance based on its position in the prompt. <br>If 'Original' and 'Randomized' both show a downward trend, the model has a <b>Primacy Bias</b> (favors the first thing it reads). <br>If 'Randomized' is flat or different, the model might be attending to content rather than position.</div>
+                </div>
+
+                <div class="plot-card">
+                    <img src="efra_chunks_17_11_2025/top_tokens.png" alt="top_tokens">
+                    <div class="description"><b>Top Influential Tokens:</b> The specific words (excluding stop words) that accumulated the most importance across all queries. These are the 'drivers' of your model's outputs.</div>
+                </div>
+
+                <div class="plot-card">
+                    <img src="efra_chunks_17_11_2025/pos_dist.png" alt="pos_distribution">
+                    <div class="description"><b>Part-of-Speech Impact:</b> Which grammatical roles drive the model's generation? High importance on Nouns/Verbs indicates content focus; high importance on Determiners/Prepositions might indicate noise.</div>
+                </div>
+</div>
+            <h3>Detailed Logs (efra_chunks_17_11_2025)</h3>
+            <table class='stats-table'>
+                <thead><tr><th>Condition</th><th>File</th><th>Query Text</th><th>Type</th><th>Links</th></tr></thead>
+                <tbody>
+            <tr>
+                <td>original</td>
+                <td>Llama-3.1-8B-Instruct_qid_0</td>
+                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='As a consumer interested in food safety, can you elaborate on the essential control measures that food establishments should implement to manage foodborne illness risk factors, and how regulatory authorities assess these measures during inspections?'>As a consumer interested in food safety, can you elaborate on the essential control measures that food establishments should implement to manage foodborne illness risk factors, and how regulatory authorities assess these measures during inspections?</td>
+                <td><span class='badge badge-gen'>generation</span></td>
+                <td>
+                    <a href='efra_chunks_17_11_2025/original/Llama-3.1-8B-Instruct_qid_0/index.html' target='_blank'>Detailed View</a> | 
+                    <a href='efra_chunks_17_11_2025/original/Llama-3.1-8B-Instruct_qid_0/' target='_blank'>Folder</a>
+                </td>
+            </tr>
+            <tr>
+                <td>original</td>
+                <td>Llama-3.1-8B-Instruct_qid_1</td>
+                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='As a consumer interested in food safety, could you elaborate on the guidelines and good manufacturing practices (GMP) that are in place for fresh meat, poultry, and game, as well as for frozen fish products, and how these practices ensure the safety and quality of these food items?'>As a consumer interested in food safety, could you elaborate on the guidelines and good manufacturing practices (GMP) that are in place for fresh meat, poultry, and game, as well as for frozen fish products, and how these practices ensure the safety and quality of these food items?</td>
+                <td><span class='badge badge-gen'>generation</span></td>
+                <td>
+                    <a href='efra_chunks_17_11_2025/original/Llama-3.1-8B-Instruct_qid_1/index.html' target='_blank'>Detailed View</a> | 
+                    <a href='efra_chunks_17_11_2025/original/Llama-3.1-8B-Instruct_qid_1/' target='_blank'>Folder</a>
+                </td>
+            </tr>
 </tbody></table></div>
 
         <div class="experiment-block">
@@ -111,7 +150,7 @@ h3 { color: #7f8c8d; }
             <tr>
                 <td>retrieval</td>
                 <td>query_31_1</td>
-                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='▁query:▁What▁is▁throat▁cancer?'>▁query:▁What▁is▁throat▁cancer?</td>
+                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title=' ▁que ry : ▁What ▁is ▁ thro at ▁cancer ? '> ▁que ry : ▁What ▁is ▁ thro at ▁cancer ? </td>
                 <td><span class='badge badge-ret'>retrieval</span></td>
                 <td>
                     <a href='trec19/retrieval/query_31_1/index.html' target='_blank'>Detailed View</a> | 
@@ -121,22 +160,12 @@ h3 { color: #7f8c8d; }
             <tr>
                 <td>retrieval</td>
                 <td>query_31_2</td>
-                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title='▁query:▁Is▁throat▁cancer▁treatable?'>▁query:▁Is▁throat▁cancer▁treatable?</td>
+                <td style='max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;' title=' ▁que ry : ▁Is ▁ thro at ▁cancer ▁treat able ? '> ▁que ry : ▁Is ▁ thro at ▁cancer ▁treat able ? </td>
                 <td><span class='badge badge-ret'>retrieval</span></td>
                 <td>
                     <a href='trec19/retrieval/query_31_2/index.html' target='_blank'>Detailed View</a> | 
                     <a href='trec19/retrieval/query_31_2/' target='_blank'>Folder</a>
                 </td>
             </tr>
-</tbody></table></div>
-
-        <div class="experiment-block">
-            <h2>Experiment: efra_06_11</h2>
-            <div class="plot-container">
-</div>
-            <h3>Detailed Logs (efra_06_11)</h3>
-            <table class='stats-table'>
-                <thead><tr><th>Condition</th><th>File</th><th>Query Text</th><th>Type</th><th>Links</th></tr></thead>
-                <tbody>
 </tbody></table></div>
 </div></body></html>
