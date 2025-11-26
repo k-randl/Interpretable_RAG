@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Generation Stats</title>
+    <style>
+body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #333; background-color: #f9f9f9; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+h2 { color: #2980b9; margin-top: 30px; border-left: 5px solid #3498db; padding-left: 10px; }
+h3 { color: #7f8c8d; }
+.experiment-block { border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; margin-bottom: 30px; background-color: #fff; }
+.plot-container { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 15px; justify-content: center; }
+.plot-card { border: 1px solid #eee; padding: 15px; border-radius: 8px; background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.05); width: 45%; min-width: 400px; text-align: center; }
+.plot-card img { max-width: 100%; height: auto; border-radius: 4px; }
+.description { font-style: italic; color: #666; margin-top: 10px; font-size: 0.9em; background: #f0f8ff; padding: 10px; border-radius: 4px; text-align: left; }
+.stats-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9em; }
+.stats-table th, .stats-table td { padding: 8px; border: 1px solid #ddd; text-align: left; }
+.stats-table th { background-color: #f2f2f2; }
+.badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 0.8em; color: #fff; font-weight: bold; }
+.badge-gen { background-color: #e67e22; }
+.badge-ret { background-color: #27ae60; }
+</style>
+</head>
+<body>
+    <div class="container">
+        <h1>Generation Statistics</h1>
+        <p><b>Query:</b> what is acetylated oxidised starch and distarch phosphate and how they are made?</p>
+        <p><b>Generated Text:</b> <|start_header_id|> assistant <|end_header_id|> ĊĊ Based on the provided documents , here 's the information about ac ety lated oxid ized starch and dist arch phosphate :ĊĊ Ac ety lated oxid ized starch ( INS  145 1 ) is a modified starch that is both oxid ized and ac ety lated . ĊĊ 1 . Ox id ized starch : Ox id ized starch</p>
+        
+        <div class="experiment-block">
+            <h3>Top 10 Most 'Expensive' Generated Tokens</h3>
+            <p>Tokens that required the most attribution (Context + Query).</p>
+            <table class="stats-table">
+                <thead><tr><th>Rank</th><th>Token</th><th>Total Importance</th></tr></thead>
+                <tbody>
+<tr><td>1</td><td><|start_header_id|></td><td>84.5137</td></tr>
+<tr><td>2</td><td>oxid</td><td>31.5596</td></tr>
+<tr><td>3</td><td>INS</td><td>28.4602</td></tr>
+<tr><td>4</td><td>145</td><td>20.6358</td></tr>
+<tr><td>5</td><td>ac</td><td>19.0567</td></tr>
+<tr><td>6</td><td>and</td><td>19.0008</td></tr>
+<tr><td>7</td><td>dist</td><td>17.8192</td></tr>
+<tr><td>8</td><td></td><td>17.8114</td></tr>
+<tr><td>9</td><td>starch</td><td>16.5542</td></tr>
+<tr><td>10</td><td>1</td><td>15.1338</td></tr>
+</tbody></table></div></div></body></html>
