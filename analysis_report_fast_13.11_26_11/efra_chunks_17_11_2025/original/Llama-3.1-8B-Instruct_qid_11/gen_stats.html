@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Generation Stats</title>
+    <style>
+body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #333; background-color: #f9f9f9; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+h2 { color: #2980b9; margin-top: 30px; border-left: 5px solid #3498db; padding-left: 10px; }
+h3 { color: #7f8c8d; }
+.experiment-block { border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; margin-bottom: 30px; background-color: #fff; }
+.plot-container { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 15px; justify-content: center; }
+.plot-card { border: 1px solid #eee; padding: 15px; border-radius: 8px; background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.05); width: 45%; min-width: 400px; text-align: center; }
+.plot-card img { max-width: 100%; height: auto; border-radius: 4px; }
+.description { font-style: italic; color: #666; margin-top: 10px; font-size: 0.9em; background: #f0f8ff; padding: 10px; border-radius: 4px; text-align: left; }
+.stats-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9em; }
+.stats-table th, .stats-table td { padding: 8px; border: 1px solid #ddd; text-align: left; }
+.stats-table th { background-color: #f2f2f2; }
+.badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 0.8em; color: #fff; font-weight: bold; }
+.badge-gen { background-color: #e67e22; }
+.badge-ret { background-color: #27ae60; }
+</style>
+</head>
+<body>
+    <div class="container">
+        <h1>Generation Statistics</h1>
+        <p><b>Query:</b> As a Regulatory Compliance Non Expert, I am keen to understand the implications of the new allergen labelling rules that are set to be implemented by February 2024. Could you elaborate on what these new rules entail and how they differ from the existing allergen declaration rules, as well as the potential consequences for businesses that fail to comply with these regulations?</p>
+        <p><b>Generated Text:</b> <|start_header_id|> assistant <|end_header_id|> ĊĊ Based on the provided documents , the new allerg en lab elling rules set to be implemented by February  202 4 in Australia and New Zealand are outlined in Document  1 and Document  5 . The key points of the new rules are :ĊĊ 1 .  All erg ens must be declared in a specific format</p>
+        
+        <div class="experiment-block">
+            <h3>Top 10 Most 'Expensive' Generated Tokens</h3>
+            <p>Tokens that required the most attribution (Context + Query).</p>
+            <table class="stats-table">
+                <thead><tr><th>Rank</th><th>Token</th><th>Total Importance</th></tr></thead>
+                <tbody>
+<tr><td>1</td><td><|start_header_id|></td><td>31.8152</td></tr>
+<tr><td>2</td><td>by</td><td>25.6125</td></tr>
+<tr><td>3</td><td>Australia</td><td>22.8424</td></tr>
+<tr><td>4</td><td>February</td><td>21.2512</td></tr>
+<tr><td>5</td><td></td><td>21.2210</td></tr>
+<tr><td>6</td><td>specific</td><td>20.5455</td></tr>
+<tr><td>7</td><td>set</td><td>20.2759</td></tr>
+<tr><td>8</td><td>format</td><td>20.2409</td></tr>
+<tr><td>9</td><td>to</td><td>20.1778</td></tr>
+<tr><td>10</td><td>implemented</td><td>19.9279</td></tr>
+</tbody></table></div></div></body></html>
