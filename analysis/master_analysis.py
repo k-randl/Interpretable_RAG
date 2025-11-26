@@ -102,7 +102,7 @@ def generate_generation_stats_html(output_dir, gen_tokens, qry_tokens, shapley_c
     c_imp = np.sum(np.abs(shapley_context), axis=0)
     
     min_len = min(len(q_imp), len(c_imp))
-    total_gen_importance = q_imp[:min_len] + c_imp[:min_len]
+    total_gen_importance = np.sum(np.abs(shapley_query), axis=0) + np.sum(np.abs(shapley_context), axis=0)
     
     top_gen_indices = np.argsort(total_gen_importance)[-10:][::-1]
     
@@ -246,10 +246,10 @@ def process_file_worker(args):
             doc_imps = np.sum(np.abs(s_ctx), axis=1)
             
             # 2. Query Impact
-            qry_imp = np.sum(np.abs(s_qry), axis=0)
+            qry_imp = np.sum(np.abs(s_qry), axis=1)
             
             # 3. Gen Impact (POS)
-            gen_imp = np.sum(np.abs(s_qry), axis=1)
+            gen_imp = np.sum(np.abs(s_qry), axis=0)
             if s_ctx.shape[1] == len(gen_imp):
                 gen_imp += np.sum(np.abs(s_ctx), axis=0)
             
