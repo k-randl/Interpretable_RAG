@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.autonotebook import tqdm
 
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Literal
 from numpy.typing import NDArray
 
 from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
@@ -33,7 +33,7 @@ class AIPCForRetrieval:
         self.query_format = query_format
         self.xs           = np.arange(0., 1.01, .01)
 
-    def __call__(self, data:Dict[str, List], k:int=5, method:str='intGrad', *, step:int=1, normalize:bool=True, method_args:Dict[str, any]={}, **kwargs) -> float:
+    def __call__(self, data:Dict[str, List], k:int=5, target:Literal['query', 'context']='context', method:str='intGrad', *, step:int=1, normalize:bool=True, method_args:Dict[str, any]={}, **kwargs) -> float:
         '''Compute a faithfulness score by comparing area-under-curve (AUC) values for two
         perturbation strategies: perturbing most-relevant features first (MoRF) and
         perturbing least-relevant features first (LeRF).
@@ -49,6 +49,7 @@ class AIPCForRetrieval:
                                           input fields to lists/arrays of instances and any required metadata).
             k (int, optional):            Number of elements/features to consider during perturbation (e.g. top-k).
                                           Defaults to 5.
+            target (str, optional):       Target to compute saliency for (default: 'context').
             method (str, optional):       Name of the attribution/importance method to use (forwarded to
                                           self.perturbe). Defaults to 'intGrad'.
             step (int, optional):         Perturbation granularity / number of features to remove per perturbation
@@ -65,10 +66,10 @@ class AIPCForRetrieval:
         '''
 
         # perturbation curve most relevant first:
-        self.morf = self.perturbe(data, True, k, method, step=step, method_args=method_args, desc='Computing MoRF', **kwargs)
+        self.morf = self.perturbe(data, True, k, target, method, step=step, method_args=method_args, desc='Computing MoRF', **kwargs)
 
         # perturbation curve least relevant first:
-        self.lerf = self.perturbe(data, False, k, method, step=step, method_args=method_args, desc='Computing LeRF', **kwargs)
+        self.lerf = self.perturbe(data, False, k, target, method, step=step, method_args=method_args, desc='Computing LeRF', **kwargs)
 
         # set last value to mean max_error:
         max_err = 0.5 * (self.morf[:,-1] + self.lerf[:,-1])
@@ -84,7 +85,8 @@ class AIPCForRetrieval:
         # return area inside curves:
         return self.get_aipc()
 
-    def perturbe(self, data:Dict[str, List], descending:bool, k:int=5, method:str='intGrad', *, step:int=1, method_args:Dict[str, any]={}, desc:str='Computing perturbations', **kwargs):
+    def perturbe(self, data:Dict[str, List], descending:bool, k:int=5, target:Literal['query', 'context']='context', method:str='intGrad', *,
+                 step:int=1, method_args:Dict[str, any]={}, desc:str='Computing perturbations', **kwargs):
         '''Compute perturbation-based fidelity curves by progressively masking context tokens
         and measuring the change in retrieval similarity.
         For each (query, context) pair in `data` this method:
@@ -110,6 +112,7 @@ class AIPCForRetrieval:
                                           least-relevant tokens first.
             k (int, optional):            Number of top retrieved contexts to consider per query.
                                           Defaults to 5.
+            target (str, optional):       Target to compute saliency for (default: 'context').
             method (str, optional):       Name of the explanation method to call on the
                                           retriever. Defaults to 'IntGrad'.
             step (int, optional):         Number of additional tokens to mask at
@@ -138,10 +141,10 @@ class AIPCForRetrieval:
             )
 
             # calculate relevancy scores:
-            if   method == 'random': relevancy = torch.rand(self.retriever._x['context'].shape)
-            elif method == 'grad':   relevancy = [doc.mean(axis=-1) for doc in self.retriever.grad(**method_args)['context']]
-            elif method == 'aGrad':  relevancy = [doc.mean(axis=0) for doc in self.retriever.aGrad(**method_args)['context']]
-            else:                    relevancy = getattr(self.retriever, method)(**method_args)['context']
+            if   method == 'random': relevancy = torch.rand(self.retriever._x[target].shape)
+            elif method == 'grad':   relevancy = [doc.mean(axis=-1) for doc in self.retriever.grad(**method_args)[target]]
+            elif method == 'aGrad':  relevancy = [doc.mean(axis=0) for doc in self.retriever.aGrad(**method_args)[target]]
+            else:                    relevancy = getattr(self.retriever, method)(**method_args)[target]
 
             with torch.no_grad():
                 # get original input:
@@ -152,34 +155,76 @@ class AIPCForRetrieval:
                 qry_msk:torch.Tensor = qry_in != self.retriever.tokenizer.pad_token_id
                 ctx_msk:torch.Tensor = ctx_in != self.retriever.tokenizer.pad_token_id
 
-                # apply embedding to query:
-                qry_out = self.retriever.query_encoder(input_ids=qry_in, attention_mask=qry_msk)
+                if target == 'query':
+                    ys.append(self._perturbe_qry(qry_in, ctx_in, qry_msk, ctx_msk, similarity, relevancy, descending, step))
 
-                for id, (sim, rel) in enumerate(zip(similarity, relevancy)):
-                    rel = rel.argsort(descending=descending)
+                elif target == 'context':
+                    ys.append(self._perturbe_ctx(qry_in, ctx_in, qry_msk, ctx_msk, similarity, relevancy, descending, step))
+                
+                else: raise ValueError('target')
+            
+        # convert to numpy array:
+        return np.concat(ys)
 
-                    pc = [(0., 0.)]
-                    for i in range(0, len(rel), step):
-                        # copy contexts:
-                        ctx_ptb = ctx_in.clone()
+    def _perturbe_qry(self, qry_in, ctx_in, qry_msk, ctx_msk, similarity, relevancy, descending, step):
+        # apply embedding to context once (we will perturb the query):
+        ctx_out = self.retriever.context_encoder(input_ids=ctx_in, attention_mask=ctx_msk)
 
-                        # mask tokens:
-                        ctx_ptb[id, rel[:i+step]] = self.retriever.tokenizer.mask_token_id
+        rel = relevancy[0].argsort(descending=descending)
 
-                        # apply embedding to context:
-                        ctx_out = self.retriever.context_encoder(input_ids=ctx_ptb, attention_mask=ctx_msk)
+        pcs = [[(0., 0.)] for _ in similarity]
+        for i in range(0, len(rel), step):
+            # copy query:
+            qry_ptb = qry_in.clone()
 
-                        # compute similarity:
-                        sim_ptb = qry_out.last_hidden_state[0, 0, :] @ ctx_out.last_hidden_state[id, 0, :]
+            # mask tokens:
+            qry_ptb[0, rel[:i+step]] = self.retriever.tokenizer.mask_token_id
 
-                        pc.append(((i+step)/float(len(rel)), (sim_ptb-sim).cpu().numpy()))
+            # apply embedding to query:
+            qry_out = self.retriever.query_encoder(input_ids=qry_ptb, attention_mask=qry_msk)
 
-                    # interpolate curve:
-                    ys.append(np.interp(self.xs, *np.array(pc).T))
+            # compute similarity:
+            sim_ptb = qry_out.last_hidden_state[0, 0, :] @ ctx_out.last_hidden_state[:, 0, :].T
+
+            for i, sim in enumerate((sim_ptb.cpu() - similarity.cpu()).numpy()):
+                pcs[i].append(((i+step)/float(len(rel)), sim))
+
+        # interpolate curve:
+        ys = [np.interp(self.xs, *np.array(pc).T) for pc in pcs]
+            
+        # convert to numpy array:
+        return np.stack(ys)
+
+    def _perturbe_ctx(self, qry_in, ctx_in, qry_msk, ctx_msk, similarity, relevancy, descending, step):
+        # apply embedding to query once (perturbing the context):
+        qry_out = self.retriever.query_encoder(input_ids=qry_in, attention_mask=qry_msk)
+
+        ys = []
+        for id, (sim, rel) in enumerate(zip(similarity, relevancy)):
+            rel = rel.argsort(descending=descending)
+
+            pc = [(0., 0.)]
+            for i in range(0, len(rel), step):
+                # copy contexts:
+                ctx_ptb = ctx_in.clone()
+
+                # mask tokens:
+                ctx_ptb[id, rel[:i+step]] = self.retriever.tokenizer.mask_token_id
+
+                # apply embedding to context:
+                ctx_out = self.retriever.context_encoder(input_ids=ctx_ptb, attention_mask=ctx_msk)
+
+                # compute similarity:
+                sim_ptb = qry_out.last_hidden_state[0, 0, :] @ ctx_out.last_hidden_state[id, 0, :]
+
+                pc.append(((i+step)/float(len(rel)), (sim_ptb-sim).cpu().numpy()))
+
+            # interpolate curve:
+            ys.append(np.interp(self.xs, *np.array(pc).T))
 
         # convert to numpy array:
         return np.stack(ys)
-    
+
     def get_aipc(self, *, k:Optional[int]=None) -> float:
         '''Compute the area inside the pertubation curves (AIPC) between the mean MORF
         and LERF curves using the trapezoidal rule over self.xs.
@@ -190,16 +235,16 @@ class AIPCForRetrieval:
         
         Returns:
             aipc (float):
-                Aarea inside the pertubation curves (|∫ mean(self.morf[:k], axis=0) dx - ∫ mean(self.lerf[:k], axis=0) dx|)
+                Area inside the pertubation curves (|∫ mean(self.morf[:k], axis=0) dx - ∫ mean(self.lerf[:k], axis=0) dx|)
         '''
         
         # set k to max available docs if unset:
         if k is None: k = len(self.morf)
 
         # return aipc:
-        return np.abs(
-            np.trapezoid(self.morf[:k].mean(axis=0), self.xs) -
-            np.trapezoid(self.lerf[:k].mean(axis=0), self.xs)
+        return (
+            np.abs(np.trapezoid(self.morf[:k].mean(axis=0), self.xs)) -
+            np.abs(np.trapezoid(self.lerf[:k].mean(axis=0), self.xs))
         )
 
     def plot_lerf(self, ax:plt.Axes, *, k:Optional[int]=None, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:

@@ -385,14 +385,20 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         if output_coverage: result = result + ({'query': coverage_qry, 'context': coverage_ctx},)
         return intGrad
 
-    def forward(self, query:str, contexts:List[str], k:Optional[int]=None, *, reorder:bool=False, **kwargs):
+    def forward(self, query:str, contexts:List[str], k:Optional[int]=None, *, reorder:bool=False, max_length:Optional[int]=None, **kwargs):
         # control gradient computation:
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
 
+        # create tokenizer arguments:
+        tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}
+        if max_length is not None:
+            tokenizer_args['padding'] = 'max_length'
+            tokenizer_args['max_length'] = max_length
+
         # apply tokenizer:
-        qry_input = self.tokenizer(query, return_special_tokens_mask=True, return_tensors='pt')
-        ctx_input = self.tokenizer(contexts, padding=True, truncation=True, return_special_tokens_mask=True, return_tensors='pt')
+        qry_input = self.tokenizer(query, **tokenizer_args)
+        ctx_input = self.tokenizer(contexts, **tokenizer_args)
 
         self._x = {  
             'query':   qry_input.input_ids.detach().cpu().numpy(),

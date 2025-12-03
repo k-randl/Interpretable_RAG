@@ -92,13 +92,19 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
         """The context encoder used by the retriever model."""
         return self._context_encoder
 
-    def forward(self, contexts:List[str], **kwargs):
+    def forward(self, contexts:List[str], *, max_length:Optional[int]=None, **kwargs):
         # control gradient computation:
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
 
+        # create tokenizer arguments:
+        tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}
+        if max_length is not None:
+            tokenizer_args['padding'] = 'max_length'
+            tokenizer_args['max_length'] = max_length
+
         # apply tokenizer:
-        ctx_input = self.tokenizer(contexts, padding=True, truncation=True, return_special_tokens_mask=True, return_tensors='pt')
+        ctx_input = self.tokenizer(contexts, **tokenizer_args)
         token_mask = ctx_input.pop('special_tokens_mask') == 0.
         output = {
             'texts':                contexts,
@@ -303,7 +309,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return gradIn
 
-    def forward(self, query:str, k:int, dir:str='embeddings', *, index:Optional[torch.FloatTensor]=None, reorder:bool=False, **kwargs):
+    def forward(self, query:str, k:int, dir:str='embeddings', *, index:Optional[torch.FloatTensor]=None, reorder:bool=False, max_length:Optional[int]=None, **kwargs):
         # load index from disk if not speciifed:
         if index is None:
             with open(os.path.join(dir, 'embeddings.pt'), 'rb') as file:
@@ -313,8 +319,14 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
 
+        # create tokenizer arguments:
+        tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}
+        if max_length is not None:
+            tokenizer_args['padding'] = 'max_length'
+            tokenizer_args['max_length'] = max_length
+
         # apply tokenizer:
-        qry_input = self.tokenizer(query, return_special_tokens_mask=True, return_tensors='pt')
+        qry_input = self.tokenizer(query, **tokenizer_args)
         token_mask = qry_input.pop('special_tokens_mask') == 0.
         
         self._x = {'query': [qry_input.input_ids[i, m].detach().cpu() for i, m in enumerate(token_mask)]}

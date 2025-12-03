@@ -109,52 +109,118 @@ import json
 import pickle
 import matplotlib.pyplot as plt
 
-methods = []
-with open(os.path.join(RESULTS_PATH, 'curves_llama8b.pkl'), 'rb') as file:
-    curves_llama8b = pickle.load(file)
-    methods.extend(list(curves_llama8b.keys()))
+plots = {
+    'comparison_n15': [
+        ('Random', 'Random'),
+        ('Kernel (n = 15)', 'Kernel'),
+        ('Monte Carlo (n = 15)', 'Monte Carlo'),
+        ('Precise', 'Precise'),
+    ],
+    'comparison_n20': [
+        ('Random', 'Random'),
+        ('Kernel (n = 20)', 'Kernel'),
+        ('Monte Carlo (n = 20)', 'Monte Carlo'),
+        ('Precise', 'Precise'),
+    ],
+    'comparison_n25': [
+        ('Random', 'Random'),
+        ('Kernel (n = 25)', 'Kernel'),
+        ('Monte Carlo (n = 25)', 'Monte Carlo'),
+        ('Precise', 'Precise'),
+    ],
+    'comparison_n30': [
+        ('Random', 'Random'),
+        ('Kernel (n = 30)', 'Kernel'),
+        ('Monte Carlo (n = 30)', 'Monte Carlo'),
+        ('Precise', 'Precise'),
+    ],
+    'kernel': [
+        ('Kernel (n = 10)', 'n=10'),
+        ('Kernel (n = 15)', 'n=15'),
+        ('Kernel (n = 20)', 'n=20'),
+        ('Kernel (n = 25)', 'n=25'),
+        ('Kernel (n = 30)', 'n=30'),
+    ],
+    'mc': [
+        ('Monte Carlo (n = 10)', 'n=10'),
+        ('Monte Carlo (n = 15)', 'n=15'),
+        ('Monte Carlo (n = 20)', 'n=20'),
+        ('Monte Carlo (n = 25)', 'n=25'),
+        ('Monte Carlo (n = 30)', 'n=30'),
+    ],
+}
 
-fig, axs = plt.subplots(2, 2)
-for method in set(methods):
-    # Llama 8b:
-    axs[0,0].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['lerf'].mean(0) * 100.,    label=method)
-    axs[1,0].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['morf'].mean(0) * 100.)
+for target in ('query', 'context'):
+    for key in plots:
+        with open(os.path.join(RESULTS_PATH, 'curves_llama8b.pkl'), 'rb') as file:
+            curves_llama8b = pickle.load(file)
 
-    # Llama 8b:
-    #axs[0,1].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['lerf'].mean(0) * 100.)
-    #axs[1,1].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['morf'].mean(0) * 100.)
+        fig, axs = plt.subplots(2, 3)
+        for method, label in plots[key]:
+            # Llama 8b:
+            axs[0,0].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['lerf'].mean(0) * 100.,    label=label)
+            axs[1,0].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['morf'].mean(0) * 100.)
 
-for row in range(1):
-    # Paint arrow for LeRF plot:
-    axs[0,row].arrow(50, 50, 30, -30, width=5, head_length=10, ec='white', color='lightblue')
-    axs[0,row].text(65, 30, 'better', ha='center', va='bottom', rotation=-45, color='lightblue', zorder=0)
+            # Llama 8b:
+            #axs[0,1].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['lerf'].mean(0) * 100.)
+            #axs[1,1].plot(curves_llama8b[method]['xs'] * 100.,    curves_llama8b[method]['morf'].mean(0) * 100.)
 
-    # Paint arrow for MoRF plot:
-    axs[1,row].arrow(50, 50, -30, 30 , width=5, head_length=10, ec='white', color='lightblue')
-    axs[1,row].text(35, 60, 'better', ha='center', va='bottom', rotation=-45, color='lightblue', zorder=0)
+        for row in range(1):
+            # Paint arrow for LeRF plot:
+            axs[0,row].arrow(50, 50, 30, -30, width=5, head_length=10, ec='white', color='lightblue')
+            axs[0,row].text(65, 30, 'better', ha='center', va='bottom', rotation=-45, color='lightblue', zorder=0)
 
-    # Set aspect ratio to 1. on all plots:
-    axs[0,row].set_aspect(1)
-    axs[1,row].set_aspect(1)
+            # Paint arrow for MoRF plot:
+            axs[1,row].arrow(50, 50, -30, 30 , width=5, head_length=10, ec='white', color='lightblue')
+            axs[1,row].text(35, 60, 'better', ha='center', va='bottom', rotation=-45, color='lightblue', zorder=0)
 
-    # Set x-labels:
-    axs[1,row].set_xlabel('Masked Tokens [%]')
-    axs[0,row].set_xticklabels([])
+            # Set aspect ratio to 1. on all plots:
+            axs[0,row].set_aspect(1)
+            axs[1,row].set_aspect(1)
 
-# Set y-labels:
-axs[0,0].set_ylabel('Normalized $\Delta$ LeRF [%]')
-axs[1,0].set_ylabel('Normalized $\Delta$ MoRF [%]')
-axs[0,1].set_yticklabels([])
-axs[1,1].set_yticklabels([])
+            # Set x-labels:
+            axs[1,row].set_xlabel('Masked Tokens [%]')
+            axs[0,row].set_xticklabels([])
 
-# Set titles:
-axs[0,0].set_title('Llama-8B')
-#axs[0,1].set_title('Snowflake')
+        # Set y-labels:
+        axs[0,0].set_ylabel('Normalized $\Delta$ LeRF [%]')
+        axs[1,0].set_ylabel('Normalized $\Delta$ MoRF [%]')
+        axs[0,1].set_yticklabels([])
+        axs[1,1].set_yticklabels([])
 
-# Deactivate third column:
-axs[0,-1].axis('off')
-axs[1,-1].axis('off')
+        # Set titles:
+        axs[0,0].set_title('Llama-8B')
+        #axs[0,1].set_title('Snowflake')
 
-fig.legend(loc='center right', ncols=1)
-plt.tight_layout()
-plt.savefig('aipc_generator.pdf')
+        # Deactivate third column:
+        axs[0,-1].axis('off')
+        axs[1,-1].axis('off')
+
+        fig.legend(loc='center right', ncols=1)
+        plt.tight_layout()
+        plt.savefig(f'aipc_generator_{target}_{key}.pdf')
+
+#%%
+import json
+import matplotlib.pyplot as plt
+
+for target in ('query', 'context'):
+    with open(os.path.join(RESULTS_PATH, 'scores_llama8b.json'), 'rb') as file:
+        scores = json.load(file)
+
+    plt.figure(figsize=(3,2))
+
+    plt.axhline(scores['Precise'], ls='--', c='red', label="Precise")
+    #plt.axhline(scores['Random'], ls='--', c='grey', label="Random")
+    
+    ns = [10, 15, 20, 25, 30]
+    plt.plot(ns, [scores[f'Kernel (n = {n:d})'] for n in ns], marker='o', label="Kernel")
+    plt.plot(ns, [scores[f'Monte Carlo (n = {n:d})'] for n in ns], marker='o', label="Monte Carlo")
+
+    plt.legend()
+    plt.xticks(ns)
+    plt.xlabel('# LLM calls')
+    plt.ylabel('AIPC')
+    plt.tight_layout()
+    plt.savefig(f'aipc_generator_{target}.pdf')
+    plt.show()
