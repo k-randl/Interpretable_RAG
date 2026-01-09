@@ -14,6 +14,7 @@ from .utils import decode_chat_template, nucleus_sample_tokens
 
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.colors import Colormap
 from numpy.typing import NDArray
 from typing import List, Literal, Tuple, Callable, Optional, Union
 
@@ -96,7 +97,52 @@ def plot_token_vbars(ax:Axes, scores:NDArray[np.float64], tokens:List[str], docu
     for tick_loc in range(len(tokens)):
         ax.axvline(x=tick_loc, color='lightgray', linewidth=0.5, zorder=0)
 
-def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], title:str, document_names:Optional[List[str]]=None, *,
+def html_legend_discrete(names:List[str], cmap:Colormap, vals:Optional[List[float]]=None) -> str:
+    n = len(names)
+    
+    # prepare color map:
+    rgb_colors = np.array([mcolors.to_rgb(cmap(i)) for i in range(n)])*255.
+    
+    # format texts:
+    if vals is None:
+        texts = [f'<i>{n}</i>' for n in names]
+    else:
+        texts = [f'<i>{n}</i><br><small>({v * 100.:.0f}%)</small>' for n, v in zip(names, vals, strict=True)]
+
+    # return legend:
+    return (
+        '<small style="float:left;">\n' +
+        '   <div style="line-height:1">' +
+                '<div style="line-height: 2; text-align: center; padding:3px; margin:3px; float:left;"><i>Legend:</i></div>' +
+                ''.join([f'<div style="background-color:#{int(r):02x}{int(g):02x}{int(b):02x}; text-align: center; padding:3px; margin:3px; border-radius:3px; float:left;">{texts[i]}</div>' for i, (r, g, b) in enumerate(rgb_colors)]) +
+            '</div>\n' +
+        '</small>\n'
+    )
+
+def html_legend_continuous(names:List[str], cmap:Colormap, vals:Optional[List[float]]=None) -> str:
+    # prepare color map:
+    hex_left = mcolors.to_hex(cmap(0.0))
+    hex_right = mcolors.to_hex(cmap(1.0))
+
+    # format texts:
+    if vals is None:
+        texts = [f'<i>{n}</i>' for n in names]
+    else:
+        texts = [f'<div><i>{n}</i><br><small>({v * 100.:.0f}%)</small></div>' for n, v in zip(names, vals, strict=True)]
+
+    # return a simple horizontal colorbar:
+    return (
+        '<small style="float:left;">\n' +
+        '   <div style="line-height: 1;">' +
+                '<div style="text-align: center; padding:3px; margin:3px; float:left;"><i>Legend:</i></div>' +
+                f'<div style="background: linear-gradient(90deg, {hex_left}, {hex_right}); text-align: center; padding:3px; margin:3px; border-radius:3px; float:left;">' +
+                    f'{"&nbsp;"*5}&#8594;{"&nbsp;"*5}'.join(texts) +
+                '</div>' +
+            '</div>\n' +
+        '</small>\n'
+    )
+
+def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], title:str, labels:List[str]=[], *,
         threshold:float=0.0,
         max_score:Optional[float]=None,
         skip_tokens:List[str]=[],
@@ -113,7 +159,7 @@ def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], ti
                                         where each row represents a document and each column corresponds to a token's attribution score.
         tokens (List[str]):             A list of token strings corresponding to the scores.
                                         Length must match the number of columns in `scores`.
-        document_names (List[str]):     An optional list of names of the documents.
+        labels (List[str]):             An optional list of names of the documents.
         title (str):                    The title of the produced html table row.
         threshold (float):              Minimum attribution for highlighting in the intervall `[0., 1.]` (default: `0.0`).
         max_score (float):              Optional Maximum attribution for highlighting (default: `None`).
@@ -181,43 +227,32 @@ def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], ti
 
         else: html_tokens.append(escape(tok))
 
+    html_legend = ''
+    if legend:
+        if color_mode == 'winner_takes_it_all':
+            # extract mean absolute document contributions:
+            vals = scores.mean(axis=1)
+            vals /= np.abs(vals).sum()
+
+            # build legend:
+            html_legend = html_legend_discrete(labels, cmap, vals)
+
+        elif color_mode == 'average':
+            # add a simple horizontal colorbar:
+            html_legend = html_legend_continuous(labels, cmap)
+
     html_text = (
         '<tr style="border-top: 1px solid">\n' +
         '   <td style="text-align:right; vertical-align:top">\n' +
         '       <b style="line-height:2">' + title + ':</b>\n' +
         '   </td>\n' +
         '   <td style="text-align:left; vertical-align:top">\n' +
-        '       <div style="line-height:2">' + ''.join(html_tokens) + '</div>\n' +
-        '   </td>\n' +
-        '</tr>\n'
-    )
-
-    if not legend: return html_text
-
-    # fallback for document names:
-    if document_names is None:
-        document_names = [f'Document {i+1:d}' for i in range(num_docs)]
-    elif len(document_names) != num_docs: raise ValueError('`len(document_names)` does not match the number of documents!')
-
-    # extract mean absolute document contributions:
-    document_vals = scores.mean(axis=1)
-    document_vals /= np.abs(document_vals).sum()
-
-    # build legend:
-    html_legend = (
-        '<tr style="border-top: 1px solid">\n' +
-        '   <td style="text-align:right; vertical-align:top">\n' +
-        '       <i style="line-height:2">Legend:</i>\n' +
-        '   </td>\n' +
-        '   <td style="text-align:left; vertical-align:top">\n' +
-        '       <div style="line-height:1">' +
-                    ''.join([f'<div style="background-color:#{int(r):02x}{int(g):02x}{int(b):02x}; text-align: center; padding:3px; margin:3px; border-radius:3px; float:left;"><i>{document_names[i]}</i><br><small>({document_vals[i] * 100.:.0f}%)</small></div>' for i, (r, g, b) in enumerate(rgb_colors)]) +
-                '</div>\n' +
+        '       <div style="line-height:2">' + ''.join(html_tokens) + '</div>\n' + html_legend + 
         '   </td>\n' +
         '</tr>\n'
     )
     
-    return html_text, html_legend
+    return html_text
 
 def plot_document_vbars(ax:Axes, scores:NDArray[np.float64], document_names:Optional[List[str]]=None, *,
         normalize:bool=False,
@@ -382,7 +417,7 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, document_nam
 
     # fallback for document names:
     if document_names is None:
-        document_names = [f'Doc. {i+1:d}' for i in range(len(scores['context']))]
+        document_names = [f'Document {i+1:d}' for i in range(len(scores['context']))]
     elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # get special tokens:
@@ -449,7 +484,7 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
 
     # fallback for document names:
     if document_names is None:
-        document_names = [f'Document {i+1:d}' for i in range(len(scores['context']))]
+        document_names = [f'Document&nbsp;{i+1:d}' for i in range(len(scores['context']))]
     elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # get special tokens:
@@ -538,7 +573,7 @@ def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, docu
     
     # fallback for document names:
     if document_names is None:
-        document_names = [f'Doc. {i+1:d}' for i in range(len(scores['context']))]
+        document_names = [f'Document {i+1:d}' for i in range(len(scores['context']))]
     elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # create figure:
@@ -715,6 +750,11 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
         role = [token_processor(t) for t in role]
     role = ''.join(role).strip().capitalize()
 
+    # fallback for document names:
+    if document_names is None:
+        document_names = [f'Document&nbsp;{i+1:d}' for i in range(len(shap_values['context']))]
+    elif len(document_names) != len(shap_values['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
+
     # get special tokens:
     special_tokens = set(explanation.tokenizer.special_tokens_map.values())
 
@@ -723,7 +763,6 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
         scores          = shap_values['query'].mean(axis=1),
         tokens          = explanation.qry_tokens,
         title           = 'Query',
-        document_names  = document_names,
         threshold       = threshold,
         skip_tokens     = special_tokens,
         legend          = False,
@@ -731,14 +770,15 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
     )
 
     # create response html:
-    html_response, html_legend = highlight_dominant_passages(
+    html_response = highlight_dominant_passages(
         scores          = shap_values['context'][:,response['content']],
         tokens          = explanation.gen_tokens[response['content']],
         title           = role,
-        document_names  = document_names,
+        labels          = document_names,
         threshold       = threshold,
         skip_tokens     = special_tokens,
         token_processor = token_processor,
+        legend          = True,
         cmap            = document_cmap
     )
 
@@ -754,7 +794,6 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
         '<table>\n' +
         html_query +
         html_response +
-        html_legend +
         '</table>\n' +
         '</body>\n' +
 
@@ -1023,7 +1062,7 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
 
     # fallback for document names:
     if document_names is None:
-        document_names = [f'Document {i+1:d}' for i in range(len(retriever_attr['context']))]
+        document_names = [f'Document&nbsp;{i+1:d}' for i in range(len(retriever_attr['context']))]
     elif len(document_names) != len(retriever_attr['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # get indices of the actual content:
@@ -1051,9 +1090,9 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
         scores          = np.stack([ret_qry_attr, gen_qry_attr]),
         tokens          = cmb_qry,
         title           = 'Query',
-        document_names  = document_names,
+        labels          = ['Retriever', 'Generator'],
         color_mode      = 'average',
-        legend          = False,
+        legend          = True,
         cmap            = query_cmap
     )
 
@@ -1072,14 +1111,15 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
         )
 
     # create response html:
-    html_response, html_legend = highlight_dominant_passages(
+    html_response = highlight_dominant_passages(
         scores          = generator_attr['context'][:,response['content']],
         tokens          = explanation.generator.gen_tokens[response['content']],
         title           = role,
-        document_names  = document_names,
+        labels          = document_names,
         threshold       = threshold,
         skip_tokens     = generator_special_tokens,
         token_processor = generator_token_processor,
+        legend          = True,
         cmap            = document_cmap
     )
 
@@ -1095,7 +1135,6 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
         '<table>\n' +
         html +
         html_response +
-        html_legend +
         '</table>\n' +
         '</body>\n' +
 

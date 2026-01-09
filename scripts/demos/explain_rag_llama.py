@@ -55,7 +55,8 @@ output = model(
         'top_p':1,
         'num_beams':1,
         'batch_size':64,
-        'max_samples':64,
+        'max_samples_query':32,
+        'max_samples_context':32,
         'conditional':True
     }
 )

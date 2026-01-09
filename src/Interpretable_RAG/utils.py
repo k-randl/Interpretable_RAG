@@ -250,6 +250,28 @@ def match_token_attributions(
 
     return out_tokens, out_ret_attr, out_gen_attr
 
+def bootstrap_ci(data, num_samples=1000, confidence_level=0.95):
+    """Compute confidence intervalls for the mean of `data`. The function performs
+    `num_samples` resamples of `data` with replacement, computes the mean of each
+    resample, and returns the lower and upper percentiles of those bootstrap means
+    that correspond to the specified `confidence_level` (percentile method).
+
+    Args:
+        data (array-like):                  1-D sequence of numeric observations.
+        num_samples (int, optional):        Number of bootstrap resamples to draw. Default is 1000.
+        confidence_level (float, optional): Confidence level for the interval, between 0 and 1. Default is 0.95.
+
+    Returns:
+        tuple: (lower_bound, upper_bound) giving the percentile-based bootstrap confidence interval
+               for the sample mean corresponding to the requested confidence level.
+    """
+
+    samples = np.random.choice(data, (num_samples, len(data)), replace=True)
+    means = np.mean(samples, axis=1)
+    lower_bound = np.percentile(means, (1 - confidence_level) / 2 * 100)
+    upper_bound = np.percentile(means, (1 + confidence_level) / 2 * 100)
+    return float(lower_bound), float(upper_bound)
+
 #====================================================================================================#
 # Messy transformers convenience functions:                                                          #
 #====================================================================================================#

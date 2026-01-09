@@ -383,7 +383,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         result = (intGrad, )
         if output_offset:   result = result + ({'query': bl_qry_similarity.sum(), 'context': bl_ctx_similarity.squeeze()},)
         if output_coverage: result = result + ({'query': coverage_qry, 'context': coverage_ctx},)
-        return intGrad
+        return result
 
     def forward(self, query:str, contexts:List[str], k:Optional[int]=None, *, reorder:bool=False, max_length:Optional[int]=None, **kwargs):
         # control gradient computation:
