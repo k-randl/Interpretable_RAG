@@ -241,27 +241,32 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
     sample[0]    = 0   # =0b000...0
     sample[-1]   = n-1 # =0b111...1
     if complementary:
+        if num_samples%2 != 0:
+            raise ValueError(f'`num_samples` must be an even integer if `complementary == True`, but is {str(num_samples)}.')
+
         size = (num_samples // 2) - 1
-        population = (n // 2) - 2
+        population = (n // 2) - 1
         if size > population: size = population
         
-        s = set()
-        while len(s) < size:
-            s.add(random.randint(1, (n//2)-2)) # range is 1 to (n//2)-2
-        
-        sample[1:-1:2] = np.array(list(s))
-        sample[2:-1:2] = np.invert(sample[1:-1:2]) & (n-1)
+        sample[1:size+1] = np.random.choice(
+            population, # range is 1 to (n//2)-1
+            size, 
+            replace=False
+        ) + 1
+        sample[size+1:-1] = np.invert(sample[1:size+1]) & (n-1)
 
     else:
         size = num_samples - 2
         population = n - 2
         if size > population: size = population
 
-        s = set()
-        while len(s) < size:
-            s.add(random.randint(1, n-2)) # range is 1 to n-2
-        
-        sample[1:-1] = np.array(list(s))
+        sample[1:-1] = np.random.choice(
+            population, # range is 1 to n-1
+            size, 
+            replace=False
+        ) + 1
+
+    sample[1:-1].sort()
 
     # generate perturbations:
     perturbations = [None] * num_samples
@@ -1069,6 +1074,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     max_samples_query:Union[int, Literal['inf', 'auto']]='auto',
                     max_samples_context:Union[int, Literal['inf', 'auto']]='auto',
                     conditional:bool=True,
+                    complementary:Union[bool,Literal['no_mc']]=True,
                     system:Optional[str]=None,
                     **kwargs
                 ):
@@ -1087,6 +1093,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                                                 If `inf` is passed, always computes the precise SHAP values.
                                                 If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
                     conditional (bool):         Whether to compute the compared values conditioned on the original generation (default: `True`).
+                    complementary (bool):       If `True` is passed and kernel SHAP approximation is active, samples will be piered complements (default: `True`). 
                     system (str):               An optional system prompt.
 
                 Returns:
@@ -1110,12 +1117,16 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 )
 
                 # generate perturbed prompts:
-                if   max_samples_query == 'auto': max_samples_query = int(batch_size//2 + 1)
+                if   max_samples_query == 'auto': max_samples_query = batch_size//2
                 elif max_samples_query == 'inf':  max_samples_query = MAXINT
 
-                if   max_samples_context == 'auto': max_samples_context = int(batch_size//2 + 1)
+                if   max_samples_context == 'auto': max_samples_context = batch_size//2
                 elif max_samples_context == 'inf':  max_samples_context = MAXINT
 
+                if complementary != False:
+                    if (max_samples_query % 2)   > 0: max_samples_query -= 1
+                    if (max_samples_context % 2) > 0: max_samples_context -= 1
+                
                 self._qry_tokens = query.split()
                 self._qry_tokens[1:] = [' ' + t for t in self._qry_tokens[1:]]
 
@@ -1123,12 +1134,14 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 self._shap_cache['query'], perturbed_prompts['query'] = self.__generate_prompts(
                     self._qry_tokens,                                                        # permute the query
                     lambda items:create_rag_prompt(''.join(items), contexts, system=system), # build a prompt for each permutation
-                    max_samples_query
+                    max_samples_query,
+                    complementary
                 )
                 self._shap_cache['context'], perturbed_prompts['context'] = self.__generate_prompts(
                     contexts,                                                    # permute the contexts
                     lambda items:create_rag_prompt(query, items, system=system), # build a prompt for each permutation
-                    max_samples_context
+                    max_samples_context,
+                    complementary
                 )
 
                 # combine prompt lists comparison output:
@@ -1164,7 +1177,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 return complete_rag_prompt + decode_chat_template(output[0], self.config.name_or_path) 
 
-            def __generate_prompts(self, items, func, max_samples):
+            def __generate_prompts(self, items, func, max_samples, complementary):
                 # calculate number of samples needed for precise calculation:
                 n = 2 ** len(items)
 
@@ -1176,8 +1189,8 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 elif max_samples < n:
                     # sample prompts for kernel SHAP:
-                    perturbations, perturbed_prompts = sample_perturbations(items, func, max_samples)
-                    cache = {'precise': False, 'indices': np.arange(perturbations.shape[0]), 'sets': perturbations}
+                    perturbations, perturbed_prompts = sample_perturbations(items, func, max_samples, complementary=(complementary!=False))
+                    cache = {'precise': False, 'complementary':(complementary==True), 'indices': np.arange(perturbations.shape[0]), 'sets': perturbations}
 
                 else: raise ValueError(f'Unknown value for parameter `max_samples`: {max_samples}')
 
@@ -1274,17 +1287,31 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # Return SHAP values for all but the baseline (first one)
                 return p_shap
 
-            def _get_shapley_values_monte_carlo(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float64]:
+            def _get_shapley_values_monte_carlo(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float64]:
                 assert precise is False, 'Monte Carlo SHAP values can only be calculated for approximate values!'
 
+                index_size = len(indices)
+
+                # calculate sample size and population:
+                if complementary:
+                    size = (sample_size // 2) - 1
+                    population = (index_size // 2) - 1    # skip the first and last indices
+
+                else:
+                    size = sample_size - 2
+                    population = index_size - 2           # skip the first and last indices
+                
                 # Adjust sample_size to not exceed the number of available coalitions
-                if sample_size > len(indices):
-                    sample_size = len(indices)
+                if size > population: size = population
 
                 # Generate Shapley values for `num_samples` samples of `sample_size` documents:
                 attributions = []
                 for _ in range(num_samples):
-                    sample = np.random.choice(len(indices)-2, size=sample_size-2, replace=False) + 1 # skip the first and last indices
+                    sample = np.random.choice(population, size=size, replace=False) + 1
+
+                    # add complementary examples if necessary:
+                    if complementary:
+                        sample = np.concatenate([sample, (index_size-1)-sample])
 
                     attributions.append(
                         self._get_shapley_values_kernel(
@@ -1298,7 +1325,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # Return the mean of the attributions across all samples:
                 return np.mean(attributions, axis=0)
             
-            def _get_shapley_values_complementary(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool) -> NDArray[np.float64]:
+            def _get_shapley_values_complementary(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, **kwargs) -> NDArray[np.float64]:
                 assert precise is False, 'Complementary SHAP values can only be calculated for approximate values!'
 
                 # Initialize array to store marginal contributions for each permutation step
@@ -1323,7 +1350,6 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 w  = [1. / (comb(len(z), sum(z)) * (len(z) - sum(z)))
                       for z in x]
                 lr.fit(x, y, w)
-                #lr.fit(x, y)
 
                 # attributions are estimated SHAP values:
                 attributions = lr.coef_.T
@@ -1331,7 +1357,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # rescale attributions to fit prediction:
                 return attributions
             
-            def _get_shapley_values_kernel(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool) -> NDArray[np.float64]:
+            def _get_shapley_values_kernel(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, **kwargs) -> NDArray[np.float64]:
                 assert precise is False, 'Kernel SHAP values can only be calculated for approximate values!'
 
                 # fit a linear regressor using the SHAP kernel:
@@ -1477,6 +1503,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             max_samples_query:Union[int, Literal['inf', 'auto']]='auto',
             max_samples_contexts:Union[int, Literal['inf', 'auto']]='auto',
             conditional:bool=True,
+            complementary:Union[bool,Literal['no_mc']]=True,
             system:Optional[str]=None,
             **kwargs
         ):
@@ -1495,6 +1522,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                                         If `inf` is passed, always computes the precise SHAP values.
                                         If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
             conditional (bool):         Whether to compute the compared values conditioned on the original generation (default: `True`).
+            complementary (bool):       If `True` is passed and kernel SHAP approximation is active, samples will be piered complements (default: `True`). 
             system (str):               An optional system prompt.
 
         Returns:

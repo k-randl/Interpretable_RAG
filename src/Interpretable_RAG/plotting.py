@@ -229,17 +229,17 @@ def highlight_dominant_passages(scores:NDArray[np.float64], tokens:List[str], ti
 
     html_legend = ''
     if legend:
-        if color_mode == 'winner_takes_it_all':
+        if (color_mode == 'average') or (num_dims == 1):
+            # add a simple horizontal colorbar:
+            html_legend = html_legend_continuous(labels, cmap)
+
+        elif color_mode == 'winner_takes_it_all':
             # extract mean absolute document contributions:
             vals = scores.mean(axis=1)
             vals /= np.abs(vals).sum()
 
             # build legend:
             html_legend = html_legend_discrete(labels, cmap, vals)
-
-        elif color_mode == 'average':
-            # add a simple horizontal colorbar:
-            html_legend = html_legend_continuous(labels, cmap)
 
     html_text = (
         '<tr style="border-top: 1px solid">\n' +
@@ -495,10 +495,11 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
         scores          = scores['query'][0].numpy(), 
         tokens          = explanation.in_tokens['query'][0],
         title           = 'Query',
+        labels          = ['+', '-'],
         threshold       = threshold,
         skip_tokens     = special_tokens,
         token_processor = token_processor,
-        legend          = False,
+        legend          = True,
         cmap            = cmap
     )
 
@@ -508,11 +509,12 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
             scores          = s.numpy(), 
             tokens          = explanation.in_tokens['context'][i],
             title           = document_names[i],
+            labels          = ['+', '-'],
             threshold       = threshold,
             max_score       = np.concatenate(scores['context']).max(),
             skip_tokens     = special_tokens,
             token_processor = token_processor,
-            legend          = False,
+            legend          = True,
             cmap            = cmap
         )
 
@@ -763,9 +765,10 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
         scores          = shap_values['query'].mean(axis=1),
         tokens          = explanation.qry_tokens,
         title           = 'Query',
+        labels          = ['+', '-'],
         threshold       = threshold,
         skip_tokens     = special_tokens,
-        legend          = False,
+        legend          = True,
         cmap            = query_cmap
     )
 
@@ -1102,11 +1105,12 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
             scores          = s.numpy(), 
             tokens          = explanation.retriever.in_tokens['context'][i],
             title           = document_names[i],
+            labels          = ['+', '-'],
             threshold       = threshold,
             max_score       = np.concatenate(retriever_attr['context']).max(),
             skip_tokens     = retriever_special_tokens,
             token_processor = retriever_token_processor,
-            legend          = False,
+            legend          = True,
             cmap            = query_cmap
         )
 
