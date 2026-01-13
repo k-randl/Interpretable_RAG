@@ -246,26 +246,33 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
 
         size = (num_samples // 2) - 1
         population = (n // 2) - 1
-        if size > population: size = population
-        
-        sample[1:size+1] = np.random.choice(
-            population, # range is 1 to (n//2)-1
-            size, 
-            replace=False
-        ) + 1
-        sample[size+1:-1] = np.invert(sample[1:size+1]) & (n-1)
+        if size < population:
+
+            # iterative approach to avoid creating large integer arrays:
+            s = set()
+            while len(s) < size:
+                s.add(random.randint(1, population)) # range is 1 to (n//2)
+
+            sample[1:size+1]  = np.array(list(s))
+            sample[size+1:-1] = np.invert(sample[1:size+1]) & (n-1)
+
+        else: sample = np.arange(num_samples)
 
     else:
         size = num_samples - 2
         population = n - 2
-        if size > population: size = population
+        if size < population:
 
-        sample[1:-1] = np.random.choice(
-            population, # range is 1 to n-1
-            size, 
-            replace=False
-        ) + 1
+            # iterative approach to avoid creating large integer arrays:
+            s = set()
+            while len(s) < size:
+                s.add(random.randint(1, population)) # range is 1 to n-1
 
+            sample[1:-1] = np.array(list(s))
+
+        else: sample = np.arange(num_samples)
+
+    # sort sample for compatibility with consecutive MC sampling:
     sample[1:-1].sort()
 
     # generate perturbations:
