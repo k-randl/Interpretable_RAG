@@ -47,6 +47,8 @@ output = generator.explain_generate(
     top_p=1,
     num_beams=1,
     batch_size=64,
+    max_samples_query=24,
+    max_samples_context=24,
     conditional=True
 )
 output
