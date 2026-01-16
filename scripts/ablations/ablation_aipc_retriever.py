@@ -1,14 +1,17 @@
-# %%
+# %%% ===============================================================================================#
+# Setup:                                                                                             #
+#====================================================================================================#
+
 import os
 import sys
 sys.path.insert(0, "../..")
 
-# paths:
+# Paths:
 TOKEN_PATH   = os.path.join(os.path.dirname(__file__), '..', '..', '.huggingface.token')
 RESULTS_PATH = os.path.join(os.path.dirname(__file__), 'results', 'aipc_retriever')
 os.makedirs(RESULTS_PATH, exist_ok=True)
 
-# parameters:
+# Parameters:
 METHODS      = [('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False, 'base':None}),
                 ('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False, 'base':'mask'}),
                 ('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False, 'base':'unk'}),
@@ -19,38 +22,14 @@ METHODS      = [('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False, 
                 ('aGrad',   {}),
                 ('grad',    {}),
                 ('random',  {})]
-STEP_SIZE    = 10
+STEP_SIZE    = 1
 NUM_DOCS     = 5
 LONG_QUERIES = False
 
-# %%
-from huggingface_hub import login
-from getpass import getpass
-
-if os.path.exists(TOKEN_PATH):
-    with open(TOKEN_PATH, 'r') as file:
-        login(token=file.read())
-
-else: login(token=getpass(prompt='Huggingface login  token: '))
-
-# %% Load the MS MARCO dataset:
-import json
-from datasets import load_dataset
-
-# Load the MS MARCO dataset version 2.1
-dataset = load_dataset("ms_marco", "v2.1", split="train")
-
-# Get a random sample of 200 documents
-sample = dataset.shuffle(seed=42).select(range(200))
-
-# Set dataset format:
-if LONG_QUERIES:
-    with open('queries.json', 'r') as file:
-        queries = json.load(file) 
-
-    sample = sample.map(lambda item: {'query':queries[item['query']], 'context':item['passages']['passage_text']})
-
-else: sample = sample.map(lambda item: {'query':item['query'], 'context':item['passages']['passage_text']})
+# %% Load data sample:
+from utils import huggingface_login, load_ms_marco
+huggingface_login(TOKEN_PATH)
+sample = load_ms_marco(use_long_queries=LONG_QUERIES)
 
 # %%
 import os
@@ -154,7 +133,10 @@ aipc = AIPCForRetrieval(retriever, query_format='query: {query}')
 test(aipc, 'snowflake', 'query')
 test(aipc, 'snowflake', 'context')
 
-# %%
+# %%% ===============================================================================================#
+# Plots:                                                                                             #
+#====================================================================================================#
+
 import json
 import pickle
 import matplotlib.pyplot as plt

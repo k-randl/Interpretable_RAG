@@ -1,12 +1,15 @@
+import os
+import pickle
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.autonotebook import tqdm
 from typing import Optional, Dict, List
 
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Literal, Union
 from numpy.typing import NDArray
 
+from src.Interpretable_RAG.utils import bootstrap_ci
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration, generate_permutations, create_rag_prompt
 
 #=======================================================================#
@@ -35,6 +38,8 @@ class AIPCForGeneration:
             mc_sample_size:int=10,
             step          :int=1,
             normalize     :bool=True,
+            complementary :Union[bool,Literal['no_mc']]=True,
+            tmp_file      :str='aipc_generator_tmp.pkl',
             **kwargs
         ) -> float:
         '''Compute a faithfulness score by comparing area-under-curve (AUC) values for two
@@ -69,12 +74,21 @@ class AIPCForGeneration:
         '''
 
         # get data size:
-        num_queries = len(data['query'])
+        data = list(zip(data['query'], data['context'], strict=True))
+        num_queries = len(data)
         num_points  = len(self.xs)
 
-        # calculate explanations:
+        # continue from tmp file in case of OOM:
+        i0 = 0
         self.morf, self.lerf = {}, {}
-        for i, (qry, ctx) in enumerate(tqdm(zip(data['query'], data['context']), total=num_queries, desc='Computing perturbations')):
+        if os.path.exists(tmp_file):
+            with open(tmp_file, 'rb') as f:
+                self.morf, self.lerf = pickle.load(f)
+            
+            i0 = sum(~np.isnan(self.morf['Precise']).all(axis=-1))
+
+        # calculate explanations:
+        for i, (qry, ctx) in enumerate(tqdm(data[i0:], desc='Computing perturbations')):
 
             # calculate relevancy scores:
             relevancy = {}
@@ -83,7 +97,6 @@ class AIPCForGeneration:
             self.generator.explain_generate(
                 query=qry,
                 contexts=ctx[:5],
-                max_samples=64,
                 max_samples_query='auto',
                 max_samples_context='inf',
                 conditional=True,
@@ -104,6 +117,7 @@ class AIPCForGeneration:
                 max_samples_context=30,
                 batch_size=batch_size,
                 conditional=True,
+                complementary=complementary,
                 **kwargs
             )
 
@@ -113,8 +127,22 @@ class AIPCForGeneration:
 
             # Get shapley values for the generated tokens:
             for max_samples in range(mc_sample_size, 31, 5):
+                # calculate sample size and population:
+                if complementary != False:
+                    size = (max_samples // 2) - 1
+                    population = (len(indices) // 2) - 1    # skip the first and last indices
+
+                else:
+                    size = max_samples - 2
+                    population = len(indices) - 2
+
                 # Set the number of samples:
-                sample_indices = np.random.choice(len(indices)-2, size=max_samples-2, replace=False) + 1 # skip the first and last indices
+                sample_indices = np.random.choice(population, size=size, replace=False) + 1
+                
+                # Add complementary examples if necessary:
+                if complementary != False:
+                    sample_indices = np.concatenate([sample_indices, (len(indices)-1)-sample_indices])
+
                 self.generator._shap_cache['context']['indices'] = np.concatenate([indices[:1], indices[sample_indices], indices[-1:]])
                 self.generator._shap_cache['context']['sets']    = np.concatenate([sets[:1], sets[sample_indices], sets[-1:]])
 
@@ -151,11 +179,19 @@ class AIPCForGeneration:
 
                 # perturbation curve most relevant first:
                 if key not in self.morf: self.morf[key] = np.full((num_queries, num_points), np.nan, dtype=float)
-                self.morf[key][i] = self._make_pc(relevancy[key], True, permutations, new_items, probs, step=step).mean(axis=0)
+                self.morf[key][i0+i] = self._make_pc(relevancy[key], True, permutations, new_items, probs, step=step).mean(axis=0)
 
                 # perturbation curve least relevant first:
                 if key not in self.lerf: self.lerf[key] = np.full((num_queries, num_points), np.nan, dtype=float)
-                self.lerf[key][i] = self._make_pc(relevancy[key], False, permutations, new_items, probs, step=step).mean(axis=0)
+                self.lerf[key][i0+i] = self._make_pc(relevancy[key], False, permutations, new_items, probs, step=step).mean(axis=0)
+
+            # Save to tmp file in case of OOM:
+            with open(tmp_file, 'wb') as f:
+                pickle.dump((self.morf, self.lerf), f)
+
+        # delete tmp file if successful:
+#        if os.path.exists(tmp_file):
+#            os.remove(tmp_file)
 
         for key in self.morf:
             # set first value to mean:
@@ -195,24 +231,32 @@ class AIPCForGeneration:
 
         return ys
 
-    def get_aipc(self, key:str) -> float:
+    def get_aipc(self, key:str, *, num_samples=1000, confidence_level=0.95) -> Tuple[float, float, float]:
         '''Compute the area inside the pertubation curves (AIPC) between the mean MORF
         and LERF curves using the trapezoidal rule over self.xs.
 
         Args:
-            key (str):
-                Identifier used to select which set of perturbation curves to use from the instance.
-        
+            key (str):                          Identifier used to select which set of
+                                                perturbation curves to use from the instance.
+            num_samples (int, optional):        Number of bootstrap resamples to draw.
+                                                Default is 1000.
+            confidence_level (float, optional): Confidence level for the interval, between 0 and 1.
+                                                Default is 0.95.
+
         Returns:
-            aipc (float):
-                Aarea inside the pertubation curves (|∫ mean(self.morf[key], axis=0) dx - ∫ mean(self.lerf[key], axis=0) dx|)
+            tuple: 
+                - **aipc** Mean area inside the pertubation curves (|∫ mean(self.morf[:k], axis=0) dx| - |∫ mean(self.lerf[:k], axis=0) dx|)
+                - **lower_bound** of the percentile-based bootstrap confidence interval.
+                - **upper_bound** of the percentile-based bootstrap confidence interval.
         '''
         
+        # compute aipc per sample:
+        aupc_morf = np.stack([np.abs(np.trapezoid(ys, self.xs)) for ys in self.morf[key]])
+        aupc_lerf = np.stack([np.abs(np.trapezoid(ys, self.xs)) for ys in self.lerf[key]])
+        aipc = aupc_morf - aupc_lerf
+
         # return aipc:
-        return np.abs(
-            np.trapezoid(self.morf[key].mean(axis=0), self.xs) -
-            np.trapezoid(self.lerf[key].mean(axis=0), self.xs)
-        )
+        return (float(aipc.mean(axis=0)),) + bootstrap_ci(aipc, num_samples=num_samples, confidence_level=confidence_level)
  
     def plot_lerf(self, ax:plt.Axes, key:str, *, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         '''Plot the LeRF curve on a matplotlib axis.

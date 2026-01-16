@@ -3,9 +3,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.autonotebook import tqdm
 
-from typing import Optional, Dict, List, Tuple, Literal
+from typing import Dict, List, Tuple, Literal
 from numpy.typing import NDArray
 
+from src.Interpretable_RAG.utils import bootstrap_ci
 from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
 
 #=======================================================================#
@@ -225,38 +226,37 @@ class AIPCForRetrieval:
         # convert to numpy array:
         return np.stack(ys)
 
-    def get_aipc(self, *, k:Optional[int]=None) -> float:
+    def get_aipc(self, *, num_samples=1000, confidence_level=0.95) -> Tuple[float, float, float]:
         '''Compute the area inside the pertubation curves (AIPC) between the mean MORF
         and LERF curves using the trapezoidal rule over self.xs.
 
         Args:
-            k (int, optional):  Number of top documents (rows) to consider from self.morf and self.lerf.
-                                If None (default), all available documents (len(self.morf)) are used.
-        
+            num_samples (int, optional):        Number of bootstrap resamples to draw. Default is 1000.
+            confidence_level (float, optional): Confidence level for the interval, between 0 and 1. Default is 0.95.
+
         Returns:
-            aipc (float):
-                Area inside the pertubation curves (|∫ mean(self.morf[:k], axis=0) dx - ∫ mean(self.lerf[:k], axis=0) dx|)
+            tuple: 
+                - **aipc** Mean area inside the pertubation curves (|∫ mean(self.morf[:k], axis=0) dx| - |∫ mean(self.lerf[:k], axis=0) dx|)
+                - **lower_bound** of the percentile-based bootstrap confidence interval.
+                - **upper_bound** of the percentile-based bootstrap confidence interval.
         '''
         
-        # set k to max available docs if unset:
-        if k is None: k = len(self.morf)
+        # compute aipc per sample:
+        aupc_morf = np.stack([np.abs(np.trapezoid(ys, self.xs)) for ys in self.morf])
+        aupc_lerf = np.stack([np.abs(np.trapezoid(ys, self.xs)) for ys in self.lerf])
+        aipc = aupc_morf - aupc_lerf
 
         # return aipc:
-        return (
-            np.abs(np.trapezoid(self.morf[:k].mean(axis=0), self.xs)) -
-            np.abs(np.trapezoid(self.lerf[:k].mean(axis=0), self.xs))
-        )
+        return (float(aipc.mean(axis=0)),) + bootstrap_ci(aipc, num_samples=num_samples, confidence_level=confidence_level)
 
-    def plot_lerf(self, ax:plt.Axes, *, k:Optional[int]=None, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def plot_lerf(self, ax:plt.Axes, *, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         '''Plot the LeRF curve on a matplotlib axis.
 
-        Compute the mean of the stored LeRF values across the first dimension for the first
-        `k` documents and plot the resulting curve against self.xs on the provided Axes.
+        Compute the mean of the stored LeRF values across the first dimension and
+        plot the resulting curve against self.xs on the provided Axes.
 
         Args:
             ax (matplotlib.axes.Axes):  The axes on which to draw the plot.
-            k (int, optional):          Number of top documents (rows) to consider.
-                                        If None (default) all available rows are used.
             label (str, optional):      Label to apply to the plotted line (default: 'LeRF').
             **kwargs:                   Additional keyword arguments forwarded to matplotlib.axes.Axes.plot
                                         (e.g., color, linestyle, linewidth).
@@ -265,29 +265,23 @@ class AIPCForRetrieval:
             `Tuple[numpy.ndarray, numpy.ndarray]` of x and y yalues of the plotted curve.
         '''
 
-
-        # set k to max available docs if unset:
-        if k is None: k = len(self.lerf)
-
         # calculate means and convert to percent:
         xs = self.xs * 100.
-        ys = self.lerf[:k].mean(axis=0) * 100.
+        ys = self.lerf.mean(axis=0) * 100.
 
         # plot to axis:
         ax.plot(xs, ys, label=label, **kwargs)
 
         return xs, ys
 
-    def plot_morf(self, ax:plt.Axes, *, k:Optional[int]=None, label:str='MoRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def plot_morf(self, ax:plt.Axes, *, label:str='MoRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         '''Plot the MoRF curve on a matplotlib axis.
 
-        Compute the mean of the stored MoRF values across the first dimension for the first
-        `k` documents and plot the resulting curve against self.xs on the provided Axes.
+        Compute the mean of the stored MoRF values across the first dimension and
+        plot the resulting curve against self.xs on the provided Axes.
 
         Args:
             ax (matplotlib.axes.Axes):  The axes on which to draw the plot.
-            k (int, optional):          Number of top documents (rows) to consider.
-                                        If None (default) all available rows are used.
             label (str, optional):      Label to apply to the plotted line (default: 'MoRF').
             **kwargs:                   Additional keyword arguments forwarded to matplotlib.axes.Axes.plot
                                         (e.g., color, linestyle, linewidth).
@@ -296,34 +290,29 @@ class AIPCForRetrieval:
             `Tuple[numpy.ndarray, numpy.ndarray]` of x and y yalues of the plotted curve.
         '''
 
-        # set k to max available docs if unset:
-        if k is None: k = len(self.morf)
-
         # calculate means and convert to percent:
         xs = self.xs * 100.
-        ys = self.morf[:k].mean(axis=0) * 100.
+        ys = self.morf.mean(axis=0) * 100.
 
         # plot to axis:
         ax.plot(xs, ys, label=label, **kwargs)
 
         return xs, ys
 
-    def plot(self, ax:plt.Axes, *, k:Optional[int]=None) -> None:
+    def plot(self, ax:plt.Axes) -> None:
         '''Render averaged MoRF and LeRF fidelity curves on a Matplotlib axis.
-        This method computes the mean of the first `k` documents and plots the
+        This method computes the mean of the documents and plots the
         resulting MoRF and LeRF curves. The area between the two curves is filled to
         visualize the gap, an equal aspect ratio is enforced, and axis labels
         and a legend are added.
 
         Args:
             ax (matplotlib.axes.Axes):  The axes on which to draw the plot.
-            k (int, optional):          Number of top documents (rows) to consider.
-                                        If None (default), all available documents are used.
         '''
 
         # plot to axis:
-        _, ys_morf = self.plot_morf(ax, k=k)
-        _, ys_lerf = self.plot_lerf(ax, k=k)
+        _, ys_morf = self.plot_morf(ax)
+        _, ys_lerf = self.plot_lerf(ax)
         ax.fill_between(self.xs*100., ys_morf, ys_lerf, color='lightgray')
         ax.set_aspect(1)
         ax.legend()

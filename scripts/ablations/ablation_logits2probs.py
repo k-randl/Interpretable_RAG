@@ -1,33 +1,22 @@
-# %%
+# %%% ===============================================================================================#
+# Setup:                                                                                             #
+#====================================================================================================#
+
 import os
 import sys
 sys.path.insert(0, "../..")
 
-# paths:
+# Paths:
 TOKEN_PATH   = os.path.join(os.path.dirname(__file__), '..', '..', '.huggingface.token')
 RESULTS_PATH = os.path.join(os.path.dirname(__file__), 'results', 'logits2probs')
 os.makedirs(RESULTS_PATH, exist_ok=True)
 
-# %%
-from huggingface_hub import login
-from getpass import getpass
+# %% Load data sample:
+from utils import huggingface_login, load_ms_marco
+huggingface_login(TOKEN_PATH)
+sample = load_ms_marco()
 
-if os.path.exists(TOKEN_PATH):
-    with open(TOKEN_PATH, 'r') as file:
-        login(token=file.read())
-
-else: login(token=getpass(prompt='Huggingface login  token: '))
-
-# %% Load the MS MARCO dataset:
-from datasets import load_dataset
-
-# Load the MS MARCO dataset version 2.1
-dataset = load_dataset("ms_marco", "v2.1", split="train")
-
-# Get a random sample of 200 documents
-sample = dataset.shuffle(seed=42).select(range(200))
-
-# %% Load Pipeline:
+# %% Load pipeline:
 import torch
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration, Focus
 
@@ -80,7 +69,10 @@ for item in tqdm(sample):
     mae.append(ae.mean())
     print(np.mean(ae))
 
-# %%
+# %%% ===============================================================================================#
+# Plots:                                                                                             #
+#====================================================================================================#
+
 import json
 import matplotlib.pyplot as plt
 
