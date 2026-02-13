@@ -24,7 +24,7 @@ jobs:
       # Turning off cone mode ensures that files in the project root are not included during checkout
       - uses: actions/checkout@v4
         with:
-          sparse-checkout:
+          sparse-checkout: |
             '/setup.py'
             '/README.md'
             '/LICENSE'
