@@ -1,6 +1,5 @@
 import os
 import torch
-import random
 import numpy as np
 import transformers
 import tqdm
@@ -9,10 +8,10 @@ import pickle
 from scipy.special import comb
 from sklearn.linear_model import LinearRegression
 
-from .utils import decode_chat_template, get_model_type
+from .utils import decode_chat_template, get_model_type, generate_permutations, sample_perturbations
 
 from numpy.typing import NDArray
-from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable, Callable, Any
+from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable, Callable
 
 from abc import ABCMeta, abstractmethod
 
@@ -114,183 +113,6 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
         {"role": "system", "content": system},
         {"role": "user", "content": f"{context_text}\n\nQuery: {query}"}
     ]
-
-def generate_permutations_recursive(items:List[Any], func:Callable[[List[Any]], Any], perturbations:List[Any], index:int) -> Tuple[List[Tuple[int]], List[Tuple[int]]]:
-    """Recursively generates index-tagged permutations of subsets of a given list,
-    using bitmask logic to explore all combinations.
-
-    This function is typically used internally by `generate_permutations`. It relies on 
-    a bitmask (`index`) to determine which elements to include in each recursive step.
-    The `func` is used to compute perturbations, which are memorized in the `perturbations` list.
-
-    Args:
-        items (list):         The list of items for which permutations are to be generated.
-        func (callable):      A function applied to subsets of `items` to compute perturbations.
-        perturbations (list): A list (with length 2^n) for memorization of perturbation results.
-        index (int):          A bitmask representing the current subset of `items`.
-
-    Returns:
-        Tuple:
-            - `permutations`:  A list of tuples, each representing a sequence of indices
-                               of subsets in `perturbations` that define a permutation path.
-            - `new_items`:     A list of tuples, each representing a sequence of indices
-                               of items in `items` added to the previous set to define
-                               a permutation path.
-    """
-    
-    # if current perturbation undefined:
-    if perturbations[index] is None:
-        # create perturbation:
-        perturbations[index] = func(items)
-
-    # break on empty set:
-    if index == 0: return [(index,)], [()]
-
-    # calculate possible permutations:
-    i, j, m = 0, 0, 1
-    permutations, new_items = [], []
-    while i < len(items):
-        if index & m:
-            child_permutations, child_new_items = generate_permutations_recursive(
-                items=items[:i]+items[i+1:],
-                func=func,
-                perturbations=perturbations,
-                index=index & ~m
-            )
-            permutations.extend([prm + (index,) for prm in child_permutations])
-            new_items.extend([ni + (j,) for ni in child_new_items])
-
-            i += 1
-
-        m = m << 1
-        j += 1
-
-    return permutations, new_items
-
-def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> Tuple[NDArray[np.int_], NDArray[np.int_], List[Any]]:
-    """Generates all possible bitmask-tagged permutations of subsets of a list,
-    and computes a perturbation for each subset using a user-defined function.
-
-    This function initializes the perturbation list and starts the recursive
-    permutation generation using `generate_permutations_recursive`.
-
-    Args:
-        items (List[Any]):        The list of items to permute.
-        func (List[Any]) -> Any): A function to compute a "perturbation" for any subset of items.
-
-    Returns:
-        Tuple:
-            - `permutations`:  A matrix of shape (len(`permutations`), len(`items`) + 1) where
-                               rows represent sequences of indices of subsets in
-                               `perturbations` that define a permutation path.
-            - `new_items`:     A matrix of shape (len(`permutations`), len(`items`)) where
-                               rows represent sequences of indices of items in `items`
-                               added to the previous set to define a permutation path.
-            - `perturbations`: List of perturbation values for each subset.
-    """
-    # calculate number of possible perturbations:
-    n = (2 ** len(items))
-
-    # initialize perturbation list:
-    perturbations = [None] * n
-
-    # calculate all possible permuations:
-    permutations, new_items = generate_permutations_recursive(
-        items, func,
-        perturbations,  # empty list to be filled
-        n-1             # this creates a bitmap of n ones
-    )
-
-    # return tuple of permuations and perturbations: 
-    return np.array(permutations), np.array(new_items), perturbations
-
-def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_samples:int, complementary:bool=False) -> Tuple[NDArray[np.bool_], List[Any]]:
-    """Randomly samples a specified number of unique subsets of a given list,
-    and returns their binary indicator features along with the result of applying a function
-    to each sampled subset.
-
-    The function constructs a random selection of bitmask-encoded subsets of the input list
-    `items`, including the empty set and the full set. For each sampled subset, it applies
-    the provided function `func` and stores the result. It also returns a binary feature
-    matrix indicating which items are included in each sampled subset.
-
-    Args:
-        items (List[Any]):        The list of items to draw subsets from.
-        func (List[Any]) -> Any): A function that computes a perturbation or
-                                  feature from a subset of `items`.
-        num_samples (int):        The number of unique subset samples to generate, including
-                                  the empty set and full set.
-        complementary (bool):     If `True`, makes sure that the sampled perturbations are
-                                  pairs of complementary sets.
-
-    Returns:
-        Tuple:
-            - `subsets`:       A boolean matrix of shape (len(`perturbations`), len(`items`)),
-                               where each row indicates which items are included
-                               in the corresponding subset.
-            - `perturbations`: List of perturbation values for each subset.
-    """
-    
-    # calculate number of possible perturbations:
-    n = (2 ** len(items))
-
-    # take sample of `num_samples` unique bitmasks (including empty and full):
-    # Use dtype=object to handle large integers that can overflow standard numpy int types
-    # when the number of items is > 63.
-    sample = np.empty(num_samples, dtype=object)
-    sample[0]    = 0   # =0b000...0
-    sample[-1]   = n-1 # =0b111...1
-    if complementary:
-        if num_samples%2 != 0:
-            raise ValueError(f'`num_samples` must be an even integer if `complementary == True`, but is {str(num_samples)}.')
-
-        size = (num_samples // 2) - 1
-        population = (n // 2) - 1
-        if size < population:
-
-            # iterative approach to avoid creating large integer arrays:
-            s = set()
-            while len(s) < size:
-                s.add(random.randint(1, population)) # range is 1 to (n//2)
-
-            sample[1:size+1]  = np.array(list(s))
-            sample[size+1:-1] = np.invert(sample[1:size+1]) & (n-1)
-
-        else: sample = np.arange(num_samples)
-
-    else:
-        size = num_samples - 2
-        population = n - 2
-        if size < population:
-
-            # iterative approach to avoid creating large integer arrays:
-            s = set()
-            while len(s) < size:
-                s.add(random.randint(1, population)) # range is 1 to n-1
-
-            sample[1:-1] = np.array(list(s))
-
-        else: sample = np.arange(num_samples)
-
-    # sort sample for compatibility with consecutive MC sampling:
-    sample[1:-1].sort()
-
-    # generate perturbations:
-    perturbations = [None] * num_samples
-    subsets       = np.zeros((num_samples, len(items)), dtype=bool)
-    for i, bitmask in enumerate(sample):
-        # translate bitmask to set:
-        current_items, m = [], 1
-        for j in range(len(items)):
-            if bitmask & m:
-                current_items.append(items[j])
-                subsets[i, j] = 1.
-            m = m << 1
-
-        # generate perturbation:
-        perturbations[i] = func(current_items)
-
-    return subsets, perturbations
 
 def logits2probs(logits:torch.Tensor, normalization:Literal['softmax', 'relu', 'offset']='softmax'):
     """Converts raw logits into probability distributions using a specified normalization normalization.
@@ -1133,7 +955,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 if complementary != False:
                     if (max_samples_query % 2)   > 0: max_samples_query -= 1
                     if (max_samples_context % 2) > 0: max_samples_context -= 1
-                
+
                 self._qry_tokens = query.split()
                 self._qry_tokens[1:] = [' ' + t for t in self._qry_tokens[1:]]
 
@@ -1307,7 +1129,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 else:
                     size = sample_size - 2
                     population = index_size - 2           # skip the first and last indices
-                
+
                 # Adjust sample_size to not exceed the number of available coalitions
                 if size > population: size = population
 
@@ -1508,7 +1330,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
     def explain_generate(self, query:str, contexts:List[str], *,
             batch_size:int=32,
             max_samples_query:Union[int, Literal['inf', 'auto']]='auto',
-            max_samples_contexts:Union[int, Literal['inf', 'auto']]='auto',
+            max_samples_context:Union[int, Literal['inf', 'auto']]='auto',
             conditional:bool=True,
             complementary:Union[bool,Literal['no_mc']]=True,
             system:Optional[str]=None,
@@ -1524,7 +1346,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                                         If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
                                         If `inf` is passed, always computes the precise SHAP values.
                                         If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
-            max_samples_contexts (int): Maximum number of samples used for computing SHAP atribution values for the context documents.
+            max_samples_context (int):  Maximum number of samples used for computing SHAP atribution values for the context documents.
                                         If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
                                         If `inf` is passed, always computes the precise SHAP values.
                                         If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).

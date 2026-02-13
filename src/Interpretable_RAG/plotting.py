@@ -407,10 +407,12 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, document_nam
 
     # get scores:
     if   method == 'grad':    scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
-    elif method == 'gradIn':  scores = explanation.gradIn(**kwargs)
     elif method == 'aGrad':   scores = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
-    elif method == 'intGrad': scores = explanation.intGrad(**kwargs)
-    else: raise ValueError()
+    else:
+        # try to call a method on the explanation object by name
+        method_fn = getattr(explanation, method, None)
+        if callable(method_fn): scores = method_fn(**kwargs)
+        else: raise ValueError(f"Explanation has no callable method named '{method}'")
 
     # compute absolute:
     if absolute: scores = {key:[np.abs(doc) for doc in docs] for key, docs in scores.items()}
@@ -474,10 +476,12 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
     """
     # get scores:
     if   method == 'grad':    scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
-    elif method == 'gradIn':  scores = explanation.gradIn(**kwargs)
     elif method == 'aGrad':   scores = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
-    elif method == 'intGrad': scores = explanation.intGrad(**kwargs)
-    else: raise ValueError()
+    else:
+        # try to call a method on the explanation object by name
+        method_fn = getattr(explanation, method, None)
+        if callable(method_fn): scores = method_fn(**kwargs)
+        else: raise ValueError(f"Explanation has no callable method named '{method}'")
 
     # compute absolute:
     scores = {key:[np.abs(doc) for doc in docs] for key, docs in scores.items()}
@@ -565,10 +569,12 @@ def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, docu
 
     # get scores:
     if   method == 'grad':    scores = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
-    elif method == 'gradIn':  scores = explanation.gradIn(**kwargs)
     elif method == 'aGrad':   scores = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
-    elif method == 'intGrad': scores = explanation.intGrad(**kwargs)
-    else: raise ValueError()
+    else:
+        # try to call a method on the explanation object by name
+        method_fn = getattr(explanation, method, None)
+        if callable(method_fn): scores = method_fn(**kwargs)
+        else: raise ValueError(f"Explanation has no callable method named '{method}'")
 
     # compute absolute:
     scores = {key:[np.abs(doc) for doc in docs] for key, docs in scores.items()}
@@ -1048,10 +1054,12 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
 
     # get retriever scores:
     if   retriever_method == 'grad':    retriever_attr = {key:[doc.mean(axis=-1) for doc in docs] for key, docs in explanation.retriever.grad(**kwargs).items()}
-    elif retriever_method == 'gradIn':  retriever_attr = explanation.retriever.gradIn(**kwargs)
     elif retriever_method == 'aGrad':   retriever_attr = {key:[doc.mean(axis=0) for doc in docs] for key, docs in explanation.retriever.aGrad(**kwargs).items()}
-    elif retriever_method == 'intGrad': retriever_attr = explanation.retriever.intGrad(**kwargs)
-    else: raise ValueError()
+    else:
+        # try to call a method on the explanation object by name
+        retriever_method_fn = getattr(explanation.retriever, retriever_method, None)
+        if callable(retriever_method_fn): retriever_attr = retriever_method_fn(**kwargs)
+        else: raise ValueError(f"Retriever has no callable method named '{retriever_method}'")
 
     # compute absolute:
     retriever_attr = {key:[np.abs(doc) for doc in docs] for key, docs in retriever_attr.items()}

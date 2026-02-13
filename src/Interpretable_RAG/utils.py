@@ -1,9 +1,10 @@
 import os
 import json
 import torch
+import random
 import numpy as np
 from importlib import import_module
-from typing import Optional, Callable, Dict, List, Union, Tuple
+from typing import Optional, Callable, Dict, List, Union, Tuple, Any
 
 from numpy.typing import NDArray
 
@@ -271,6 +272,183 @@ def bootstrap_ci(data, num_samples=1000, confidence_level=0.95):
     lower_bound = np.percentile(means, (1 - confidence_level) / 2 * 100)
     upper_bound = np.percentile(means, (1 + confidence_level) / 2 * 100)
     return float(lower_bound), float(upper_bound)
+
+def generate_permutations_recursive(items:List[Any], func:Callable[[List[Any]], Any], perturbations:List[Any], index:int) -> Tuple[List[Tuple[int]], List[Tuple[int]]]:
+    """Recursively generates index-tagged permutations of subsets of a given list,
+    using bitmask logic to explore all combinations.
+
+    This function is typically used internally by `generate_permutations`. It relies on 
+    a bitmask (`index`) to determine which elements to include in each recursive step.
+    The `func` is used to compute perturbations, which are memorized in the `perturbations` list.
+
+    Args:
+        items (list):         The list of items for which permutations are to be generated.
+        func (callable):      A function applied to subsets of `items` to compute perturbations.
+        perturbations (list): A list (with length 2^n) for memorization of perturbation results.
+        index (int):          A bitmask representing the current subset of `items`.
+
+    Returns:
+        Tuple:
+            - `permutations`:  A list of tuples, each representing a sequence of indices
+                               of subsets in `perturbations` that define a permutation path.
+            - `new_items`:     A list of tuples, each representing a sequence of indices
+                               of items in `items` added to the previous set to define
+                               a permutation path.
+    """
+    
+    # if current perturbation undefined:
+    if perturbations[index] is None:
+        # create perturbation:
+        perturbations[index] = func(items)
+
+    # break on empty set:
+    if index == 0: return [(index,)], [()]
+
+    # calculate possible permutations:
+    i, j, m = 0, 0, 1
+    permutations, new_items = [], []
+    while i < len(items):
+        if index & m:
+            child_permutations, child_new_items = generate_permutations_recursive(
+                items=items[:i]+items[i+1:],
+                func=func,
+                perturbations=perturbations,
+                index=index & ~m
+            )
+            permutations.extend([prm + (index,) for prm in child_permutations])
+            new_items.extend([ni + (j,) for ni in child_new_items])
+
+            i += 1
+
+        m = m << 1
+        j += 1
+
+    return permutations, new_items
+
+def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> Tuple[NDArray[np.int_], NDArray[np.int_], List[Any]]:
+    """Generates all possible bitmask-tagged permutations of subsets of a list,
+    and computes a perturbation for each subset using a user-defined function.
+
+    This function initializes the perturbation list and starts the recursive
+    permutation generation using `generate_permutations_recursive`.
+
+    Args:
+        items (List[Any]):        The list of items to permute.
+        func (List[Any]) -> Any): A function to compute a "perturbation" for any subset of items.
+
+    Returns:
+        Tuple:
+            - `permutations`:  A matrix of shape (len(`permutations`), len(`items`) + 1) where
+                               rows represent sequences of indices of subsets in
+                               `perturbations` that define a permutation path.
+            - `new_items`:     A matrix of shape (len(`permutations`), len(`items`)) where
+                               rows represent sequences of indices of items in `items`
+                               added to the previous set to define a permutation path.
+            - `perturbations`: List of perturbation values for each subset.
+    """
+    # calculate number of possible perturbations:
+    n = (2 ** len(items))
+
+    # initialize perturbation list:
+    perturbations = [None] * n
+
+    # calculate all possible permuations:
+    permutations, new_items = generate_permutations_recursive(
+        items, func,
+        perturbations,  # empty list to be filled
+        n-1             # this creates a bitmap of n ones
+    )
+
+    # return tuple of permuations and perturbations: 
+    return np.array(permutations), np.array(new_items), perturbations
+
+def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_samples:int, complementary:bool=False) -> Tuple[NDArray[np.bool_], List[Any]]:
+    """Randomly samples a specified number of unique subsets of a given list,
+    and returns their binary indicator features along with the result of applying a function
+    to each sampled subset.
+
+    The function constructs a random selection of bitmask-encoded subsets of the input list
+    `items`, including the empty set and the full set. For each sampled subset, it applies
+    the provided function `func` and stores the result. It also returns a binary feature
+    matrix indicating which items are included in each sampled subset.
+
+    Args:
+        items (List[Any]):        The list of items to draw subsets from.
+        func (List[Any]) -> Any): A function that computes a perturbation or
+                                  feature from a subset of `items`.
+        num_samples (int):        The number of unique subset samples to generate, including
+                                  the empty set and full set.
+        complementary (bool):     If `True`, makes sure that the sampled perturbations are
+                                  pairs of complementary sets.
+
+    Returns:
+        Tuple:
+            - `subsets`:       A boolean matrix of shape (len(`perturbations`), len(`items`)),
+                               where each row indicates which items are included
+                               in the corresponding subset.
+            - `perturbations`: List of perturbation values for each subset.
+    """
+    
+    # calculate number of possible perturbations:
+    n = (2 ** len(items))
+
+    # take sample of `num_samples` unique bitmasks (including empty and full):
+    # Use dtype=object to handle large integers that can overflow standard numpy int types
+    # when the number of items is > 63.
+    sample = np.empty(num_samples, dtype=object)
+    sample[0]    = 0   # =0b000...0
+    sample[-1]   = n-1 # =0b111...1
+    if complementary:
+        if num_samples%2 != 0:
+            raise ValueError(f'`num_samples` must be an even integer if `complementary == True`, but is {str(num_samples)}.')
+
+        size = (num_samples // 2) - 1
+        population = (n // 2) - 1
+        if size < population:
+
+            # iterative approach to avoid creating large integer arrays:
+            s = set()
+            while len(s) < size:
+                s.add(random.randint(1, population)) # range is 1 to (n//2)
+
+            sample[1:size+1]  = np.array(list(s))
+            sample[size+1:-1] = np.invert(sample[1:size+1]) & (n-1)
+
+        else: sample = np.arange(num_samples)
+
+    else:
+        size = num_samples - 2
+        population = n - 2
+        if size < population:
+
+            # iterative approach to avoid creating large integer arrays:
+            s = set()
+            while len(s) < size:
+                s.add(random.randint(1, population)) # range is 1 to n-1
+
+            sample[1:-1] = np.array(list(s))
+
+        else: sample = np.arange(num_samples)
+
+    # sort sample for compatibility with consecutive MC sampling:
+    sample[1:-1].sort()
+
+    # generate perturbations:
+    perturbations = [None] * num_samples
+    subsets       = np.zeros((num_samples, len(items)), dtype=bool)
+    for i, bitmask in enumerate(sample):
+        # translate bitmask to set:
+        current_items, m = [], 1
+        for j in range(len(items)):
+            if bitmask & m:
+                current_items.append(items[j])
+                subsets[i, j] = 1.
+            m = m << 1
+
+        # generate perturbation:
+        perturbations[i] = func(current_items)
+
+    return subsets, perturbations
 
 #====================================================================================================#
 # Messy transformers convenience functions:                                                          #
