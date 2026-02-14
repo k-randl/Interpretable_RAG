@@ -1,6 +1,12 @@
-# Interpretable RAG
+# RAG-E
+
+[![Deploy PyPI](https://github.com/k-randl/Interpretable_RAG/actions/workflows/python-publish.yml/badge.svg)](https://github.com/k-randl/Interpretable_RAG/actions/workflows/python-publish.yml)
 
 This project provides a framework for building and evaluating interpretable Retrieval-Augmented Generation (RAG) pipelines. The core of the project is the ability to explain the contribution of retrieved documents and query parts to the final generated output, using Shapley values.
+
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;![](https://github.com/k-randl/Interpretable_RAG/blob/main/.figures/example.svg)
+<br/>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;<span><small>Example explanation.</small></span>
 
 ## Features
 
@@ -12,18 +18,29 @@ This project provides a framework for building and evaluating interpretable Retr
 
 ## Installation
 
-After cloning or downloading this repository, first run the Linux shell script [`./setup.sh`](https://github.com/k-randl/self-explaining_llms/blob/main/setup.sh).
+### Option 1: install packet from PyPI
+This option is the recommended way to install RAG-E and suitable for most users. Simply run the following command:
+```bash
+pip install rag-exp
+```
+Enjoy!
+
+### Option 2: install source code fom GitHub
+This option is mainly useful for development or replication our experiments. First clone this repository using the following command:
+```bash
+git clone https://github.com/k-randl/Interpretable_RAG
+```
+After cloning or downloading the repository, run the Linux shell script [`./setup.sh`](https://github.com/k-randl/self-explaining_llms/blob/main/setup.sh).
 It will initialize the workspace by performing the following steps:
 
 1. It will install the required Python modules by running `pip install -r "./requirements.txt"`
 2. It will download the necessary Python code to compute the [BARTScore](https://github.com/neulab/BARTScore) by Yuan et al. (2021) to "./resources/bart_score.py".
 3. It will download the necessary Python code to compute the [LongDocFACTScore](https://github.com/jbshp/LongDocFACTScore) by Bishop et al. (2024) to "./resources/ldfacts.py".
 
-After running the script, copy your credential file to "./data/service-account-external-efra.json"
-
 ## Usage
 
-The main entry point for running experiments is the `scripts/run_pipeline.py` script. Here is an example of how to run it:
+### Replicating our experiments:
+Replication our experiments requires installation **Option 2**. The main entry point for running experiments is the [`scripts/run_pipeline.py`](https://github.com/k-randl/Interpretable_RAG/blob/main/scripts/run_pipeline.py) script. Here is an example of how to run it:
 
 ```bash
 python scripts/run_pipeline.py \
@@ -38,7 +55,7 @@ python scripts/run_pipeline.py \
     --run_randomized
 ```
 
-### Arguments
+**Arguments:**
 
 *   `--topics_path`: Path to the file with the queries.
 *   `--ranked_list_path`: Path to the ranked list from the retrieval.
@@ -74,4 +91,4 @@ Contributions are welcome! Please feel free to submit a pull request or open an 
 
 ## License
 
-This project is licensed under the MIT License. See the `LICENSE` file for details.
+This project is licensed under the **GPL v3 License**. See the [`LICENSE`](https://github.com/k-randl/Interpretable_RAG/blob/main/LICENSE) file for details.
