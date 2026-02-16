@@ -18,18 +18,8 @@ This project provides a framework for building and evaluating interpretable Retr
 
 ## Installation
 
-### Option 1: install packet from PyPI
-This option is the recommended way to install RAG-E and suitable for most users. Simply run the following command:
-```bash
-pip install rag-exp
-```
-Enjoy!
-
-### Option 2: install source code fom GitHub
-This option is mainly useful for development or replication our experiments. First clone this repository using the following command:
-```bash
-git clone https://github.com/k-randl/Interpretable_RAG
-```
+### Install source code fom GitHub
+This option is mainly useful for development or replication our experiments. First clone this repository.
 After cloning or downloading the repository, run the Linux shell script [`./setup.sh`](https://github.com/k-randl/self-explaining_llms/blob/main/setup.sh).
 It will initialize the workspace by performing the following steps:
 
