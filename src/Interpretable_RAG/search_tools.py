@@ -522,15 +522,15 @@ def calculate_results(qrels, results_df, metrics= None):
 EXAMPLE OF USAGE
 args = Namespace(
 model_name = 'facebook/dragon-plus-query-encoder',
-qrels_path = '/home/francomaria.nardini/raid/guidorocchietti/data/EFRA/dragon_embeddings/topics/qrels.qrel',
-index_path = '/home/francomaria.nardini/raid/guidorocchietti/data/EFRA/dragon_embeddings/efra_manual_docs_flat.index',
+qrels_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/EFRA/dragon_embeddings/topics/qrels.qrel',
+index_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/EFRA/dragon_embeddings/efra_manual_docs_flat.index',
 top_k = 500)
 
 llama_args = Namespace(
-queries_path = '/home/francomaria.nardini/raid/guidorocchietti/data/EFRA/dragon_embeddings/topics/topics_llama70b.csv',
-query_embeddings_path = '/home/francomaria.nardini/raid/guidorocchietti/data/EFRA/dragon_embeddings/llama_summary_embeddings.npy',
-save_path = '/home/francomaria.nardini/raid/guidorocchietti/data/EFRA/dragon_embeddings/llama_results.csv',
-id_mapping_path = '/home/francomaria.nardini/raid/guidorocchietti/data/EFRA/dragon_embeddings/ids_to_post_id.csv')
+queries_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/EFRA/dragon_embeddings/topics/topics_llama70b.csv',
+query_embeddings_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/EFRA/dragon_embeddings/llama_summary_embeddings.npy',
+save_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/EFRA/dragon_embeddings/llama_results.csv',
+id_mapping_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/EFRA/dragon_embeddings/ids_to_post_id.csv')
 llama_args = argparse.Namespace(**{**vars(args), **vars(llama_args)})
 search(llama_args)
 

@@ -59,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--results-dir",
         type=Path,
-        default=Path("/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/results/retrieval/efra_06_11"),
+        default=Path("/home/anonymized_user_1/raid/anonymized_user_2/code/Interpretable_RAG/results/retrieval/efra_06_11"),
         help="Directory containing query_*.pkl files.",
     )
     # Argument to specify which gradient type to use

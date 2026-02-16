@@ -110,7 +110,7 @@ def embed_passages_snowflake(queries, model,tokenizer, query=True, max_length=51
 ### The function uses the first token of the last hidden state as the embedding for the context ###
 '''
 
-def generate_context_embeddings(texts,model_name = 'facebook/dragon-plus-query-encoder',output_folder = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/data/passages_tensors/', step = 256):
+def generate_context_embeddings(texts,model_name = 'facebook/dragon-plus-query-encoder',output_folder = '/home/anonymized_user_1/raid/anonymized_user_2/code/Interpretable_RAG/data/passages_tensors/', step = 256):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     context_encoder = AutoModel.from_pretrained(model_name, device_map='auto')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

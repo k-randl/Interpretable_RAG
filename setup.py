@@ -15,7 +15,7 @@ setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/k-randl/Interpretable_RAG',
-    author='Korbinian Randl & Guido Rocchietti',
+    author='Korbinian Randl & Anonymized User 2',
     author_email='k.randl@web.de',
     packages=['Interpretable_RAG'],
     package_dir = {'': 'src'},

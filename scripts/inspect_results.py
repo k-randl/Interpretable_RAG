@@ -45,7 +45,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         files_to_inspect = sys.argv[1:]
 
-    base_dir = "/Users/guidorocchietti/Documents/Lavoro/Interpretable_RAG"
+    base_dir = "/Users/anonymized_user_2/Documents/Lavoro/Interpretable_RAG"
     for f in files_to_inspect:
         full_path = os.path.join(base_dir, f) if not f.startswith("/") else f
         if os.path.exists(full_path):

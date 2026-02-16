@@ -17,7 +17,7 @@ from tqdm.autonotebook import tqdm as notebook_tqdm
 # --- 1. SET YOUR PROJECT ROOT PATH ---
 # !! IMPORTANT !!
 # Change this path to the root of your project (the folder that contains the 'src' directory)
-PROJECT_ROOT = '/home/francomaria.nardini/raid/guidorocchietti/code/Interpretable_RAG/' # <-- CHANGE THIS
+PROJECT_ROOT = '/home/anonymized_user_1/raid/anonymized_user_2/code/Interpretable_RAG/' # <-- CHANGE THIS
 
 # Add project root to system path
 if PROJECT_ROOT not in sys.path:
@@ -36,11 +36,11 @@ except ImportError as e:
 # --- 3. Define Parameters ---
 # These replace the command-line arguments.
 # Your provided arguments:
-topics_path = '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/data/topics.tsv'
-qrels_path = '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/data/topics/qrels.qrel'
-index_path = '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/passage_embeddings/snowflake-arctic-embed-l-v2.0/flat_index/index.faiss'
-id_mapping_path = '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/data/CAST2022collection.cleaned.tsv'
-save_path = '/home/francomaria.nardini/raid/guidorocchietti/data/results/my_snowflake_run_interactive.csv'
+topics_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2022/data/topics.tsv'
+qrels_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2022/data/topics/qrels.qrel'
+index_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2022/passage_embeddings/snowflake-arctic-embed-l-v2.0/flat_index/index.faiss'
+id_mapping_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2022/data/CAST2022collection.cleaned.tsv'
+save_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/results/my_snowflake_run_interactive.csv'
 model_name = 'snowflake'
 top_k = 1000
 
@@ -65,7 +65,7 @@ def load_embedding_model(model_name: str) -> AutoModel:
     elif model_name == 'dragon':
         # *** This is an educated guess based on your original script's paths ***
         # Adjust this path to point to your actual local model directory
-        model_path = '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2019/passage_embeddings/dragon-plus-context-encoder'
+        model_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2019/passage_embeddings/dragon-plus-context-encoder'
         print(f"Warning: Loading 'dragon' model from hardcoded path: {model_path}")
         print("Please update 'load_embedding_model' if this path is incorrect.")
         return AutoModel.from_pretrained(model_path)
@@ -103,8 +103,8 @@ print(f"Loading ID mapping from {id_mapping_path}...")
 # This assumes the 'search' function can handle this structure,
 # or that the file only contains ID mappings.
 id_mapping = pd.read_csv(id_mapping_path, sep='\t', header=None)
-id_mapping2 = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/data/CAST2022collection.aligned.tsv', sep='\t',header=None)
-id_mapping3 = pd.read_csv('/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/data/CAST2022collection.tsv', sep='\t',header=None)
+id_mapping2 = pd.read_csv('/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2022/data/CAST2022collection.aligned.tsv', sep='\t',header=None)
+id_mapping3 = pd.read_csv('/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2022/data/CAST2022collection.tsv', sep='\t',header=None)
 temp_path = None
 query_embeddings_path_to_use = None
 query_embeddings = None # This will hold embeddings if calculated

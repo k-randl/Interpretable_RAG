@@ -48,7 +48,7 @@ def load_embedding_model(model_name: str) -> AutoModel:
     elif model_name == 'dragon':
         # *** This is an educated guess based on your original script's paths ***
         # Adjust this path to point to your actual local model directory
-        model_path = '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2019/passage_embeddings/dragon-plus-context-encoder'
+        model_path = '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2019/passage_embeddings/dragon-plus-context-encoder'
         print(f"Warning: Loading 'dragon' model from hardcoded path: {model_path}")
         print("Please update 'load_embedding_model' if this path is incorrect.")
         return AutoModel.from_pretrained(model_path)
@@ -98,11 +98,11 @@ def main():
     #args = parser.parse_args()
     # --- ADD THIS BLOCK FOR INTERACTIVE TESTING ---
     test_args = [
-        '--topics_path', '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/data/topics.tsv',
-        '--qrels_path', '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/data/topics/qrels.qrel',
-        '--index_path', '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/passage_embeddings/snowflake-arctic-embed-l-v2.0/flat_index/index.faiss',
-        '--id_mapping_path', '/home/francomaria.nardini/raid/guidorocchietti/data/conversational/CAST2022/data/CAST2022collection.cleaned.tsv',
-        '--save_path', '/home/francomaria.nardini/raid/guidorocchietti/data/results/my_snowflake_run_interactive.csv',
+        '--topics_path', '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2022/data/topics.tsv',
+        '--qrels_path', '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2022/data/topics/qrels.qrel',
+        '--index_path', '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2022/passage_embeddings/snowflake-arctic-embed-l-v2.0/flat_index/index.faiss',
+        '--id_mapping_path', '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2022/data/CAST2022collection.cleaned.tsv',
+        '--save_path', '/home/anonymized_user_1/raid/anonymized_user_2/data/results/my_snowflake_run_interactive.csv',
         '--model_name', 'snowflake',
         '--top_k', '1000'
         # Add '--query_embeddings_path' here if you want to use it
