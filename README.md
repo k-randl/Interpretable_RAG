@@ -23,6 +23,96 @@ It will initialize the workspace by performing the following steps:
 
 ## Usage
 
+### How to use RAG-E:
+
+The classes `ExplainableAutoModelForRetrieval` and `ExplainableAutoModelForGeneration` wrap Hugging Face [`transformers`](https://github.com/huggingface/transformers) models and provide the functionality to compute attribution scores.
+For **retrieval**, RAG-E supports the following token attribution methods:
+
+- `.grad(...)`: Raw gradients towards the inputs of the last batch 
+- `.aGrad(...)`: [AGrad (`da ⊙ a`)](https://doi.org/10.1109/BigData52589.2021.9671639) by Liu et al. (2021) of the last batch.
+- `.gradIn(...)`: Gradient times input (`dx ⊙ x`) scores of the last batch.
+- `.intGrad(...)`: [Integrated Gradients](https://doi.org/10.48550/arXiv.1703.01365) by Sundararajan et al. (2017) of the last batch.
+  
+For **generation** RAG-E supports precise and Kernel-SHAP approximated Shapley Values for document attribution.
+
+The `ExplainableAutoModelForRAG` class combines these models to create the full interpretable RAG pipeline.
+Here is an Example with Llama 3.1 8B and Snowflake Arctic Embed v2 (*more examples in `scripts/demos`*):
+```python
+from src.Interpretable_RAG.rag import ExplainableAutoModelForRAG
+
+# Load Pipeline:
+model = ExplainableAutoModelForRAG(
+    # Retriever info:
+    query_encoder_name_or_path='Snowflake/snowflake-arctic-embed-l-v2.0',
+    retriever_query_format='query: {query}',
+    retriever_token_processor=lambda s: s.replace('▁', ' '),
+    retriever_kwargs={'add_pooling_layer':False},
+
+    # Generator info:
+    generator_name_or_path='meta-llama/Llama-3.1-8B-Instruct',
+    generator_token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'),
+    generator_kwargs={'device_map':'auto', 'torch_dtype':torch.bfloat16}
+)
+
+# MSMarco query and passage as an example:
+query =  "Where was Marie Curie born?"
+contexts = [
+    "Maria Skłodowska, later known as Marie Curie, was born on November 7, 1867.",
+    "Born in Paris on 15 May 1859, Pierre Curie was the son of Eugène Curie, a doctor of French Catholic origin from Alsace.",
+    "Maria Skłodowska was born in Warsaw, in Congress Poland in the Russian Empire, as the fifth and youngest child of well-known teachers Bronisława, née Boguska, and Władysław Skłodowski.",
+    "While a French citizen, Marie Skłodowska Curie, who used both surnames, never lost her sense of Polish identity. She taught her daughters the Polish language and took them on visits to Poland.",
+    "Marie Curie founded the Curie Institute in Paris in 1920, and the Curie Institute in Warsaw in 1932.",
+]
+
+# Generate answer:
+output = model(
+    query=query,
+    contexts=contexts,
+    k=5,
+    generator_kwargs={
+        'max_new_tokens':256,
+        'do_sample':False,
+        'top_p':1,
+        'num_beams':1,
+        'batch_size':64,
+        'max_samples_query':32,
+        'max_samples_context':32,
+        'conditional':True
+    }
+)
+
+# Explain retriever:
+ret_attributions = model.retriever.intGrad()
+
+# Explain generator:
+gen_attributions = model.generator.get_shapley_values()
+
+```
+
+To visualize these explanations, RAG-E includes easy-to-use plotting functions:
+```python
+from src.Interpretable_RAG.plotting import visualize_importance_retriever, visualize_importance_generator, plot_document_importance_rag, higlight_importance_rag
+
+# Functions to normalize tokens:
+retriever_token_processor=lambda s: s.replace('▁', ' '),
+generator_token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ')
+
+# Generate highlighted tokens for the retriever:
+visualize_importance_retriever(model.retriever, method='intGrad', token_processor=retriever_token_processor, show:bool=True)
+
+# Generate highlighted tokens for the generator:
+visualize_attribution_generator(model.generator, aggregation='token', token_processor=generator_token_processor, show:bool=True)
+
+# Generate highlighted tokens for the rag pipeline:
+higlight_importance_rag(model, retriever_method='intGrad', show:bool=True,
+        retriever_token_processor=retriever_token_processor,
+        generator_token_processor=generator_token_processor
+)
+
+# Plot document importance for the rag pipeline:
+plot_document_importance_rag(model, show:bool=True)
+```
+
 ### Replicating our experiments:
 Replication our experiments requires installation **Option 2**. The main entry point for running experiments is the `scripts/run_pipeline.py` script. Here is an example of how to run it:
 
@@ -62,12 +152,6 @@ python scripts/run_pipeline.py \
 *   `outputs_retrieved`: Contains the retrieved outputs.
 *   `results`: Contains the results of the experiments.
 *   `plots`: Contains plots for the analysis of the results.
-
-## How it Works
-
-The interpretability of the RAG pipeline is achieved by using Shapley values. The contribution of each retrieved document and each query token is computed by analyzing the change in the model's output probability when that feature is included or excluded. The project implements both precise Shapley value calculation and approximations like KernelSHAP.
-
-The `ExplainableAutoModelForGeneration` class wraps a Hugging Face `transformers` model and provides the functionality to compute the Shapley values. The `ExplainableAutoModelForRAG` class combines this explainable generator with a retriever to create the full interpretable RAG pipeline.
 
 ## Contributing
 
