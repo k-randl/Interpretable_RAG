@@ -14,9 +14,9 @@ setup(
     description='A Python package for explaining RAG pipelines.',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    url='https://github.com/k-randl/Interpretable_RAG',
-    author='Korbinian Randl & Anonymized User 2',
-    author_email='k.randl@web.de',
+    url='github address',
+    author=' Anonymized User 0 & Anonymized User 2',
+    author_email='Anonymized email',
     packages=['Interpretable_RAG'],
     package_dir = {'': 'src'},
     install_requires=[
