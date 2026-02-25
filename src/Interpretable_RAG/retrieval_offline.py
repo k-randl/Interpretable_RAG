@@ -1,13 +1,11 @@
 import os
 import pickle
 import torch
-from math import ceil
-from tqdm.autonotebook import trange
 from tqdm.autonotebook import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
-from typing import Optional, List, Literal, Union, Dict
+from typing import Optional, List, Union, Dict
 
-from .retrieval import RetrieverExplanationBase
+from .retrieval import RetrieverExplanationBase, List_t, Tensor_t
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -18,7 +16,7 @@ def checkattr(obj:object, name:str) -> bool:
         return getattr(obj, name) is not None
     return False
 
-def embedding_backward(model:PreTrainedModel, dPhi:List[torch.Tensor]):
+def embedding_backward(model:PreTrainedModel, dPhi:List[torch.Tensor]) -> List[torch.Tensor]:
     # this is very specific for BERT and may need to be updated to support other models:
     # phi(input_ids, token_type_ids, token_ps) = W @ one_hot(input_ids) + f(token_type_ids, token_ps)
     #  => phi'(input_ids, token_type_ids, token_ps) = phi'(input_ids) = W
@@ -217,7 +215,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         return encoder
 
     @property
-    def in_tokens(self) -> Dict[Literal['query', 'context'], List[List[str]]]:
+    def in_tokens(self) -> Optional[List_t]:
         """A dicionary containing the following two keys:
         - `'query'`: a list containing the tokenized query
         - `'context'`: a list containing the tokenized contexts"""
@@ -239,7 +237,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         """The huggingface string identifier of the query encoder model."""
         return self._query_encoder.config.name_or_path
 
-    def grad(self, filter_special_tokens:bool=True):
+    def grad(self, filter_special_tokens:bool=True) -> List_t:
         '''Gradients towards the inputs of the last batch.
 
         Args:
@@ -257,7 +255,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return grad
 
-    def aGrad(self, filter_special_tokens:bool=True):
+    def aGrad(self, filter_special_tokens:bool=True) -> List_t:
         '''AGrad (`da ⊙ a`) scores of the last batch.
 
         Args:
@@ -276,7 +274,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return aGrad
 
-    def repAGrad(self, filter_special_tokens:bool=True):
+    def repAGrad(self, filter_special_tokens:bool=True) -> List_t:
         '''RepAGrad scores of the last batch.
 
         Args:
@@ -286,7 +284,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         raise NotImplementedError()
 
-    def gradIn(self, filter_special_tokens:bool=True):
+    def gradIn(self, filter_special_tokens:bool=True) -> List_t:
         '''GradIn (`dx ⊙ x`) scores of the last batch.
 
         Args:
@@ -310,7 +308,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         return gradIn
 
     def forward(self, query:str, k:int, dir:str='embeddings', *, index:Optional[torch.FloatTensor]=None, reorder:bool=False, max_length:Optional[int]=None, **kwargs):
-        # load index from disk if not speciifed:
+        # load index from disk if not specified:
         if index is None:
             with open(os.path.join(dir, 'embeddings.pt'), 'rb') as file:
                 index = torch.load(file).to(self.query_encoder.device)

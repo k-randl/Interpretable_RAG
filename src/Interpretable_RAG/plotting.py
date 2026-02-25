@@ -1092,7 +1092,7 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
 
     # create query html:
     cmb_qry, ret_qry_attr, gen_qry_attr = match_token_attributions(
-        retriever_attr['query'][0].numpy(),   explanation.retriever._in_tokens['query'][0],
+        retriever_attr['query'][0].numpy(),   explanation.retriever.in_tokens['query'][0],
         generator_attr['query'].mean(axis=1), explanation.generator.qry_tokens,
         ret_token_processor = retriever_token_processor,
         gen_token_processor = generator_token_processor

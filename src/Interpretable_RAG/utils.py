@@ -556,20 +556,22 @@ def decode_chat_template(inputs:Union[List[int], List[str], str], model_name_or_
         del tokenizer
 
         i = 0
-        try:
-            while i < len(inputs):
+        while i < len(inputs):
+            try:
                 role_start = inputs.index(sot, i) + len(sot)
                 role_end   = inputs.index(sep, role_start)
-                role       = slice(role_start, role_end) if return_indices else inputs[role_start:role_end]
+            except ValueError: return result
+            role = slice(role_start, role_end) if return_indices else inputs[role_start:role_end]
 
+            try:
                 content_start = role_end + len(sep)
                 content_end   = inputs.index(eot, content_start)
-                content       = slice(content_start, content_end) if return_indices else inputs[content_start:content_end]
+            except ValueError: content_end = len(inputs)
+            content       = slice(content_start, content_end) if return_indices else inputs[content_start:content_end]
 
-                result.append({'role':role, 'content':content})
-                i = content_end + len(eot)
+            result.append({'role':role, 'content':content})
+            i = content_end + len(eot)
 
-        except ValueError: pass
         return result
     
     # deal with lists of integers or strings:
@@ -583,20 +585,22 @@ def decode_chat_template(inputs:Union[List[int], List[str], str], model_name_or_
         eot = template['eot']['tokens'] if use_str else template['eot']['ids']
 
         i = 0
-        try:
-            while i < len(inputs):
+        while i < len(inputs):
+            try:
                 role_start = find_subseq(inputs, sot, i) + len(sot)
                 role_end   = find_subseq(inputs, sep, role_start)
-                role       = slice(role_start, role_end) if return_indices else inputs[role_start:role_end]
+            except ValueError: return result
+            role = slice(role_start, role_end) if return_indices else inputs[role_start:role_end]
 
+            try:
                 content_start = role_end + len(sep)
                 content_end   = find_subseq(inputs, eot, content_start)
-                content       = slice(content_start, content_end) if return_indices else inputs[content_start:content_end]
+            except ValueError: content_end = len(inputs)
+            content = slice(content_start, content_end) if return_indices else inputs[content_start:content_end]
 
-                result.append({'role':role, 'content':content})
-                i = content_end + len(eot)
+            result.append({'role':role, 'content':content})
+            i = content_end + len(eot)
 
-        except ValueError: pass
         return result
 
     else: raise TypeError()

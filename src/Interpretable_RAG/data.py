@@ -1,52 +1,16 @@
 import os
-import gc
-import torch
-import numpy as np
-import pandas as pd
 from tqdm import tqdm
-from io import StringIO
 from html.parser import HTMLParser
+from urllib.request import urlretrieve
 
-from typing import Callable, Optional, Union, List
-from transformers import PreTrainedTokenizer
-
-#====================================================================================================#
-# Data access and analytics:                                                                         #
-#====================================================================================================#
-
-from google.cloud import storage
-from google.oauth2 import service_account
-
-DATABASE    = 'c-labs1.efra.summaries_migrated', 'efra.summaries_v2_migrated', 'c-labs1.efra.summaries_v3'
-CREDENTIALS = service_account.Credentials.from_service_account_file('data/service-account-external-efra.json')
-
-def query_data(sql:str): return pd.read_gbq(sql, credentials=CREDENTIALS)
-
-def get_unique(columns:Union[str, List[str]], db:int=-1):
-    # make list if necessary:
-    if isinstance(columns, str):
-        columns = [columns,]
-
-    return query_data(f'SELECT DISTINCT {", ".join(columns)} FROM `{DATABASE[db]}`')
-
-def count_values(column:str, values:Union[str, List[str]], db:int=-1):
-    # make list if necessary:
-    if isinstance(values, str):
-        values = [values,]
-
-    return {value:query_data(f'SELECT COUNT({column}) FROM `{DATABASE[db]}` WHERE {column} = "{value}"').values.flatten()[0] for value in values}
-
+from typing import Callable, List
 
 #====================================================================================================#
 # Data processing:                                                                                   #
 #====================================================================================================#
 
 from nltk.tokenize import PunktSentenceTokenizer, word_tokenize
-from google.cloud.storage.bucket import Bucket
-
 SENT_TOKENIZER = PunktSentenceTokenizer()
-
-from html.parser import HTMLParser
 
 class HTMLSplitter(HTMLParser):
     def __init__(self):
@@ -55,20 +19,64 @@ class HTMLSplitter(HTMLParser):
         self.strict = False
         self.convert_charrefs= True
         self.text = ''
+        self.paused = 0
 
     @property
-    def ends_with_space(self):
+    def ends_with_space(self) -> bool:
+        """Boolean indicating whether the current html ends in a space-character."""
         if len(self.text) == 0: return True
         else: return self.text[-1] in (' ', '\n', '\r', '\t', '>')
 
     @property
-    def ends_with_newline(self):
+    def ends_with_newline(self) -> bool:
+        """Boolean indicating whether the current html ends in a linebreak."""
         if self.text.endswith('\n  - '): return True
         elif len(self.text) == 0: return True
         else: return self.text[-1] in ('\n', '\r', '>')
     
-    def handle_starttag(self, tag, attrs):
-        if tag in ('table', 'tr', 'th', 'td'):
+    def handle_starttag(self, tag:str, attrs:list[tuple[str, str | None]]) -> None:
+        """Handle the start of an HTML tag by appending an appropriate piece of text/markup to self.text.
+
+        Args:
+            tag (str):      The lower-case name of the HTML tag (e.g. 'p', 'b', 'i', 'li', 'table',
+                            'tr', 'th', 'td', 'h1', ...).
+            attrs (list):   A list of (`name`, `value`) attribute tuples for the tag. This method
+                            currently ignores attributes but accepts the parameter to match an
+                            HTML parser callback signature.
+
+        Notes:
+            Mutates self.text by appending formatting or markup that approximates the appearance of the
+            tag in a plain-text / Markdown-like representation. Uses the boolean flags
+            `self.ends_with_newline` and `self.ends_with_space` to decide whether to insert leading newlines
+            or spaces before the added text. Tag-specific behavior:
+            - 'table', 'tr', 'th', 'td':
+                    Append an opening tag literal like "<table>" or "<td>".
+                    If self.ends_with_newline is True, append directly; otherwise prepend a newline.
+            - 'b', 'strong':
+                    Append the Markdown bold delimiter "**".
+                    If the current text does not end with a space, a single space is inserted
+                    before the delimiters to avoid running words together.
+            - 'i':
+                    Append the Markdown italic delimiter "*", following the same spacing rule as
+                    bold (a leading space is inserted when the current text does not end with a space).
+            - 'li':
+                    Start a list item by appending "  - " at the current position; if not already
+                    at a newline, a leading newline is inserted.
+            - 'p':
+                    Ensure paragraph separation by appending a single newline if the text does not
+                    already end with one.
+            - Tags starting with 'h' (headings, e.g. 'h1', 'h2'):
+                    Append bold markers for a heading line. If already at a newline, append "\n**";
+                    otherwise append "\n\n**" to ensure the heading is separated from prior text.
+            - Default:
+                    If none of the above conditions match and the text does not already end with a
+                    space, append a single space.
+        """
+
+        if tag in ('head','script','style'):
+            self.paused += 1
+
+        elif tag in ('table', 'tr', 'th', 'td'):
             self.text += f'<{tag}>' if self.ends_with_newline else f'\n<{tag}>'
         
         elif tag == 'b' or tag == 'strong':
@@ -91,8 +99,42 @@ class HTMLSplitter(HTMLParser):
         elif not self.ends_with_space:
             self.text += ' '
 
-    def handle_endtag(self, tag):
-        if tag in ('table', 'tr', 'th', 'td'):
+    def handle_endtag(self, tag:str) -> None:
+        """Handle the end of an HTML tag by appending appropriate closing markers to the
+        parser's text buffer.
+
+        Args:
+            tag (str):  The name of the HTML tag that has ended (expected to be lowercase).
+                        The method examines this tag to decide what trailing text to append.
+        
+        Notes:
+            This method is intended to be invoked when an HTML closing tag is encountered.
+            It updates self.text (and relies on self.ends_with_space to avoid inserting
+            duplicate whitespace) to produce a plain-text/markdown-like representation of
+            the HTML structure. It does not return a value; it mutates instance state.
+            Behavior by tag:
+            - 'table', 'tr', 'th', 'td'
+                - Append the literal closing HTML tag (e.g. '</table>') to preserve table
+                structure in the output.
+            - 'b', 'strong'
+                - Append a Markdown-style bold closing marker '** ' (two asterisks followed
+                by a space).
+            - 'i'
+                - Append a Markdown-style italic closing marker '* ' (one asterisk plus a
+                space).
+            - 'p'
+                - Append a newline ('\n') if the current buffer does not already end with
+                whitespace.
+            - tags starting with 'h' (e.g. 'h1', 'h2', ...)
+                - Append a bold marker followed by a newline ('**\n') to separate headings.
+            - any other tag
+                - Append a single space if the buffer does not already end with whitespace.
+        """
+
+        if tag in ('head','script','style'):
+            self.paused -= 1
+
+        elif tag in ('table', 'tr', 'th', 'td'):
             self.text += f'</{tag}>'
         
         if tag == 'b' or tag == 'strong':
@@ -111,130 +153,102 @@ class HTMLSplitter(HTMLParser):
         elif not self.ends_with_space:
             self.text += ' '
     
-    def handle_data(self, data):
-        self.text += data.replace('\n', '').replace('\r', '').strip()
+    def handle_data(self, data:str):
+        """Append sanitized html to the instance's text buffer.
+
+        Args:
+            data (str): The input string to append. All newline ('\\n') and carriage
+                        return ('\\r') characters are removed and leading/trailing
+                        whitespace is stripped before appending.
+        """
+        
+        if self.paused == 0:
+            self.text += data.replace('\n', '').replace('\r', '').strip()
 
     def get_data(self):
+        """Return the instance's text with leading and trailing whitespace removed.
+        This method returns a cleaned version of the instance attribute `self.text`
+        by calling its `strip()` method. The attribute is expected to be a string.
+
+        Returns:
+            str: The value of `self.text` with leading and trailing whitespace removed.
+
+        Raises:
+            AttributeError: If the instance has no `text` attribute or if `self.text` is None.
+        """
+
         return self.text.strip()
 
-def retrieve_url(url:str, window:int, tokenize:Callable[[str], List]=word_tokenize, bucket:Optional[Bucket]=None):
-    parts, paragraphs, tokens, texts = [], [], [], []
+def load_html(html:str, window:int, *, tokenize:Callable[[str], List[str]]=word_tokenize, output_tokens:bool=False):
+    """Load and split an HTML string into fixed-size "parts" of tokenized text. This function strips
+    HTML markup, splits the resulting text into paragraphs (by double-newline "\\n\\n"), then splits
+    paragraphs into sentence spans via `SENT_TOKENIZER.span_tokenize`.
+    Each sentence is tokenized with the provided `tokenize` callable and sentences are grouped into
+    consecutive "parts" such that each part contains up to `window` tokens (subject to sentence-level
+    truncation). The function returns parallel lists describing the part index, originating paragraph,
+    token sequence and the raw text span for each part.
 
-    # create bucket:
-    if bucket is None:
-        client = storage.Client(credentials=CREDENTIALS)
-        bucket = client.bucket('c-labs1-efra')
+    Args:
+        html (str):                     Input HTML content.
+        window (int):                   Target maximum number of tokens per part. The algorithm
+                                        attempts to pack sentences into parts without exceeding
+                                        this window; individual sentences are truncated to at most
+                                        `window` tokens if they exceed it.
+        tokenize ((str) -> List[str])):  Optional tokenization function applied to each sentence
+                                        (default: `nltk.word_tokenize`). It must accept a string
+                                        and return a list of token strings.
+        output_tokens (bool):           If `True`, return lists of tokens instead of full texts.
 
-    # retrieve urls:
-    html = str(bucket.blob(url[18:]).download_as_string())
-
+    Yields:
+        A tuple `(text, paragraph, part)`:
+        - 'texts'    : List[str] — chunk of the html-document.
+        - 'paragraph': List[int] — paragraph indices from which the part was sourced.
+        - 'part'     : List[int] — integer indices of the part within each papragraph.
+    """
     # parse html:
     parser = HTMLSplitter()
     parser.feed(html)
     html = parser.get_data()
 
     # split text in paragraphs:
-    part = 0
-    cursor = 0
     remaining_tokens = -1
-    for paragraph, txt in enumerate(html.split('\n\n')):
-        for i,j in SENT_TOKENIZER.span_tokenize(txt):
-            sentence = tokenize(txt[i:j+1])
+    tokens = []
+    for paragraph, text in enumerate(html.split('\n\n')):
+        
+        part = 0
+        cursor = 0
+        for i,j in SENT_TOKENIZER.span_tokenize(text):
+            sentence = tokenize(text[i:j+1])
             remaining_tokens -= len(sentence) - 1
 
             if remaining_tokens <= 0:
-                parts.append(str(part))
-                paragraphs.append(str(paragraph))
-                tokens.append(sentence[:window])
-                texts.append(txt[i:j+1])
-                remaining_tokens = window - len(sentence) + 1
-                    
+                yield tokens if output_tokens else text[cursor:j+1], paragraph, part
+                tokens = []
+                remaining_tokens = window
+
                 part += 1
-                cursor = i
+                cursor = j+1
 
-            else: 
-                tokens[-1].extend(sentence[:window])
-                texts[-1] = txt[cursor:j+1]
+            else: tokens.extend(sentence[:window])
 
+        yield tokens if output_tokens else text[cursor:j+1], paragraph, part
         remaining_tokens = -1
 
-    return {'part':parts, 'paragraph':paragraphs, 'tokens':tokens, 'texts':texts}
+def load_data(urls:List[str], window:int, *, tokenize:Callable[[str], List[str]]=word_tokenize, output_tokens:bool=False):
+    for url in tqdm(urls):
+        # get online content:
+        try:
+            if not os.path.exists(url):
+                path, _ = urlretrieve(url)
+            else: path = url
+        except Exception as e:
+            print(f'Error when retrieving "{url}": {e}')
+            continue
 
+        # read contents:
+        with open(path, 'r') as file:
+            html = file.read()
 
-def load_data(columns:Union[str, List[str]], window:int, tokenize:Callable[[List[str]], List]=word_tokenize, limit:Optional[int]=None, where:Optional[str]=None, db:int=-1):
-    # make list if necessary:
-    if isinstance(columns, str):
-        columns = [columns,]
-
-    # build query:
-    query = f'SELECT {", ".join(columns)} FROM `{DATABASE[db]}`'
-    if where is not None: query += f' WHERE {where}'
-    if limit is not None: query += f' LIMIT {limit:d}'
-    print(f'SQL query:      "{query};"')
-
-    # download data:
-    data = query_data(query).dropna()
-    print(f'Retrieved data: {len(data):d} posts')
-
-    # create bucket:
-    client = storage.Client(credentials=CREDENTIALS)
-    bucket = client.bucket('c-labs1-efra')
-
-    for _, entry in tqdm(data.iterrows()):
-        result = {}
-        for column in columns:
-            result[column] = entry[column]
-
-            if column.endswith('_url'):
-                result[column[:-4]] = retrieve_url(url=entry[column], window=window, tokenize=tokenize, bucket=bucket)
-            
-        yield result
-
-def load_prompts(prompt:str, tokenizer:PreTrainedTokenizer, max_tokens:int, **kwargs):
-    prefix = tokenizer.encode('**Task:**\n\n' + prompt)
-    suffix = tokenizer.encode('\n\n**Summary:**\n\n')[1:]
-
-    for entry in load_data(
-        columns=['post_id', 'english_content_url', 'english_summary'],
-        window=max_tokens - len(prefix) - len(suffix),
-        tokenize=lambda s: tokenizer.encode(s)[1:],
-        **kwargs):
-
-        # add pre and suffix:
-        entry['english_content']['tokens'] = [prefix + t + suffix for t in entry['english_content']['tokens']]
-
-        yield entry
-
-def pad(input_ids:torch.Tensor, tokenizer:PreTrainedTokenizer):
-    batch_size = len(input_ids)
-    seq_length = max([len(ids) for ids in input_ids])
-
-    output = np.ones((batch_size, seq_length), dtype=int) * tokenizer.pad_token_id
-
-    for i, ids in enumerate(input_ids):
-        output[i, -len(ids):] = ids
-
-    return torch.tensor(output, device="cuda")
-
-def save_summary(dir:str, df:pd.DataFrame, output_text:List[str], tokenizer:PreTrainedTokenizer, init:bool=False):
-    #print('Saving...')
-    save_df = df.copy()
-    save_df['prompt'] = [tokenizer.decode(m) for m in save_df['prompt']]
-    save_df['summary'] = output_text
-    save_df.to_csv(os.path.join(dir,'summaries.csv'), mode='w' if init else 'a', index=False, header=init)
-
-    for i in save_df.ID.drop_duplicates():
-        txt = ''
-    
-        for s in save_df[save_df.ID == i]['summary'].values:
-            s = s.split('**Summary:**')[-1]
-            s = s.split('**Sentence:**')[-1]
-            s = s.split('**Answer:**')[-1]
-    
-            txt += s
-    
-        with open(os.path.join(dir,f'summary_{i}.md'), 'w') as file:
-            file.write(txt)
-
-    del save_df
-    gc.collect()
+        # process document:
+        for text, i, j in load_html(html=html, window=window, tokenize=tokenize, output_tokens=output_tokens):
+            yield text, url, i, j

@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from tqdm.autonotebook import trange
 from scipy.stats import spearmanr
 from .retrieval_offline import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOfflineRetrieval
 from .retrieval_online  import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOnlineRetrieval
@@ -55,7 +56,7 @@ class ExplainableAutoModelForRAG:
         k:Optional[int]=None,
         contexts:Optional[List[str]]=None,
         dir:Optional[str]=None,
-        index:Optional[torch.FloatTensor]=None, 
+        index:Optional[torch.FloatTensor]=None,
         generator_kwargs:Optional[Dict[str, Any]]=None,
         retriever_kwargs:Optional[Dict[str, Any]]=None
     ):
@@ -64,22 +65,28 @@ class ExplainableAutoModelForRAG:
         if retriever_kwargs is None: retriever_kwargs = {}
 
         # check parameters:
+        contexts = retriever_kwargs.pop('contexts', contexts)
+        k        = retriever_kwargs.pop('k', k)
+
         if self.__is_offline:
             if index is not None: retriever_kwargs['index'] = index
             elif dir is not None: retriever_kwargs['dir'] = dir
             else: raise ValueError('Either `index` or `dir` must be specified in offline retrieval mode.')
 
-            if k is None: raise ValueError('`k` must be specified in offline retrieval mode.')
+            if k is None:
+                raise ValueError('`k` must be specified in offline retrieval mode.')
 
         else:
-            if contexts is not None: retriever_kwargs['contexts'] = contexts
-            else: raise ValueError('`contexts` must be specified in online retrieval mode.')
+            if contexts is None:
+                raise ValueError('`contexts` must be specified in online retrieval mode.')
 
-            if k is None: k = len(contexts)
+            if k is None:
+                k = len(contexts)
 
-        # calculate similarity:
+        # compute similarity:
         self.retrieved_ids, self.retrieved_sim = self.retriever(
             self.__retriever_query_format.format(query=query),
+            contexts=contexts,
             k=k,
             reorder=True,
             output_attentions=True,
