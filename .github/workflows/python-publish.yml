@@ -38,6 +38,14 @@ jobs:
       - name: Install build dependencies
         run: python -m pip install --upgrade pip setuptools wheel build
 
+      - name: Debug info 1
+        continue-on-error: true
+        run: ls -l -a /home/runner/work/Interpretable_RAG/Interpretable_RAG
+
+      - name: Debug info 2
+        continue-on-error: true
+        run: ls -l -a /home/runner/work/Interpretable_RAG/Interpretable_RAG/src/Interpretable_RAG
+
       - name: Build release distributions
         run: python -m build
 
