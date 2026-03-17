@@ -1,5 +1,7 @@
 # RAG-E
 
+[![Deploy PyPI](https://github.com/k-randl/Interpretable_RAG/actions/workflows/python-publish.yml/badge.svg?branch=main)](https://github.com/k-randl/Interpretable_RAG/actions/workflows/python-publish.yml)
+
 This project provides a framework for building and evaluating interpretable Retrieval-Augmented Generation (RAG) pipelines. The core of the project is the ability to explain the contribution of retrieved documents and query parts to the final generated output, using Shapley values.
 
 ## Features
