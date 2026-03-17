@@ -28,7 +28,7 @@ jobs:
             setup.py
             README.md
             LICENSE
-            src/rag-e/**
+            src/**
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-python@v6
