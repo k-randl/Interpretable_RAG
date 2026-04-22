@@ -10,6 +10,8 @@ except ImportError:
     print("WARNING: Could not import faiss. Some functionality may be unavailable.")
 from tqdm.auto import tqdm
 
+from typing import Optional, Literal
+
 
 
 def create_qrels_file(df, qid_col="qid", doc_id_col="doc_id", sep= ',', output_file="qrels.qrel"):
@@ -151,7 +153,7 @@ def load_embeddings_from_folder(path):
 ### The function saves the index to disk if a save_folder is provided ###
 '''
 
-def create_faiss_index_flat(embeddings, save_folder = None,type_index = 'IP'):
+def create_faiss_index_flat(embeddings, save_folder:Optional[str]=None, type_index:Literal['IP','L2']='IP'):
     assert type_index in ['IP','L2'], "Invalid index type. Choose from ['IP', 'L2'], default is IP"
     # Create a FAISS index
     num_vectors = len(embeddings)

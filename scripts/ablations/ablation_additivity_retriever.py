@@ -54,7 +54,8 @@ def test(retriever, query_format, name):
         for qry, ctx in tqdm(zip(sample['query'], sample['context']), total=len(sample['query']), desc=f'Calcuclating additivity for n={key}'):
             # calculate similarity online:
             retrieved_ids, similarity = retriever.forward(
-                query_format.format(query=qry), ctx, NUM_DOCS,
+                query_format.format(query=qry), NUM_DOCS,
+                contexts=ctx,
                 reorder=True
             )
 

@@ -8,6 +8,9 @@ import tqdm
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5"
+
 import csv
 #%%
 def load_dataframe(file_path):
@@ -33,7 +36,7 @@ def load_dataframe(file_path):
     if has_header:
         return pd.read_csv(file_path, sep=separator)
     else:
-        return pd.read_csv(file_path, sep=separator, header=None)
+        return pd.read_csv(file_path, sep=separator)
 
 def find_column_name(columns, aliases):
     for alias in aliases:
@@ -58,6 +61,7 @@ def main():
     retrieved_text_column = find_column_name(retrieval_results.columns, ['text', 'retrieved_text', 'document_text', 'passage'])
     query_column = find_column_name(topics.columns, ['query', 'query_text', 'topic'])
     qid_column = find_column_name(topics.columns, ['qid', 'query_id', 'topic_id'])
+    print(query_id_column, retrieved_text_column, query_column, qid_column)
 
     topics = topics[topics[qid_column].isin(retrieval_results[query_id_column].unique())]
 
@@ -96,7 +100,7 @@ def main():
         #ßßprint(contexts)
         if not contexts:
             contexts = []
-        rag('query: ' + query, contexts, output_attentions=True, output_hidden_states=True)
+        rag('query: ' + query, contexts=contexts, output_attentions=True, output_hidden_states=True)
         rag.save_values(str(output_dir / f'query_{qid}.pkl'), batch_size=16)
 
 if __name__ == '__main__':

@@ -753,7 +753,7 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
     )[0]
 
     # create role:
-    role = explanation.gen_tokens[response['role']]
+    role = response['role']
     if token_processor is not None:
         role = [token_processor(t) for t in role]
     role = ''.join(role).strip().capitalize()
@@ -1085,7 +1085,7 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
     )[0]
 
     # create role:
-    role = explanation.generator.gen_tokens[response['role']]
+    role = response['role']
     if generator_token_processor is not None:
         role = [generator_token_processor(t) for t in role]
     role = ''.join(role).strip().capitalize()

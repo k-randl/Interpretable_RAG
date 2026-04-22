@@ -1,3 +1,6 @@
+import os
+import faiss
+import json
 import torch
 import numpy as np
 from math import ceil
@@ -5,6 +8,7 @@ from tqdm.autonotebook import trange
 from sklearn.linear_model import Ridge
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
 from typing import Optional, List, Literal, Union, Callable, Any, Tuple
+from numpy.typing import NDArray
 
 from .retrieval import RetrieverExplanationBase, List_t, Tensor_t
 from .utils import sample_perturbations
@@ -67,19 +71,23 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         self._special_tokens_mask:Optional[Tensor_t]=None
 
     @classmethod
-    def from_pretrained(cls, query_encoder_name_or_path:str, context_encoder_name_or_path:Optional[str]=None, tokenizer_name_or_path:Optional[str]=None, *args, **kwargs):
+    def from_pretrained(cls, query_encoder_name_or_path:str, context_encoder_name_or_path:Optional[str]=None, *,
+            tokenizer_name_or_path:Optional[str]=None,
+            index:Union[Callable[[str],List[str]],str,None]=None,
+            **kwargs
+        ) -> 'ExplainableAutoModelForRetrieval':
         retriever = cls()
         
         # load tokenizer:
         if tokenizer_name_or_path is None:
             tokenizer_name_or_path = query_encoder_name_or_path
         retriever._tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name_or_path, *args, **kwargs
+            tokenizer_name_or_path, **kwargs
         )
 
         # load query encoder:
         retriever._query_encoder = AutoModel.from_pretrained(
-            query_encoder_name_or_path, *args, **kwargs
+            query_encoder_name_or_path, **kwargs
         )
 
         # load context encoder (if specified):
@@ -88,11 +96,75 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         else:
             retriever._context_encoder = AutoModel.from_pretrained(
-                context_encoder_name_or_path, *args, **kwargs
+                context_encoder_name_or_path, **kwargs
             )
 
+        # if index is a string load faiss index from disk:
+        if isinstance(index, str):
+            # load faiss index:
+            cls._index = faiss.read_index(index)
+
+            # load documents:
+            with open(os.path.join(index, 'documents.json'), 'r') as fp:
+                cls._documents = np.array(json.load(fp), dtype=object)
+
         return retriever
-    
+
+    def compute_index(self, documents:List[str], batch_size:int, *, max_length:Optional[int], save_folder:Optional[str]=None, **kwargs) -> None:
+        '''Compute a flat faiss index for fast retrieval based on the provided documents.
+
+        Args:
+            documents (List[str]):  List of documents to be indexed.
+            batch_size (int):       Batch size for computing the embeddings.
+            max_length (int):       Optional maximum length of sequences in tokens.
+            save_folder (str):      Optional path to a folder wich will be used for permanently storing the index.
+            kwargs:                 Additional keyword arguments passed to the embedding model.
+
+        '''
+        from .tools import create_faiss_index_flat
+
+        # create tokenizer arguments:
+        tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}
+        if max_length is not None:
+            tokenizer_args['padding'] = 'max_length'
+            tokenizer_args['max_length'] = max_length
+
+        with torch.no_grad():
+            embeddings = []
+            for i in trange(0, len(documents), batch_size, desc='Computing emeddings'):
+                # tokenize texts:
+                batch = self.tokenizer(documents[i:i+batch_size], **tokenizer_args)
+
+                # compute embeddings:
+                batch = self.context_encoder(**batch.to(self.context_encoder.device), **kwargs)
+
+                # append to list:
+                embeddings.append(batch.last_hidden_state[:, 0, :].detach().cpu().numpy())
+
+            # concatenate batches:
+            embeddings = np.concat(embeddings, axis=0)
+
+        # create faiss index:
+        self._index = create_faiss_index_flat(embeddings, save_folder=save_folder, type_index='IP')
+
+        # save documents:
+        if save_folder is not None:
+            with open(os.path.join(save_folder, 'documents.json'), 'w') as file:
+                json.dump(documents, file)
+        self._documents = np.array(documents, dtype=object)
+
+    @property
+    def index(self) -> Optional[faiss.IndexFlatIP]:
+        """A flat faiss index of document embeddings."""
+        if hasattr(self, '_index'): return self._index
+        else: return None
+
+    @property
+    def documents(self) -> Optional[NDArray[np.str_]]:
+        """The list of context documents."""
+        if hasattr(self, '_documents'): return self._documents
+        else: return None
+
     @property
     def in_tokens(self) -> Optional[List_t]:
         """A dicionary containing the following two keys:
@@ -648,8 +720,10 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         if output_coverage: result = result + (prediction_score,)
         return result
 
-    def forward(self, query:str, contexts:List[str], k:Optional[int]=None, *,
+    def forward(self, query:str, k:Optional[int]=None, *,
+            contexts:Optional[List[str]]=None,
             reorder:bool=False,
+            output_texts:bool=False,
             batch_size:Optional[int]=None,
             max_length:Optional[int]=None,
             **kwargs
@@ -662,8 +736,8 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # set attention implementation to eager if attention-
         # based explantions are active:
         if kwargs.get('output_attentions', False):
-            self._query_encoder.set_attn_implementation('eager')
-            self._context_encoder.set_attn_implementation('eager')
+            self.query_encoder.set_attn_implementation('eager')
+            self.context_encoder.set_attn_implementation('eager')
 
         # create tokenizer arguments:
         tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}
@@ -674,6 +748,25 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         qry_embed_fcn = self.query_encoder.get_input_embeddings()
         ctx_embed_fcn = self.context_encoder.get_input_embeddings()
 
+        # Compute query embeddings: take the last-layer hidden state of the [CLS] token
+        qry_input  = self.tokenizer(query, **tokenizer_args)
+        qry_ids    = qry_input.pop('input_ids')
+        qry_stmask = 1. - qry_input.pop('special_tokens_mask').detach().cpu()
+        qry_embeds = qry_embed_fcn(qry_ids.to(self.query_encoder.device))
+        qry_output = self.query_encoder(inputs_embeds=qry_embeds, **qry_input.to(self.query_encoder.device), **kwargs)
+    
+        # retrieve contexts if necessary: 
+        if contexts is None:
+            if k is None: raise ValueError(
+                f'You must either specify `contexts` or `k` in the call to `{type(self).__name__}.forward(...)`.'
+            )
+            if self.index is None or self.documents is None: raise ValueError(
+                f'If `index` is not specified when creating an object of class `{type(self).__name__}`, ' \
+                f'`contexts` must be set in the call to `{type(self).__name__}.forward(...)`.'
+            )
+            _, docs = self.index.search(qry_output.last_hidden_state[:, 0, :].detach().cpu().numpy(), k=k)
+            contexts = self.documents[docs].tolist()
+
         if batch_size is None: batch_size = len(contexts)
         for batch in trange(0, len(contexts), batch_size, desc='Retrieving documents'):
             ctx_batch = contexts[batch:batch+batch_size]
@@ -681,28 +774,23 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             idx_batch = torch.arange(len_batch, dtype=int)
             append = batch > 0
 
-            # apply tokenizer:
-            qry_input = self.tokenizer(query, **tokenizer_args)
-            ctx_input = self.tokenizer(ctx_batch, **tokenizer_args)
+            # Compute context embeddings: take the last-layer hidden state of the [CLS] token
+            ctx_input  = self.tokenizer(ctx_batch, **tokenizer_args)
+            ctx_ids    = ctx_input.pop('input_ids')
+            ctx_stmask = 1. - ctx_input.pop('special_tokens_mask').detach().cpu()
+            ctx_embeds = ctx_embed_fcn(ctx_ids.to(self.query_encoder.device))
+            ctx_output = self.context_encoder(inputs_embeds=ctx_embeds, **ctx_input.to(self.context_encoder.device), **kwargs)
 
             self._x = append_tensor_t(self._x, append,
-                qry_input.input_ids.detach().cpu(),
-                ctx_input.input_ids.detach().cpu(),
+                qry_ids.detach().cpu(),
+                ctx_ids.detach().cpu(),
                 self.tokenizer.pad_token_id
             )
             self._special_tokens_mask = append_tensor_t(self._special_tokens_mask, append,
-                1. - qry_input.pop('special_tokens_mask').detach().cpu(),
-                1. - ctx_input.pop('special_tokens_mask').detach().cpu(),
+                qry_stmask,
+                ctx_stmask,
                 0.
             )
-
-            # apply embeding:
-            qry_embeds = qry_embed_fcn(qry_input.pop('input_ids').to(self.query_encoder.device))
-            ctx_embeds = ctx_embed_fcn(ctx_input.pop('input_ids').to(self.query_encoder.device))
-
-            # Compute embeddings: take the last-layer hidden state of the [CLS] token
-            qry_output = self.query_encoder(inputs_embeds=qry_embeds, **qry_input.to(self.query_encoder.device), **kwargs)
-            ctx_output = self.context_encoder(inputs_embeds=ctx_embeds, **ctx_input.to(self.context_encoder.device), **kwargs)
 
             # Compute dot product:
             sim_batch = qry_output.last_hidden_state[:, 0, :] @ ctx_output.last_hidden_state[:, 0, :].T
@@ -804,8 +892,10 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                     self._da['context']              = self._da['context'][ret_ids_batch]
                 self._special_tokens_mask['context'] = self._special_tokens_mask['context'][ret_ids_batch]
 
+                contexts                             = [contexts[i] for i in ret_ids_batch]
+
         # reset gradient computation:
         torch.set_grad_enabled(prev_grad)
 
-        if k is None: return similarity
+        if output_texts: return contexts, similarity
         else: return retrieved_ids, similarity

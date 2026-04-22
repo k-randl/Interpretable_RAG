@@ -72,7 +72,7 @@ def main():
             continue
 
         # Process with the model to get hidden states and attentions
-        model('query: ' + query, contexts, output_attentions=True, output_hidden_states=True)
+        model('query: ' + query, contexts=contexts, output_attentions=True, output_hidden_states=True)
         
         # Save the intermediate values (attentions, hidden states)
         output_path = os.path.join(args.output_dir, f'query_{qid}.pkl')

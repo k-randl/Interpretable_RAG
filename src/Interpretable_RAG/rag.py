@@ -7,7 +7,7 @@ from .retrieval_online  import ExplainableAutoModelForRetrieval as ExplainableAu
 from .generation import ExplainableAutoModelForGeneration
 from .utils import tokens2words
 
-from typing import Optional, Callable, Dict, List, Any
+from typing import Optional, Union, Callable, Dict, List, Any
 from numpy.typing import NDArray
 
 class ExplainableAutoModelForRAG:
@@ -17,6 +17,8 @@ class ExplainableAutoModelForRAG:
         context_encoder_name_or_path:Optional[str]=None,
         *,
         offline:bool=False,
+        dir:Optional[str]=None,
+        index:Union[Callable[[str, int],List[str]],str,torch.FloatTensor,None]=None,
         retriever_query_format:str='{query}',
         retriever_token_processor:Optional[Callable[[str],str]]=None,
         retriever_kwargs:Dict[str, Any]={},
@@ -35,8 +37,12 @@ class ExplainableAutoModelForRAG:
             **generator_kwargs
         )
 
-        # instantiate  correct retriever:
+        # instantiate correct retriever:
         if offline:
+            if index is not None: retriever_kwargs['index'] = index
+            elif dir is not None: retriever_kwargs['dir'] = dir
+            else: raise ValueError('Either `index` or `dir` must be specified in offline retrieval mode.')
+
             if context_encoder_name_or_path is not None:
                 print('WARNING: Parameter `context_encoder_name_or_path` is ignored if `offline == True`.')
 
@@ -49,14 +55,12 @@ class ExplainableAutoModelForRAG:
             self.retriever = ExplainableAutoModelForOnlineRetrieval.from_pretrained(
                 query_encoder_name_or_path=query_encoder_name_or_path,
                 context_encoder_name_or_path=context_encoder_name_or_path,
+                index=index,
                 **retriever_kwargs
             ).to('cuda' if torch.cuda.is_available() else 'cpu')
 
-    def __call__(self, query:str, *,
-        k:Optional[int]=None,
+    def __call__(self, query:str, k:Optional[int]=None, *,
         contexts:Optional[List[str]]=None,
-        dir:Optional[str]=None,
-        index:Optional[torch.FloatTensor]=None,
         generator_kwargs:Optional[Dict[str, Any]]=None,
         retriever_kwargs:Optional[Dict[str, Any]]=None
     ):
@@ -68,40 +72,30 @@ class ExplainableAutoModelForRAG:
         contexts = retriever_kwargs.pop('contexts', contexts)
         k        = retriever_kwargs.pop('k', k)
 
-        if self.__is_offline:
-            if index is not None: retriever_kwargs['index'] = index
-            elif dir is not None: retriever_kwargs['dir'] = dir
-            else: raise ValueError('Either `index` or `dir` must be specified in offline retrieval mode.')
-
-            if k is None:
+        if k is None:
+            if self.__is_offline:
                 raise ValueError('`k` must be specified in offline retrieval mode.')
 
-        else:
-            if contexts is None:
-                raise ValueError('`contexts` must be specified in online retrieval mode.')
+            else:
+                if contexts is None:
+                    raise ValueError('`contexts` or `k` must be specified in online retrieval mode.')
 
-            if k is None:
                 k = len(contexts)
 
         # compute similarity:
-        self.retrieved_ids, self.retrieved_sim = self.retriever(
+        self.retrieved_docs, self.retrieved_sim = self.retriever(
             self.__retriever_query_format.format(query=query),
             contexts=contexts,
             k=k,
             reorder=True,
+            output_texts=True,
             output_attentions=True,
             output_hidden_states=True,
             **retriever_kwargs
         )
 
-        # get documents:
-        self.retrieved_docs = [contexts[i] for i in self.retrieved_ids]
-
         # generate response:
-        chat = self.generator.explain_generate(query, self.retrieved_docs, **generator_kwargs)
-
-        # generate response:
-        return chat
+        return self.generator.explain_generate(query, self.retrieved_docs, **generator_kwargs)
 
     @property
     def retriever_document_importance(self) -> NDArray[np.float64]:
@@ -203,3 +197,28 @@ class ExplainableAutoModelForRAG:
         r, p = spearmanr(ret, gen)
 
         return r
+    
+    def warg_score(self, query:str, contexts:List[str], p:float=0.9):
+
+
+        # Sort documents by their scores (descending)
+        ret_order = np.argsort(-ret_scores)
+        gen_order = np.argsort(-gen_scores)
+        
+        # Calculate cumulative attribution at each rank
+        ret_cumsum = np.cumsum(ret_scores[ret_order])
+        gen_cumsum = np.cumsum(gen_scores[gen_order])
+        
+        # Normalize cumulative sums
+        ret_cumsum_norm = ret_cumsum / (ret_cumsum[-1] + 1e-10)
+        gen_cumsum_norm = gen_cumsum / (gen_cumsum[-1] + 1e-10)
+        
+        # Calculate weighted difference at each depth
+        n = len(ret_scores)
+        d_vec = np.arange(n)
+        p_vec = p ** d_vec
+        w_vec = (1 - p) * p_vec
+        
+        # Calculate gap
+        gap = np.sum(w_vec * np.abs(ret_cumsum_norm - gen_cumsum_norm))
+        return gap

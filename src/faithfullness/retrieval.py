@@ -137,8 +137,10 @@ class AIPCForRetrieval:
 
             # calculate similarity online:
             retrieved_ids, similarity = self.retriever.forward(
-                self.query_format.format(query=qry), ctx, k,
-                reorder=True, **kwargs
+                self.query_format.format(query=qry), k,
+                contexts=ctx,
+                reorder=True,
+                **kwargs
             )
 
             # calculate relevancy scores:

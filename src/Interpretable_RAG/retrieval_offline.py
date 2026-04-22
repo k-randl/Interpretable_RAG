@@ -63,19 +63,19 @@ def metadata_from_pkl(dir:str, doc_ids:List[Union[int, str]]) -> Dict[str, List]
 
 class ExplainableAutoModelForContextEncoding(torch.nn.Module):
     @classmethod
-    def from_pretrained(cls, model_name_or_path:str, tokenizer_name_or_path:Optional[str]=None, *args, **kwargs):
+    def from_pretrained(cls, model_name_or_path:str, tokenizer_name_or_path:Optional[str]=None, **kwargs):
         encoder = cls()
 
         # load tokenizer:
         if tokenizer_name_or_path is None:
             tokenizer_name_or_path = model_name_or_path
         encoder._tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name_or_path, *args, **kwargs
+            tokenizer_name_or_path, **kwargs
         )
 
         # load encoder:
         encoder._context_encoder = AutoModel.from_pretrained(
-            model_name_or_path, *args, **kwargs
+            model_name_or_path, **kwargs
         )
 
         return encoder
@@ -98,7 +98,7 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
         # set attention implementation to eager if attention-
         # based explantions are active:
         if kwargs.get('output_attentions', False):
-            self._context_encoder.set_attn_implementation('eager')
+            self.context_encoder.set_attn_implementation('eager')
 
         # create tokenizer arguments:
         tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}
@@ -202,22 +202,48 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
 
 class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase):
     @classmethod
-    def from_pretrained(cls, query_encoder_name_or_path:str, tokenizer_name_or_path:Optional[str]=None, *args, **kwargs):
+    def from_pretrained(cls, query_encoder_name_or_path:str, *,
+            tokenizer_name_or_path:Optional[str]=None,
+            dir:str='embeddings',
+            index:Optional[torch.FloatTensor]=None,
+            **kwargs
+        ) -> 'ExplainableAutoModelForRetrieval':
         encoder = cls()
 
         # load tokenizer:
         if tokenizer_name_or_path is None:
             tokenizer_name_or_path = query_encoder_name_or_path
         encoder._tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name_or_path, *args, **kwargs
+            tokenizer_name_or_path, **kwargs
         )
 
         # load encoder:
         encoder._query_encoder = AutoModel.from_pretrained(
-            query_encoder_name_or_path, *args, **kwargs
+            query_encoder_name_or_path, **kwargs
         )
 
+        # get index dir:
+        encoder._index_dir = dir
+
+        # load index from disk if not specified:
+        if index is None:
+            with open(os.path.join(encoder.index_dir, 'embeddings.pt'), 'rb') as file:
+                encoder._index = torch.load(file).to(encoder.query_encoder.device)
+        else: encoder._index = index.to(encoder.query_encoder.device)
+
         return encoder
+
+    @property
+    def index(self) -> Optional[torch.FloatTensor]:
+        """A tensor of document embeddings."""
+        if hasattr(self, '_index'): return self._index
+        else: return None
+
+    @property
+    def index_dir(self) -> Optional[str]:
+        """The papth of the index directory storing the metadata."""
+        if hasattr(self, '_index_dir'): return self._index_dir
+        else: return None
 
     @property
     def in_tokens(self) -> Optional[List_t]:
@@ -312,17 +338,12 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return gradIn
 
-    def forward(self, query:str, k:int, dir:str='embeddings', *,
-            index:Optional[torch.FloatTensor]=None,
+    def forward(self, query:str, k:int, *,
             reorder:bool=False,
+            output_texts:bool=False,
             max_length:Optional[int]=None,
             **kwargs
         ):
-        # load index from disk if not specified:
-        if index is None:
-            with open(os.path.join(dir, 'embeddings.pt'), 'rb') as file:
-                index = torch.load(file).to(self.query_encoder.device)
-        
         # control gradient computation:
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
@@ -330,7 +351,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # set attention implementation to eager if attention-
         # based explantions are active:
         if kwargs.get('output_attentions', False):
-            self._query_encoder.set_attn_implementation('eager')
+            self.query_encoder.set_attn_implementation('eager')
 
         # create tokenizer arguments:
         tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}
@@ -355,9 +376,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         self.query_encoder.get_input_embeddings().requires_grad_(True)
 
         # register index for gradient computation:
-        index.requires_grad_(True)
-        index.retain_grad()
-        index.grad = None
+        self.index.requires_grad_(True)
+        self.index.retain_grad()
+        self.index.grad = None
 
         # Compute embeddings: take the last-layer hidden state of the [CLS] token
         qry_output = self.query_encoder(inputs_embeds=qry_embeds, **qry_input.to(self.query_encoder.device), **kwargs)
@@ -372,7 +393,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             a.retain_grad()
 
         # Compute dot product:
-        similarity = qry_output.last_hidden_state[:, 0, :] @ index.to(qry_output.last_hidden_state).T
+        similarity = qry_output.last_hidden_state[:, 0, :] @ self.index.to(qry_output.last_hidden_state).T
         similarity, retrieved_ids = torch.sort(similarity, dim=1, descending=True)
         similarity    = similarity[:, :k]
         retrieved_ids = retrieved_ids[:, :k]
@@ -381,7 +402,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         similarity.sum().backward()
 
         # load retrieved docs (for first query):
-        retrieved = metadata_from_pkl(dir, retrieved_ids[0])
+        retrieved = metadata_from_pkl(self.index_dir, retrieved_ids[0])
 
         self._x['context'] = retrieved['input_ids']
         self._in_tokens['context'] = retrieved['in_tokens']
@@ -400,13 +421,13 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             'context': [
                 (ctx.to(qry)@qry.T).detach().cpu()
                 for ctx, qry
-                in zip(retrieved['dPhi'], index.grad[retrieved_ids[0]])
+                in zip(retrieved['dPhi'], self.index.grad[retrieved_ids[0]])
             ]
         }
         # Tensor of shape (bs x encoding_size)
         self._y = {  
             'query':   qry_output.last_hidden_state[:, 0, :].detach().cpu(),
-            'context': index[retrieved_ids].detach().cpu()
+            'context': self.index[retrieved_ids].detach().cpu()
         }
 
         # save gradients with regard to attention weights:
@@ -426,7 +447,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                 'context': [
                     (ctx.to(qry)@qry.T).detach().cpu()
                     for ctx, qry
-                    in zip(retrieved['da'], index.grad[retrieved_ids[0]])
+                    in zip(retrieved['da'], self.index.grad[retrieved_ids[0]])
                 ]
             }
 
@@ -436,6 +457,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # move outputs to cpu:
         similarity = similarity[0].detach().cpu()
         retrieved_ids = retrieved_ids[0].cpu()
+        retrieved_texts = retrieved['texts']
 
         # reorder contexts to orginial document order:
         if not reorder:
@@ -448,4 +470,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                 self._da['context']              = [self._da['context'][i] for i in sorted_ids]
             self._in_tokens['context']           = [self._in_tokens['context'][i] for i in sorted_ids]
 
-        return retrieved_ids, similarity
+            retrieved_texts                      = [retrieved_texts[i] for i in sorted_ids]
+
+        if output_texts: return retrieved_texts, similarity
+        else:            return retrieved_ids, similarity
