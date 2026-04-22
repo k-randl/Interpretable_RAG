@@ -483,45 +483,80 @@ def get_model_type(model_name_or_path:str):
 
     return model_type
 
+chat_templates = None
 def get_chat_template(model_name_or_path:str):
+    global chat_templates
+
     # load dictionary of known templates:
-    try:
-        with open(os.path.join(__RESOURCE_DIR__, 'chat_templates.json'), 'r') as file:
-            templates = json.load(file)
-    except: templates = {}
+    if chat_templates is None:
+        try:
+            with open(os.path.join(__RESOURCE_DIR__, 'chat_templates.json'), 'r') as file:
+                chat_templates = json.load(file)
+        except: chat_templates = {}
 
     # select matching template:
-    try: template = templates[model_name_or_path]
+    try: template = chat_templates[model_name_or_path]
     except KeyError:
         # load tokenizer:
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
 
         # extract chat pattern:
-        pattern = tokenizer.apply_chat_template([{'role':'[ROLE]', 'content':'[CONTENT]'}], add_special_tokens=False, tokenize=False)
-        sot, rest = pattern.split('[ROLE]')
-        sep, eot  = rest.split('[CONTENT]')
+        template = {}
+        for role in ['system', 'user', 'assistant']:
+            try:
+                pattern = tokenizer.apply_chat_template([{'role':role, 'content':'[CONTENT]'}], add_special_tokens=False, tokenize=False)
+                pattern = pattern.split('[CONTENT]')
+                sot = pattern[0]
+                eot = pattern[1] if len(pattern) > 1 else None
 
-        # try to cut system prompts:
-        if sep in sot and eot in sot:
-            sot = sot.split(eot)[-1]
+            except:
+                if 'user' in template:
+                    print(f'WARNING: Error when deocding pattern for role "{role}". Inferring from role "user".')
+                    sot = template['user']['sot']['text'].replace('user', role)
+                    try: eot = template['user']['eot']['text']
+                    except KeyError: eot = None
+                else:
+                    print(f'WARNING: Unable to decode pattern for role "{role}". Skipping.')
+                    continue
 
-        # tokenize pattern:
-        sot_tokens = tokenizer(sot, add_special_tokens=False, return_tensors='np').input_ids
-        sep_tokens = tokenizer(sep, add_special_tokens=False, return_tensors='np').input_ids
-        eot_tokens = tokenizer(eot, add_special_tokens=False, return_tensors='np').input_ids
+            # try to cut system prompts:
+            if 'system' in template:
+                if 'eot' in template['system']:
+                    sot = sot.split(template['system']['eot']['text'])[-1]
+                else:
+                    sot = sot.split(template['system']['sot']['text'])[-1]
 
-        # create new template:
-        template = {
-            'sot': {'tokens': tokenizer.convert_ids_to_tokens(sot_tokens[0]), 'ids': sot_tokens[0].tolist()},
-            'sep': {'tokens': tokenizer.convert_ids_to_tokens(sep_tokens[0]), 'ids': sep_tokens[0].tolist()},
-            'eot': {'tokens': tokenizer.convert_ids_to_tokens(eot_tokens[0]), 'ids': eot_tokens[0].tolist()}
-        }
+            # create new template:
+            template[role] = {}
+
+            # add sot:
+            stripped = sot.strip('\n')
+            if len(stripped) > 0: sot = stripped
+            sot_token_ids = tokenizer(sot, add_special_tokens=False, return_tensors='np').input_ids[0]
+            sot_tokens    = tokenizer.convert_ids_to_tokens(sot_token_ids)
+            template[role]['sot'] = {
+                'text': sot,
+                'tokens': sot_tokens,
+                'ids': sot_token_ids.tolist()
+            }
+
+            # add eot:
+            if eot is None: continue
+            stripped = eot.strip('\n')
+            if len(stripped) > 0: eot = stripped
+            eot_token_ids = tokenizer(eot, add_special_tokens=False, return_tensors='np').input_ids[0]
+            eot_tokens    = tokenizer.convert_ids_to_tokens(eot_token_ids)
+            template[role]['eot'] = {
+                'text': eot,
+                'tokens': eot_tokens,
+                'ids': eot_token_ids.tolist()
+            }
 
         # save new template:
-        templates[model_name_or_path] = template
+        chat_templates[model_name_or_path] = template
         with open(os.path.join(__RESOURCE_DIR__, 'chat_templates.json'), 'w') as file:
-            json.dump(templates, file)
+            json.dump(chat_templates, file)
 
     return template
 
@@ -547,59 +582,85 @@ def decode_chat_template(inputs:Union[List[int], List[str], str], model_name_or_
 
     # deal with string inputs:
     if isinstance(inputs, str):
-        # load tokenizer:
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        sot = tokenizer.decode(template['sot']['ids'])
-        sep = tokenizer.decode(template['sep']['ids'])
-        eot = tokenizer.decode(template['eot']['ids'])
-        del tokenizer
-
         i = 0
         while i < len(inputs):
-            try:
-                role_start = inputs.index(sot, i) + len(sot)
-                role_end   = inputs.index(sep, role_start)
-            except ValueError: return result
-            role = slice(role_start, role_end) if return_indices else inputs[role_start:role_end]
+            roles = []
+            for r in template:
+                sot = template[r]['sot']['text']
+                try: j = inputs.index(sot, i)
+                except ValueError: continue
 
-            try:
-                content_start = role_end + len(sep)
-                content_end   = inputs.index(eot, content_start)
-            except ValueError: content_end = len(inputs)
-            content       = slice(content_start, content_end) if return_indices else inputs[content_start:content_end]
+                try: eot = template[r]['eot']['text']
+                except KeyError: eot = None
 
+                roles.append((r, j, j + len(sot), eot))
+
+            if len(roles) == 0:
+                if len(result) > 0: return result
+
+                try: eot = template['assistant']['eot']['tokens' if use_str else 'ids']
+                except KeyError: eot = None
+                roles.append(('assistant', 0, 0, eot))
+
+            roles.sort(key=lambda item: item[1])
+            role, _, content_start, eot = roles[0]
+
+            if eot is None:
+                if len(roles) > 1: content_end = roles[1][1]
+                else: content_end = len(inputs)
+
+            else:
+                try: content_end = inputs.index(eot, content_start)
+                except ValueError: content_end = len(inputs)
+
+            content = slice(content_start, content_end) if return_indices else inputs[content_start:content_end]
+            
             result.append({'role':role, 'content':content})
-            i = content_end + len(eot)
+            i = content_end + (0 if eot is None else len(eot))
 
         return result
     
     # deal with lists of integers or strings:
     elif hasattr(inputs, '__len__'):
         # make sure we have a list:
-        inputs = list(inputs)
-
+        inputs  = list(inputs)
         use_str = isinstance(inputs[0], str)
-        sot = template['sot']['tokens'] if use_str else template['sot']['ids']
-        sep = template['sep']['tokens'] if use_str else template['sep']['ids']
-        eot = template['eot']['tokens'] if use_str else template['eot']['ids']
 
         i = 0
         while i < len(inputs):
-            try:
-                role_start = find_subseq(inputs, sot, i) + len(sot)
-                role_end   = find_subseq(inputs, sep, role_start)
-            except ValueError: return result
-            role = slice(role_start, role_end) if return_indices else inputs[role_start:role_end]
+            roles = []
+            for r in template:
+                sot = template[r]['sot']['tokens' if use_str else 'ids']
+                try: j = find_subseq(inputs, sot, i)
+                except ValueError: continue
 
-            try:
-                content_start = role_end + len(sep)
-                content_end   = find_subseq(inputs, eot, content_start)
-            except ValueError: content_end = len(inputs)
+                try: eot = template[r]['eot']['tokens' if use_str else 'ids']
+                except KeyError: eot = None
+
+                roles.append((r, j, j + len(sot), eot))
+
+            if len(roles) == 0:
+                if len(result) > 0: return result
+
+                try: eot = template['assistant']['eot']['tokens' if use_str else 'ids']
+                except KeyError: eot = None
+                roles.append(('assistant', 0, 0, eot))
+
+            roles.sort(key=lambda item: item[1])
+            role, _, content_start, eot = roles[0]
+
+            if eot is None:
+                if len(roles) > 1: content_end = roles[1][1]
+                else: content_end = len(inputs)
+
+            else:
+                try: content_end = find_subseq(inputs, eot, content_start)
+                except ValueError: content_end = len(inputs)
+
             content = slice(content_start, content_end) if return_indices else inputs[content_start:content_end]
 
             result.append({'role':role, 'content':content})
-            i = content_end + len(eot)
+            i = content_end + (0 if eot is None else len(eot))
 
         return result
 

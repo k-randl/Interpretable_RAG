@@ -1,12 +1,14 @@
 import os
 import torch
+import signal
+import inspect
 import numpy as np
 import transformers
 import tqdm
 import pickle
 
 from scipy.special import comb
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Ridge
 
 from .utils import decode_chat_template, get_model_type, generate_permutations, sample_perturbations
 
@@ -696,6 +698,10 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # get token probabilities:
                 outputs = super().forward(*args, **kwargs)
 
+                # Fix for Gemma 3 which returns 4D logits [Batch, 1, Seq, Vocab]
+                if hasattr(outputs, 'logits') and outputs.logits.dim() == 4 and outputs.logits.shape[1] == 1:
+                    outputs.logits = outputs.logits.squeeze(1)
+
                 # save token probabilities:
                 if self._explain: self._exp_logits[-1].append(outputs.logits[:,-1:,:].detach().cpu())
                 else:             self._gen_logits.append(outputs.logits[:,-1:,:].detach().cpu())
@@ -830,20 +836,24 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 # prepare model_kwargs:
                 input_ids, _, model_kwargs = self._prepare_model_inputs(input_ids, self.tokenizer.bos_token_id, kwargs)
-                v0, v1 =  [int(i) for i in transformers.__version__.split('.')[:2]]
-                if v0 >= 4 and v1 >= 52:
-                    model_kwargs = self._get_initial_cache_position(
-                        seq_length=input_ids.shape[1],
-                        device=input_ids.device,
-                        model_kwargs=model_kwargs,
-                    )
 
-                else:
-                    model_kwargs = self._get_initial_cache_position(
-                        input_ids=input_ids, 
-                        model_kwargs=model_kwargs
-                    )
-                    
+                # Try to get initial cache position with signature inspection
+                if hasattr(self, '_get_initial_cache_position'):
+                    sig = inspect.signature(self._get_initial_cache_position)
+                    if 'seq_length' in sig.parameters:
+                        # Newer API
+                        model_kwargs = self._get_initial_cache_position(
+                            seq_length=input_ids.shape[1],
+                            device=input_ids.device,
+                            model_kwargs=model_kwargs,
+                        )
+                    else:
+                        # Older API
+                        model_kwargs = self._get_initial_cache_position(
+                            input_ids=input_ids, 
+                            model_kwargs=model_kwargs
+                        )
+
                 with torch.no_grad():
 
                     # calculate p(t_0):
@@ -1164,8 +1174,14 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 p_marginal[:,0] = np.stack([probs[i] for i in indices[1:-1]]) - probs[0]
                 p_marginal[:,1] = probs[-1] - p_marginal[:,0]
 
-                # fit a linear regressor using the SHAP kernel:
-                lr = LinearRegression()
+                # fit a ridge regressor using the SHAP kernel:
+                def _get_shap_weights(z):
+                    l, s = len(z), sum(z)
+                    denominator = comb(l, s) * s * (l - s)
+                    if denominator == 0: return 1e-10
+                    else: return (l-1) / denominator
+
+                lr = Ridge(alpha=0.001, solver='cholesky')  # Fast solver with minimal regularization
                 x  = np.concatenate((
                     #[sets[0], sets[-1]],
                     sets[1:-1],
@@ -1176,8 +1192,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     p_marginal[:,0],
                     p_marginal[:,1]
                 ), axis=0, dtype=float)
-                w  = [1. / (comb(len(z), sum(z)) * (len(z) - sum(z)))
-                      for z in x]
+                w  = [_get_shap_weights(z) for z in x]
                 lr.fit(x, y, w)
 
                 # attributions are estimated SHAP values:
@@ -1189,14 +1204,17 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             def _get_shapley_values_kernel(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, **kwargs) -> NDArray[np.float64]:
                 assert precise is False, 'Kernel SHAP values can only be calculated for approximate values!'
 
-                # fit a linear regressor using the SHAP kernel:
-                lr = LinearRegression()
+                # fit a ridge regressor using the SHAP kernel:
+                def _get_shap_weights(z):
+                    l, s = len(z), sum(z)
+                    denominator = comb(l, s) * s * (l - s)
+                    if denominator == 0: return 1e-10
+                    else: return (l-1) / denominator
+                lr = Ridge(alpha=0.001, solver='cholesky')  # Fast solver with minimal regularization
                 x  = sets[1:-1].astype(float)
                 y  = np.stack([probs[i] for i in indices[1:-1]])
-                w  = [(len(z)-1) / (comb(len(z), sum(z)) * sum(z) * -sum(z-1))
-                      for z in x]
+                w  = [_get_shap_weights(z) for z in x]
                 lr.fit(x, y, w)
-
                 # attributions are estimated SHAP values:
                 attributions = lr.coef_.T
 

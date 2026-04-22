@@ -4,9 +4,9 @@ from math import ceil
 from tqdm.autonotebook import trange
 from sklearn.linear_model import Ridge
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
-from typing import Optional, List, Literal, Union, Callable, Any
+from typing import Optional, List, Literal, Union, Callable, Any, Tuple
 
-from .retrieval import RetrieverExplanationBase, List_t, Array_t, Tensor_t
+from .retrieval import RetrieverExplanationBase, List_t, Tensor_t
 from .utils import sample_perturbations
 
 #=======================================================================#
@@ -427,6 +427,227 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         if output_coverage: result = result + ({'query': coverage_qry, 'context': coverage_ctx},)
         return result
 
+    def lime(self, filter_special_tokens:bool=True, batch_size:int=64, *,
+            max_samples_query:Union[int, Literal['inf', 'auto']]='auto',
+            max_samples_context:Union[int, Literal['inf', 'auto']]='auto',
+            base:Literal['mask', 'pad', 'unk']='unk',
+            kernel_width:int=25,
+            kernel_fn:Optional[Callable[[Any], Any]]=None,
+            output_offset:bool=False,
+            output_coverage:bool=False,
+            verbose:bool=True) -> Union[Tensor_t, Tuple[Tensor_t, dict[str, Any]], Tuple[Tensor_t, dict[str, Any], Any]]:
+        '''Lime scores of the last batch.
+
+        Args:
+            filter_special_tokens:      If `True`, set the importance of special tokens to 0.
+            batch_size:                 Batch size used for calculating the perturbation outputs (default 64).
+            max_samples_query (int):    Maximum number of samples used for computing SHAP atribution values for the query.
+                                        If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
+                                        If `inf` is passed, always computes the precise SHAP values.
+                                        If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
+            max_samples_context (int):  Maximum number of samples used for computing SHAP atribution values for the context documents.
+                                        If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
+                                        If `inf` is passed, always computes the precise SHAP values.
+                                        If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
+            base:                       Optional value for the mask_token. Possible values are ...
+                                        - `'mask'` mask token
+                                        - `'pad'` pad token
+                                        - `'unk'` unk token (default)
+            kernel_width:               Kernel width for the exponential kernel.
+            kernel_fn:                  Similarity kernel that takes euclidean distances and kernel
+                                        width as input and outputs weights in (0,1). If None, defaults to
+                                        an exponential kernel.
+            output_offset:              If `True` returns a tuple for which the first element are the attribution scores
+                                        and the second element are the baseline predictions as a dictionary (default: `False`).
+            output_coverage:            If `True` returns a tuple for which the first element are the attribution scores
+                                        and the last element are the additivity coverage ratios as a dictionary (default: `False`).
+            verbose:                    If `True`, shows a progress bar.
+            
+        Returns:                        Importance scores with shape = (bs, n_inputs)'''
+        assert self._x is not None and self._y is not None and self._special_tokens_mask is not None, \
+            'Must call forward() before lime()'
+
+        # get attention masks:
+        qry_attention_mask = torch.tensor(self._x['query'] != self.tokenizer.pad_token_id,
+                                          device=self.query_encoder.device, dtype=torch.bool)
+        ctx_attention_mask = torch.tensor(self._x['context'] != self.tokenizer.pad_token_id,
+                                          device=self.context_encoder.device, dtype=torch.bool)
+        
+        # get input sizes:
+        num_qrys = len(self._x['query'])
+        num_ctxs = len(self._x['context'])
+        num_inputs = num_qrys + num_ctxs
+
+        num_qry_tokens = qry_attention_mask.sum(dim=1)
+        num_ctx_tokens = ctx_attention_mask.sum(dim=1)
+
+        # generate perturbed prompts:
+        if max_samples_query == 'auto':    max_samples_query = (batch_size // num_inputs) * num_qrys
+        elif max_samples_query == 'inf':   max_samples_query = int(2 ** int(num_qry_tokens.sum()))
+
+        if max_samples_context == 'auto':  max_samples_context = (batch_size // num_inputs) * num_ctxs
+        elif max_samples_context == 'inf': max_samples_context = int(2 ** int(num_ctx_tokens.sum()))
+
+        # get mask token:
+        if   base == 'mask': ptb_id = self.tokenizer.mask_token_id
+        elif base == 'pad':  ptb_id = self.tokenizer.pad_token_id
+        elif base == 'unk':  ptb_id = self.tokenizer.unk_token_id
+        else: raise ValueError(f'Parameter `base` must be one of `\'mask\'`, `\'pad\'`, or `\'unk\'` but is {base}.')
+
+        # sample perturbed inputs:
+        def perturbe_input(indices, input_ids):
+            _ids = input_ids.clone()
+            if len(indices) > 0:
+                _ids[torch.stack(indices)] = ptb_id
+            return _ids
+        qry_ptb = [sample_perturbations(
+                    torch.arange(n),
+                    lambda i: perturbe_input(i, x),
+                    num_samples=max_samples_query//num_qrys) for x, n in zip(self._x['query'], num_qry_tokens)]
+        ctx_ptb = [sample_perturbations(
+                    torch.arange(n),
+                    lambda i: perturbe_input(i, x),
+                    num_samples=max_samples_context//num_ctxs) for x, n in zip(self._x['context'], num_ctx_tokens)]
+
+        # pack perturbed inputs:
+        targets, distances, input_ids = [], [], []
+        for i, (m, s) in enumerate(qry_ptb):
+            targets.extend([(i,-1)]*len(m))
+            distances.extend(m.sum(axis=1).tolist())
+            input_ids.extend(s)
+        for i, (m, s) in enumerate(ctx_ptb):
+            targets.extend([(-1,i)]*len(m))
+            distances.extend(m.sum(axis=1).tolist())
+            input_ids.extend(s)
+
+        # convert to numpy:
+        targets = np.array(targets, dtype=int)
+        distances = np.array(distances, dtype=float)
+
+        # batched dot product:
+        def calculate_sim(a:torch.Tensor, b:torch.Tensor): return a @ b.T
+        calculate_sim_batched = torch.vmap(calculate_sim)
+
+        # get chunk sizes:
+        chunk_size = batch_size//max(num_qrys, num_ctxs)
+
+        # get original outputs:
+        in_qry_output = self._y['query'][None, :, :].to(self.query_encoder.device)
+        in_ctx_output = self._y['context'][None, :, :].to(self.context_encoder.device)
+
+        iterator = None
+        if verbose: iterator = trange(ceil((max_samples_query+max_samples_context)/chunk_size))
+        else:       iterator = range(ceil((max_samples_query+max_samples_context)/chunk_size))
+
+        output_sim = np.empty((len(input_ids), num_qrys, num_ctxs), dtype=float)
+        for i in iterator:
+            batch_qrys, batch_ctxs = list(zip(*targets[i*chunk_size:(i+1)*chunk_size]))
+            batch_input_ids = input_ids[i*chunk_size:(i+1)*chunk_size]
+            batch_output_sim = torch.empty((chunk_size, num_qrys, num_ctxs), dtype=torch.float)
+
+            # process perturbed queries in the batch:
+            batch_qrys     = torch.tensor(batch_qrys)
+            batch_qry_mask = batch_qrys >= 0
+            batch_qrys     = batch_qrys[batch_qry_mask]
+            num_batch_qrys = int(batch_qry_mask.sum())
+            if num_batch_qrys > 0:
+                # get queries only:
+                batch_qry_ids = torch.stack([ids for ids, is_qry in zip(batch_input_ids, batch_qry_mask) if is_qry])
+
+                # init output:
+                batch_qry_output = in_qry_output.repeat(num_batch_qrys, 1, 1).clone()
+
+                # compute embeddings: take the last-layer hidden state of the [CLS] token
+                batch_qry_output[torch.arange(num_batch_qrys),batch_qrys,:] = self.query_encoder(
+                    input_ids=batch_qry_ids.to(self.query_encoder.device),
+                    attention_mask=qry_attention_mask[batch_qrys]
+                ).last_hidden_state[:, 0, :]
+
+                # compute dot product similarity:
+                batch_output_sim[batch_qry_mask] = calculate_sim_batched(batch_qry_output, in_ctx_output.repeat(num_batch_qrys, 1, 1)).detach().cpu()
+
+            # process perturbed contexts in the batch:
+            batch_ctxs     = torch.tensor(batch_ctxs)
+            batch_ctx_mask = batch_ctxs >= 0
+            batch_ctxs     = batch_ctxs[batch_ctx_mask]
+            num_batch_ctxs = int(batch_ctx_mask.sum())
+            if num_batch_ctxs > 0:
+                # get contexts only:
+                batch_ctx_ids = torch.stack([ids for ids, is_ctx in zip(batch_input_ids, batch_ctx_mask) if is_ctx])
+
+                # init output:
+                batch_ctx_output = in_ctx_output.repeat(num_batch_ctxs, 1, 1).clone()
+
+                # compute embeddings: take the last-layer hidden state of the [CLS] token
+                batch_ctx_output[torch.arange(num_batch_ctxs),batch_ctxs,:] = self.context_encoder(
+                    input_ids=batch_ctx_ids.to(self.context_encoder.device),
+                    attention_mask=ctx_attention_mask[batch_ctxs]
+                ).last_hidden_state[:, 0, :]
+
+                # compute dot product similarity:
+                batch_output_sim[batch_ctx_mask] = calculate_sim_batched(in_qry_output.repeat(num_batch_ctxs, 1, 1), batch_ctx_output).detach().cpu()
+
+            output_sim[i*chunk_size:(i+1)*chunk_size] = batch_output_sim.numpy()
+
+        # kernel function:
+        # (see https://github.com/marcotcr/lime/blob/master/lime/lime_text.py)
+        if kernel_fn is None:
+            def kernel_fn(d):
+                return np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
+
+        # pack inputs:
+        x = []
+        m = []
+        for q in range(num_qrys):
+            item = self._x['query'][q,:][None,:].detach().cpu().numpy().repeat(len(output_sim), axis=0)
+            item[targets[:,0] == q,:] = [ids for ids, i in zip(input_ids, targets[:,0]) if i == q]
+            x.append(item[:,qry_attention_mask[q,:].cpu().numpy()])
+        for c in range(num_ctxs):
+            item = self._x['context'][c,:][None,:].detach().cpu().numpy().repeat(len(output_sim), axis=0)
+            item[targets[:,1] == c,:] = [ids for ids, i in zip(input_ids, targets[:,1]) if i == c]
+            x.append(item[:,ctx_attention_mask[c,:].cpu().numpy()])
+        x = np.concat(x, axis=1)
+
+        # pack outputs:
+        y = output_sim.reshape(output_sim.shape[0], -1)
+
+        # get weights:
+        w = kernel_fn(distances)
+
+        # fit linear regressor:
+        lr = Ridge(alpha=1, fit_intercept=True, solver='cholesky')
+        lr.fit(x, y, sample_weight=w)
+        prediction_score = lr.score(x, y, sample_weight=w)
+
+        # decode:
+        lime = {key:torch.zeros(self._x[key].shape, dtype=torch.float) for key in self._x}
+        offset = 0
+        for q, n in enumerate(num_qry_tokens):
+            lime['query'][q,:n] = torch.tensor(lr.coef_[:,offset:offset+n].sum(axis=0))
+            offset += n
+        for c, n in enumerate(num_ctx_tokens):
+            lime['context'][c,:n] = torch.tensor(lr.coef_[:,offset:offset+n].sum(axis=0))
+            offset += n
+
+        # check additivity:
+        #coverage_qry = lime['query'].sum(axis=-1) / (in_qry_similarity - bl_qry_similarity).sum()
+        #coverage_ctx = lime['context'].sum(axis=-1) / (in_ctx_similarity - bl_ctx_similarity).squeeze()
+        #if (coverage_qry < .95).any(): print(f'WARNING: query attributions add up to only {coverage_qry.min()*100.:.1f}% of the score. Please increase number of steps!')
+        #if (coverage_ctx < .95).any(): print(f'WARNING: context attributions add up to only {coverage_ctx.min()*100.:.1f}% of the score. Please increase number of steps!')
+
+        if filter_special_tokens:
+            # set the importance of special tokens to 0.
+            lime = {key: lime[key] * self._special_tokens_mask[key] for key in lime}
+
+        if not (output_offset or output_coverage):
+            return lime
+
+        result = (lime, )
+        if output_offset:   result = result + ({'query': sum(lr.intercept_), 'context': lr.intercept_},)
+        #if output_coverage: result = result + ({'query': coverage_qry, 'context': coverage_ctx},)
+        if output_coverage: result = result + (prediction_score,)
+        return result
+
     def forward(self, query:str, contexts:List[str], k:Optional[int]=None, *,
             reorder:bool=False,
             batch_size:Optional[int]=None,
@@ -437,6 +658,12 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # control gradient computation:
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
+
+        # set attention implementation to eager if attention-
+        # based explantions are active:
+        if kwargs.get('output_attentions', False):
+            self._query_encoder.set_attn_implementation('eager')
+            self._context_encoder.set_attn_implementation('eager')
 
         # create tokenizer arguments:
         tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}

@@ -95,6 +95,11 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
 
+        # set attention implementation to eager if attention-
+        # based explantions are active:
+        if kwargs.get('output_attentions', False):
+            self._context_encoder.set_attn_implementation('eager')
+
         # create tokenizer arguments:
         tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}
         if max_length is not None:
@@ -307,7 +312,12 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return gradIn
 
-    def forward(self, query:str, k:int, dir:str='embeddings', *, index:Optional[torch.FloatTensor]=None, reorder:bool=False, max_length:Optional[int]=None, **kwargs):
+    def forward(self, query:str, k:int, dir:str='embeddings', *,
+            index:Optional[torch.FloatTensor]=None,
+            reorder:bool=False,
+            max_length:Optional[int]=None,
+            **kwargs
+        ):
         # load index from disk if not specified:
         if index is None:
             with open(os.path.join(dir, 'embeddings.pt'), 'rb') as file:
@@ -316,6 +326,11 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # control gradient computation:
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)
+
+        # set attention implementation to eager if attention-
+        # based explantions are active:
+        if kwargs.get('output_attentions', False):
+            self._query_encoder.set_attn_implementation('eager')
 
         # create tokenizer arguments:
         tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}

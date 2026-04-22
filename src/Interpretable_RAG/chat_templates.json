@@ -1,1 +1,44 @@
-{"meta-llama/Llama-3.1-8B-Instruct": {"sot": {"tokens": ["<|start_header_id|>"], "ids": [128006]}, "sep": {"tokens": ["<|end_header_id|>", "\u010a\u010a"], "ids": [128007, 271]}, "eot": {"tokens": ["<|eot_id|>"], "ids": [128009]}}, "meta-llama/Llama-3.3-70B-Instruct": {"sot": {"tokens": ["<|start_header_id|>"], "ids": [128006]}, "sep": {"tokens": ["<|end_header_id|>", "\u010a\u010a"], "ids": [128007, 271]}, "eot": {"tokens": ["<|eot_id|>"], "ids": [128009]}}, "meta-llama/Llama-3.1-70B-Instruct": {"sot": {"tokens": ["<|start_header_id|>"], "ids": [128006]}, "sep": {"tokens": ["<|end_header_id|>", "\u010a\u010a"], "ids": [128007, 271]}, "eot": {"tokens": ["<|eot_id|>"], "ids": [128009]}}}
+{
+    "meta-llama/Llama-3.1-8B-Instruct": {
+        "system": {
+            "sot": {"text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n", "tokens": ["<|begin_of_text|>", "<|start_header_id|>", "system", "<|end_header_id|>", "\u010a\u010a"], "ids": [128000, 128006, 9125, 128007, 271]},
+            "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}
+        },
+        "user": {
+            "sot": {"text": "<|start_header_id|>user<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "user", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 882, 128007, 271]},
+            "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}
+        },
+        "assistant": {
+            "sot": {"text": "<|start_header_id|>assistant<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "assistant", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 78191, 128007, 271]},
+            "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}
+        }
+    },
+    "meta-llama/Llama-3.3-70B-Instruct": {
+        "system": {
+            "sot": {"text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n", "tokens": ["<|begin_of_text|>", "<|start_header_id|>", "system", "<|end_header_id|>", "\u010a\u010a"], "ids": [128000, 128006, 9125, 128007, 271]},
+            "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}
+        },
+        "user": {
+            "sot": {"text": "<|start_header_id|>user<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "user", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 882, 128007, 271]},
+            "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}
+        },
+        "assistant": {
+            "sot": {"text": "<|start_header_id|>assistant<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "assistant", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 78191, 128007, 271]},
+            "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}
+        }
+    },
+    "meta-llama/Llama-3.1-70B-Instruct": {
+        "system": {
+            "sot": {"text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n", "tokens": ["<|begin_of_text|>", "<|start_header_id|>", "system", "<|end_header_id|>", "\u010a\u010a"], "ids": [128000, 128006, 9125, 128007, 271]},
+            "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}
+        },
+        "user": {
+            "sot": {"text": "<|start_header_id|>user<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "user", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 882, 128007, 271]},
+            "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}
+        },
+        "assistant": {
+            "sot": {"text": "<|start_header_id|>assistant<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "assistant", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 78191, 128007, 271]},
+            "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}
+        }
+    }
+}

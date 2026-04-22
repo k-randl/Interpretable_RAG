@@ -55,7 +55,7 @@ def compute_gen_nucleus_probs(gen_probs: torch.Tensor, p: float = 0.9) -> np.nda
     return _nucleus_sampling(gen_probs.float(), p=p).mean(dim=1).numpy()
 
 
-def _get_shapley_values_precise(probs: List[np.ndarray], shap_cache: np.ndarray) -> NDArray[np.float_]:
+def _get_shapley_values_precise(probs: List[np.ndarray], shap_cache: np.ndarray) -> NDArray[np.float64]:
     """Compute precise Shapley values using all permutations."""
     # Get the shape of the permutations matrix: (num_permutations, num_documents)
     num_permutations, num_docs = shap_cache.shape
@@ -98,7 +98,7 @@ def _get_shapley_values_precise(probs: List[np.ndarray], shap_cache: np.ndarray)
     return p_shap[1:]
 
 
-def _get_shapley_values_kernel(probs: List[np.ndarray], shap_cache: np.ndarray) -> NDArray[np.float_]:
+def _get_shapley_values_kernel(probs: List[np.ndarray], shap_cache: np.ndarray) -> NDArray[np.float64]:
     """Compute approximate Shapley values using kernel method."""
     # fit a linear regressor using the SHAP kernel:
     lr = LinearRegression()
@@ -123,7 +123,7 @@ def get_shapley_values(
     aggregation: Literal['token', 'sequence', 'bow', 'nucleus'] = 'token',
     shap_precise: bool = True,
     **kwargs
-) -> NDArray[np.float_]:
+) -> NDArray[np.float64]:
     """
     Generates Shapley feature attribution values for the chosen aggregation method.
 

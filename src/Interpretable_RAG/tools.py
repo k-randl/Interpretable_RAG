@@ -3,7 +3,11 @@ import pandas as pd
 import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModel
-import faiss
+try:
+    import faiss
+except ImportError:
+    faiss = None
+    print("WARNING: Could not import faiss. Some functionality may be unavailable.")
 from tqdm.auto import tqdm
 
 
@@ -110,7 +114,7 @@ def embed_passages_snowflake(queries, model,tokenizer, query=True, max_length=51
 ### The function uses the first token of the last hidden state as the embedding for the context ###
 '''
 
-def generate_context_embeddings(texts,model_name = 'facebook/dragon-plus-query-encoder',output_folder = '/home/anonymized_user_1/raid/anonymized_user_2/code/Interpretable_RAG/data/passages_tensors/', step = 256):
+def generate_context_embeddings(texts, output_folder, model_name='facebook/dragon-plus-query-encoder', step = 256):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     context_encoder = AutoModel.from_pretrained(model_name, device_map='auto')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -293,3 +297,56 @@ def sniff_file_dialect(filepath: str, sample_size: int = 2048):
     except Exception as e:
         print(f"An error occurred: {e}")
         return None, None
+
+# === Index Management Functions (consolidated from index_res.py) ===
+
+def load_trained_index(index_path):
+    """
+    Load a pre-trained FAISS index from a file.
+
+    Args:
+        index_path (str): Path to the pre-trained index file.
+
+    Returns:
+        faiss.Index: The loaded FAISS index.
+    """
+    print(f"Loading pre-trained index from {index_path}...")
+    index = faiss.read_index(index_path)
+    print("Index loaded successfully.")
+    return index
+
+
+def save_index(index, output_path):
+    """
+    Save a FAISS index to a file.
+
+    Args:
+        index (faiss.Index): The FAISS index to save.
+        output_path (str): Path to save the index file.
+    """
+    print(f"Saving index to {output_path}...")
+    faiss.write_index(index, output_path)
+    print("Index saved successfully.")
+
+
+def create_flat_index(d, measure='IP'):
+    """
+    Create a Flat index for exact nearest neighbor search.
+    
+    Args:
+        d (int): Dimensionality of the vectors.
+        measure (str): Distance measure - 'L2', 'euclidean', 'IP', or 'inner_product'.
+    
+    Returns:
+        faiss.Index: A FAISS Flat index.
+    """
+    assert measure.lower() in ['l2', 'euclidean', 'inner_product', 'ip'], "Invalid measure"
+    if measure.lower() in ['l2', 'euclidean']:
+        print("Creating a Flat index with L2 distance...")
+        index = faiss.IndexFlatL2(d)
+        print("Flat index created.")
+    elif measure.lower() in ['inner_product', 'ip']:
+        print("Creating a Flat index with Inner Product distance...")
+        index = faiss.IndexFlatIP(d)
+        print("Flat index created.")
+    return index
