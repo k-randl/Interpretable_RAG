@@ -598,7 +598,7 @@ def decode_chat_template(inputs:Union[List[int], List[str], str], model_name_or_
             if len(roles) == 0:
                 if len(result) > 0: return result
 
-                try: eot = template['assistant']['eot']['tokens' if use_str else 'ids']
+                try: eot = template['assistant']['eot']['text']
                 except KeyError: eot = None
                 roles.append(('assistant', 0, 0, eot))
 

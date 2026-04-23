@@ -15,6 +15,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 from src.Interpretable_RAG.tools import *
+from src.Interpretable_RAG.perturbations import PromptPerturbationModule
 
 
 def parse_max_samples(value: str):
@@ -91,6 +92,30 @@ def create_context_variations(contexts: dict, num_docs: int) -> dict:
         'randomized': {k: np.random.choice(v, min(num_docs, len(v)), replace=False).tolist() for k, v in contexts.items()},
         'no_duplicates': {k: list(dict.fromkeys(v))[:num_docs] for k, v in contexts.items()}
     }
+    
+    # Generate Setups A and B variations
+    perturbator = PromptPerturbationModule()
+    # Assume all unique docs from all contexts form the corpus for Setup B
+    corpus_docs = list(set([doc for docs in contexts.values() for doc in docs]))
+    
+    setup_a_variants = {'A1': {}, 'A2': {}, 'A3': {}}
+    setup_b_variants = {'B1': {}, 'B2': {}, 'B3': {}}
+    
+    k = num_docs // 2 if num_docs >= 2 else 1
+    
+    for qid, docs in contexts.items():
+        if len(docs) >= k:
+            a_vars = perturbator.generate_setup_a(docs, k=k)
+            for var_name, var_docs in a_vars.items():
+                setup_a_variants[var_name][qid] = var_docs
+                
+            b_vars = perturbator.generate_setup_b(docs[:k], corpus_docs, k=k)
+            for var_name, var_docs in b_vars.items():
+                setup_b_variants[var_name][qid] = var_docs
+                
+    variations.update(setup_a_variants)
+    variations.update(setup_b_variants)
+    
     print("INFO: Variations created.")
     return variations
 
@@ -190,6 +215,8 @@ def main():
     parser.add_argument("--run_original", action='store_true', help="Run the experiment with the original contexts.")
     parser.add_argument("--run_randomized", action='store_true', help="Run with contexts in random order.")
     parser.add_argument("--run_no_duplicates", action='store_true', help="Run with contexts without duplicates.")
+    parser.add_argument("--run_setup_a", action='store_true', help="Run Setup A variants (A1, A2, A3).")
+    parser.add_argument("--run_setup_b", action='store_true', help="Run Setup B variants (B1, B2, B3).")
 
     args = parser.parse_args()
 
@@ -220,6 +247,13 @@ def main():
     if args.run_no_duplicates:
         run_single_experiment('no_duplicates', context_variations['no_duplicates'], queries_df, model, args)
         
+    if args.run_setup_a:
+        for variant in ['A1', 'A2', 'A3']:
+            run_single_experiment(variant, context_variations[variant], queries_df, model, args)
+            
+    if args.run_setup_b:
+        for variant in ['B1', 'B2', 'B3']:
+            run_single_experiment(variant, context_variations[variant], queries_df, model, args)
     print("\nPipeline completed.")
 #%%
 if __name__ == "__main__":

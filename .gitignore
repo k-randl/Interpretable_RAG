@@ -35,3 +35,6 @@ src/longdocfactscore/*
 EFRA Validation dataset - Context Relevancy V2_modified.csv
 align_data.py
 generation.old.py
+
+paper/*
+hugginface_token.txt
