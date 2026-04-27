@@ -379,10 +379,10 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float64], x_labels:Optional[List[s
 # Plots for retrieval:                                               #
 #====================================================================#
 
-from .retrieval import RetrieverExplanationBase
+from .retrieval import Methods_t, RetrieverExplanationBase
 
 def plot_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
+        method:Methods_t='intGrad',
         absolute:bool=True,
         figsize: Tuple[int, int] = (12, 6),
         cmap:str='tab10',
@@ -453,7 +453,7 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, document_nam
     else: return fig
 
 def higlight_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
+        method:Methods_t='intGrad',
         threshold:float=0.0,
         token_processor:Optional[Callable[[str],str]]=None,
         cmap:str='ragbin',
@@ -543,7 +543,7 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
     else: return html_str
 
 def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *, 
-        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
+        method:Methods_t='intGrad',
         normalize:bool=True,
         threshold:float=.9,
         figsize: Tuple[int, int] = (12, 6),
@@ -616,7 +616,7 @@ def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, docu
     else: return fig
 
 def visualize_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
+        method:Methods_t='intGrad',
         cmap:str='ragbin',
         show:bool=True,
         **kwargs
@@ -1019,7 +1019,7 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
         threshold:float=.5,
         retriever_token_processor:Optional[Callable[[str],str]]=None,
         generator_token_processor:Optional[Callable[[str],str]]=None,
-        retriever_method:Literal['grad', 'gradIn', 'aGrad', 'intGrad']='intGrad',
+        retriever_method:Methods_t='intGrad',
         query_cmap:str='ragbin',
         document_cmap:str='tab10',
         show:bool=True,

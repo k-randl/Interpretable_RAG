@@ -25,7 +25,7 @@ MAX_GEN_LEN = 256
 generator = ExplainableAutoModelForGeneration.from_pretrained(
     pretrained_model_name_or_path='meta-llama/Llama-3.1-8B-Instruct',
     device_map='auto',
-    torch_dtype=torch.bfloat16
+    dtype=torch.bfloat16
 )
 
 # We use msmarco query and passages as an example

@@ -153,7 +153,7 @@ def load_embeddings_from_folder(path):
 ### The function saves the index to disk if a save_folder is provided ###
 '''
 
-def create_faiss_index_flat(embeddings, save_folder:Optional[str]=None, type_index:Literal['IP','L2']='IP'):
+def create_faiss_index_flat(embeddings, save_path:Optional[str]=None, type_index:Literal['IP','L2']='IP'):
     assert type_index in ['IP','L2'], "Invalid index type. Choose from ['IP', 'L2'], default is IP"
     # Create a FAISS index
     num_vectors = len(embeddings)
@@ -167,9 +167,9 @@ def create_faiss_index_flat(embeddings, save_folder:Optional[str]=None, type_ind
     print(f'Index created with {num_vectors} vectors of dimension {dim}')
     # Add vectors to the FAISS index
     faiss_index.add(np.array(embeddings, dtype=np.float32))
-    if save_folder is not None:
-        print(f'Saving index to {save_folder}')
-        faiss.write_index(faiss_index, save_folder)
+    if save_path is not None:
+        print(f'Saving index to {save_path}')
+        faiss.write_index(faiss_index, save_path)
     return faiss_index
 
 

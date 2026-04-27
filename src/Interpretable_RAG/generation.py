@@ -13,7 +13,7 @@ from sklearn.linear_model import Ridge
 from .utils import decode_chat_template, get_model_type, generate_permutations, sample_perturbations
 
 from numpy.typing import NDArray
-from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable, Callable
+from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable, Callable, TypeAlias
 
 from abc import ABCMeta, abstractmethod
 
@@ -22,6 +22,9 @@ from abc import ABCMeta, abstractmethod
 #=======================================================================#
 
 MAXINT = int(2**31 - 1) # Maximum value for signed int32
+
+AGGREGATIONS = ('token', 'sequence', 'bow', 'nucleus')
+Aggregations_t:TypeAlias = Literal['token', 'sequence', 'bow', 'nucleus']
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -86,14 +89,15 @@ def _nucleus_sampling(probs, p=0.9):
 
     return probs_filtered
 
-def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=None) -> List[Dict[str,str]]:
+def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=None, max_document_size:Optional[int]=None) -> List[Dict[str,str]]:
     """
     Creates chat-style messages for RAG using LLaMA-style chat template.
 
     Args:
-        query (str):        The user's query.
-        contexts (list):    A list of strings representing the retrieved documents.
-        system (str):       An optional system prompt.
+        query (str):               The user's query.
+        contexts (list):           A list of strings representing the retrieved documents.
+        system (str):              An optional system prompt.
+        max_document_size (int): An optional size limit of context documents in characters.
 
     Returns:
         A list of messages in chat format suitable for tokenizer.apply_chat_template().
@@ -107,6 +111,12 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
             "Be thorough and accurate, and cite documents when useful. "
             "Keep the answer under 200 words."
         )
+
+    # Apply size limit
+    if max_document_size is not None:
+        for i, doc in enumerate(contexts):
+            if len(doc) > max_document_size:
+                contexts[i] = doc[:max_document_size - 3] + '...'
 
     # Format the context into a single message
     context_text = "\n\n".join([f"Document {i+1}:\n{doc}" for i, doc in enumerate(contexts)])
@@ -204,7 +214,7 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
     @abstractmethod
     def get_shapley_values(self,
             key:Union[Literal['query', 'context'], None],
-            aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
+            aggregation:Aggregations_t='token',
             **kwargs
         ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
         """Generates Shapley feature attribution values for the chosen aggregation method.
@@ -222,7 +232,7 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
         raise NotImplementedError()
 
     def save_values(self, path:Optional[str]=None, *,
-            aggregations:Optional[List[Literal['token', 'sequence', 'bow', 'nucleus']]]=None,
+            aggregations:Optional[List[Aggregations_t]]=None,
         ) -> Union[str, None]:
         """Saves the explanation data to a file.
 
@@ -243,7 +253,7 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
         }
 
         if aggregations is None:
-            aggregations = ['token', 'sequence', 'bow', 'nucleus']
+            aggregations = list(AGGREGATIONS)
 
         for aggregation in aggregations:
             data_to_save['shapley_values_' + aggregation] = self.get_shapley_values(None, aggregation)
@@ -356,7 +366,7 @@ class GeneratorExplanation(GeneratorExplanationBase):
 
     def get_shapley_values(self,
             key:Union[Literal['query', 'context'], None],
-            aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
+            aggregation:Aggregations_t='token',
             **kwargs
         ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
         """Generates Shapley feature attribution values for the chosen aggregation method.
@@ -492,6 +502,9 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                         'need to be called at least once before accessing `is_precise`!'
                     )
 
+                if self._shap_cache['query'] is None:
+                    return False
+
                 # return probability of each token in the original generation:
                 return self._shap_cache['query']['precise']
 
@@ -504,6 +517,9 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                         '`generate(...)`, `compare(...)`, and `get_shapley_values(...)` ' +
                         'need to be called at least once before accessing `is_precise`!'
                     )
+
+                if self._shap_cache['context'] is None:
+                    return False
 
                 # return probability of each token in the original generation:
                 return self._shap_cache['context']['precise']
@@ -655,7 +671,6 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 return [t.mean(dim=1).float().numpy() for t in probs]
             
 
-            #@property
             def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
                 """Average probability of each token in the vocabulary of being generated given the original input."""
                 # generate(...) needs to be called first:
@@ -671,7 +686,6 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # return accumulated probability of each token in the vocabulary:
                 return _nucleus_sampling(probs.float(),p=p).mean(dim=1).numpy()
 
-            #@property
             def cmp_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
                 """Average probability of each token in the vocabulary of being generated given the compared input."""
                 # compare(...) needs to be called first:
@@ -912,11 +926,12 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     batch_size:int=32,
                     max_samples_query:Union[int, Literal['inf', 'auto']]='auto',
                     max_samples_context:Union[int, Literal['inf', 'auto']]='auto',
+                    max_document_size:Optional[int]=None,
                     conditional:bool=True,
                     complementary:Union[bool,Literal['no_mc']]=True,
                     system:Optional[str]=None,
                     **kwargs
-                ):
+                ) -> List[Dict[Literal['role','content'],str]]:
                 """Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
 
                 Args:
@@ -931,6 +946,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                                                 If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
                                                 If `inf` is passed, always computes the precise SHAP values.
                                                 If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
+                    max_document_size (int):    An optional size limit of context documents in characters.
                     conditional (bool):         Whether to compute the compared values conditioned on the original generation (default: `True`).
                     complementary (bool):       If `True` is passed and kernel SHAP approximation is active, samples will be piered complements (default: `True`). 
                     system (str):               An optional system prompt.
@@ -949,7 +965,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 kwargs['output_scores'] = True
 
                 # generate output:
-                complete_rag_prompt = create_rag_prompt(query, contexts, system=system)
+                complete_rag_prompt = create_rag_prompt(query, contexts, system=system, max_document_size=max_document_size)
                 output = self.generate(
                     [self.tokenizer.apply_chat_template(complete_rag_prompt, tokenize=False)],
                     **kwargs
@@ -972,14 +988,18 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 self._shap_cache, perturbed_prompts = {}, {}
                 self._shap_cache['query'], perturbed_prompts['query'] = self.__generate_prompts(
                     self._qry_tokens,                                                        # permute the query
-                    lambda items:create_rag_prompt(''.join(items), contexts, system=system), # build a prompt for each permutation
+                    lambda items:create_rag_prompt(''.join(items), contexts,                 # build a prompt for each permutation
+                                                   system=system, max_document_size=max_document_size), 
                     max_samples_query,
+                    batch_size,
                     complementary
                 )
                 self._shap_cache['context'], perturbed_prompts['context'] = self.__generate_prompts(
                     contexts,                                                    # permute the contexts
-                    lambda items:create_rag_prompt(query, items, system=system), # build a prompt for each permutation
+                    lambda items:create_rag_prompt(query, items,                 # build a prompt for each permutation
+                                                   system=system, max_document_size=max_document_size),
                     max_samples_context,
+                    batch_size,
                     complementary
                 )
 
@@ -987,14 +1007,16 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 perturbed_prompts_combined = perturbed_prompts['query'][:-1] + perturbed_prompts['context'][1:]
 
                 cache  = self._shap_cache['query']
-                offset = len(perturbed_prompts['context']) - 2
-                if cache['precise']: cache['indices'][:,-1] += offset
-                else: cache['indices'][-1] += offset
+                if cache is not None:
+                    offset = len(perturbed_prompts['context']) - 2
+                    if cache['precise']: cache['indices'][:,-1] += offset
+                    else: cache['indices'][-1] += offset
 
                 cache = self._shap_cache['context']
-                offset = len(perturbed_prompts['query']) - 2
-                if cache['precise']: cache['indices'][:,1:] += offset
-                else: cache['indices'][1:] += offset
+                if cache is not None:
+                    offset = len(perturbed_prompts['query']) - 2
+                    if cache['precise']: cache['indices'][:,1:] += offset
+                    else: cache['indices'][1:] += offset
 
                 # generate comparison output:
                 num_batches = int(np.ceil(len(perturbed_prompts_combined[:-1]) / batch_size))
@@ -1016,20 +1038,34 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 return complete_rag_prompt + decode_chat_template(output[0], self.config.name_or_path) 
 
-            def __generate_prompts(self, items, func, max_samples, complementary):
+            def __generate_prompts(self, items, func, max_samples, batch_size, complementary):
                 # calculate number of samples needed for precise calculation:
                 n = 2 ** len(items)
 
+                # compute minimum number of necessary samples (at least 0.1% of the max):
+                min_samples = max(n//1000, len(items)*10)
+                min_batches = max(1, min_samples//batch_size)
+                min_samples = min_batches*batch_size
+
                 # generate prompts:
-                if max_samples >= n:
+                if max_samples == 0:
+                    # do not generate prompts:
+                    perturbed_prompts = []
+                    cache = None
+
+                elif max_samples >= n or min_samples >= n:
+                    max_samples = max(max_samples, min_samples)
+
                     # generate prompts for perturbed inputs (precise SHAP values):
                     permutations, new_items, perturbed_prompts = generate_permutations(items, func)
                     cache = {'precise': True, 'indices': permutations, 'new_docs': new_items}
 
                 elif max_samples < n:
+                    max_samples = max(max_samples, min_samples)
+
                     # sample prompts for kernel SHAP:
                     perturbations, perturbed_prompts = sample_perturbations(items, func, max_samples, complementary=(complementary!=False))
-                    cache = {'precise': False, 'complementary':(complementary==True), 'indices': np.arange(perturbations.shape[0]), 'sets': perturbations}
+                    cache = {'precise': False, 'complementary': (complementary==True), 'indices': np.arange(perturbations.shape[0]), 'sets': perturbations}
 
                 else: raise ValueError(f'Unknown value for parameter `max_samples`: {max_samples}')
 
@@ -1038,7 +1074,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
             def get_shapley_values(self,
                 key:Union[Literal['query', 'context'], None],
-                aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
+                aggregation:Aggregations_t='token',
                 num_samples:int=100,
                 sample_size:int=10,
                 **kwargs
@@ -1090,7 +1126,8 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # Call actual method:
                 result = {'query': None, 'context': None} if key is None else {key: None}
                 for k in result:
-                    if self._shap_cache[k]['precise']: result[k] = self._get_shapley_values_precise(probs, **self._shap_cache[k])
+                    if self._shap_cache[k] is None: result[k] = None
+                    elif self._shap_cache[k]['precise']: result[k] = self._get_shapley_values_precise(probs, **self._shap_cache[k])
                     else: result[k] = self._get_shapley_values_monte_carlo(probs, num_samples=num_samples, sample_size=sample_size, **self._shap_cache[k])
 
                 return result if key is None else result[key]
@@ -1124,7 +1161,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     p_shap[j] = p_marginal[new_docs == j].mean(0)
 
                 # Return SHAP values for all but the baseline (first one)
-                return p_shap
+                return p_shap.squeeze()
 
             def _get_shapley_values_monte_carlo(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float64]:
                 assert precise is False, 'Monte Carlo SHAP values can only be calculated for approximate values!'
@@ -1296,13 +1333,11 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
     
 
-    #@property
     @abstractmethod
     def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
         """Average probability of each token in the vocabulary of being generated given the original input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
-    #@property
     @abstractmethod
     def cmp_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
         """Average probability of each token in the vocabulary of being generated given the compared input."""
@@ -1353,7 +1388,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             complementary:Union[bool,Literal['no_mc']]=True,
             system:Optional[str]=None,
             **kwargs
-        ):
+        ) -> List[Dict[Literal['role','content'],str]]:
         """Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
 
         Args:
@@ -1380,7 +1415,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
     @abstractmethod
     def get_shapley_values(self,
             key:Union[Literal['query', 'context'], None],
-            aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
+            aggregation:Aggregations_t='token',
             num_samples:int=100,
             sample_size:int=10,
             **kwargs

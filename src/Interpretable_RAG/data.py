@@ -1,4 +1,5 @@
 import os
+import regex as re
 from tqdm import tqdm
 from html.parser import HTMLParser
 from urllib.request import urlretrieve
@@ -13,10 +14,11 @@ from nltk.tokenize import PunktSentenceTokenizer, word_tokenize
 SENT_TOKENIZER = PunktSentenceTokenizer()
 
 class HTMLSplitter(HTMLParser):
-    def __init__(self):
+    def __init__(self, drop_tables:bool=True):
         super().__init__()
         self.reset()
         self.strict = False
+        self.drop_tables = drop_tables
         self.convert_charrefs= True
         self.text = ''
         self.paused = 0
@@ -76,8 +78,18 @@ class HTMLSplitter(HTMLParser):
         if tag in ('head','script','style'):
             self.paused += 1
 
-        elif tag in ('table', 'tr', 'th', 'td'):
-            self.text += f'<{tag}>' if self.ends_with_newline else f'\n<{tag}>'
+        elif tag == 'table':
+            if self.drop_tables: self.paused += 1
+            else: self.text = self.text.strip() + f'\n\n<{tag}>'
+
+        elif self.paused > 0:
+            return
+
+        elif tag == 'tr' and not self.drop_tables:
+            self.text += f'<{tag}>' if self.ends_with_space else f' <{tag}>'
+
+        elif tag in ('th', 'td') and not self.drop_tables:
+            self.text += f'<{tag}>'
         
         elif tag == 'b' or tag == 'strong':
             self.text += '**' if self.ends_with_space else ' **'
@@ -85,16 +97,15 @@ class HTMLSplitter(HTMLParser):
         elif tag == 'i':
             if not self.ends_with_space:
                 self.text += '*' if self.ends_with_space else ' *'
-        
+
         elif tag == 'li':
             self.text += '  - ' if self.ends_with_newline else '\n  - '
-        
+
         elif tag == 'p':
-            if not self.ends_with_newline:
-                self.text += '\n'
-        
+            self.text = self.text.strip() + '\n\n'
+
         elif tag.startswith('h'):
-            self.text += '\n**' if self.ends_with_newline else '\n\n**'
+            self.text = self.text.strip() + '\n\n**'
 
         elif not self.ends_with_space:
             self.text += ' '
@@ -134,21 +145,30 @@ class HTMLSplitter(HTMLParser):
         if tag in ('head','script','style'):
             self.paused -= 1
 
-        elif tag in ('table', 'tr', 'th', 'td'):
-            self.text += f'</{tag}>'
-        
+        elif tag == 'table':
+            if self.drop_tables: self.paused -= 1
+            else: self.text = self.text.strip() + f'</{tag}>\n\n'
+
+        elif self.paused > 0:
+            return
+
+        elif tag == 'tr' and not self.drop_tables:
+            self.text = self.text.strip() + f'</{tag}>\n'
+
+        elif tag in ('th', 'td') and not self.drop_tables:
+            self.text = self.text.strip() + f'</{tag}>'
+
         if tag == 'b' or tag == 'strong':
-            self.text += '** '
+            self.text = self.text.strip() + '** '
 
         elif tag == 'i':
-            self.text += '* '
-        
+            self.text = self.text.strip() + '* '
+
         elif tag == 'p':
-            if not self.ends_with_space:
-                self.text += '\n'
-        
+            self.text = self.text.strip() + '\n\n'
+
         elif tag.startswith('h'):
-            self.text += '**\n'
+            self.text = self.text.strip() + '**\n'
 
         elif not self.ends_with_space:
             self.text += ' '
@@ -179,7 +199,7 @@ class HTMLSplitter(HTMLParser):
 
         return self.text.strip()
 
-def load_html(html:str, window:int, *, tokenize:Callable[[str], List[str]]=word_tokenize, output_tokens:bool=False):
+def load_html(html:str, window:int, *, tokenize:Callable[[str], List[str]]=word_tokenize, output_tokens:bool=False, handle_wiki_tags:bool=False):
     """Load and split an HTML string into fixed-size "parts" of tokenized text. This function strips
     HTML markup, splits the resulting text into paragraphs (by double-newline "\\n\\n"), then splits
     paragraphs into sentence spans via `SENT_TOKENIZER.span_tokenize`.
@@ -198,6 +218,7 @@ def load_html(html:str, window:int, *, tokenize:Callable[[str], List[str]]=word_
                                         (default: `nltk.word_tokenize`). It must accept a string
                                         and return a list of token strings.
         output_tokens (bool):           If `True`, return lists of tokens instead of full texts.
+        handle_wiki_tags (bool):        If `True`, remove wikipedia refs like "[ 1 ] ".
 
     Yields:
         A tuple `(text, paragraph, part)`:
@@ -209,6 +230,16 @@ def load_html(html:str, window:int, *, tokenize:Callable[[str], List[str]]=word_
     parser = HTMLSplitter()
     parser.feed(html)
     html = parser.get_data()
+
+    # handle wikipedia tags:
+    bracket_re = re.compile(r"\[\s[^]]+?\s\]\s")
+    multispace_re = re.compile(r"\s{2,}")
+    punct_re = re.compile(r"\s+([.,;:!?])")
+
+    if handle_wiki_tags:
+        html = bracket_re.sub("", html)
+    html = multispace_re.sub(" ", html)
+    html = punct_re.sub(r"\1", html)
 
     # split text in paragraphs:
     remaining_tokens = -1
@@ -222,7 +253,7 @@ def load_html(html:str, window:int, *, tokenize:Callable[[str], List[str]]=word_
             remaining_tokens -= len(sentence) - 1
 
             if remaining_tokens <= 0:
-                yield tokens if output_tokens else text[cursor:j+1], paragraph, part
+                yield tokens if output_tokens else text[cursor:j+1].strip(), paragraph, part
                 tokens = []
                 remaining_tokens = window
 
@@ -231,7 +262,8 @@ def load_html(html:str, window:int, *, tokenize:Callable[[str], List[str]]=word_
 
             else: tokens.extend(sentence[:window])
 
-        yield tokens if output_tokens else text[cursor:j+1], paragraph, part
+        if cursor < j+1:
+            yield tokens if output_tokens else text[cursor:j+1].strip(), paragraph, part
         remaining_tokens = -1
 
 def load_data(urls:List[str], window:int, *, tokenize:Callable[[str], List[str]]=word_tokenize, output_tokens:bool=False):

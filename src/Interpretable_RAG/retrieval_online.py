@@ -61,12 +61,12 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self._x:Optional[Tensor_t]=None
-        self._y:Optional[Tensor_t]=None
-        self._phi:Optional[Tensor_t]=None
-        self._dPhi:Optional[Tensor_t]=None
-        self._a:Optional[Tensor_t]=None
-        self._da:Optional[Tensor_t]=None
+        self._x:Optional[Tensor_t]   = None # Tensor of shape (bs x n_inputs)
+        self._y:Optional[Tensor_t]   = None # Tensor of shape (bs x n_outputs)
+        self._phi:Optional[Tensor_t] = None # Tensor of shape (bs x n_inputs x encoding_size)
+        self._dPhi:Optional[Tensor_t]= None # Tensor of shape (bs x n_inputs x encoding_size)
+        self._a:Optional[Tensor_t]   = None # Tensor of shape (bs x n_layers x n_heads x n_outputs x n_inputs)
+        self._da:Optional[Tensor_t]  = None # Tensor of shape (bs x n_layers x n_heads x n_outputs x n_inputs)
 
         self._special_tokens_mask:Optional[Tensor_t]=None
 
@@ -102,7 +102,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # if index is a string load faiss index from disk:
         if isinstance(index, str):
             # load faiss index:
-            cls._index = faiss.read_index(index)
+            cls._index = faiss.read_index(os.path.join(index, 'index.faiss'))
 
             # load documents:
             with open(os.path.join(index, 'documents.json'), 'r') as fp:
@@ -110,7 +110,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         return retriever
 
-    def compute_index(self, documents:List[str], batch_size:int, *, max_length:Optional[int], save_folder:Optional[str]=None, **kwargs) -> None:
+    def compute_index(self, documents:List[str], batch_size:int, *, max_length:Optional[int]=None, save_folder:Optional[str]=None, **kwargs) -> None:
         '''Compute a flat faiss index for fast retrieval based on the provided documents.
 
         Args:
@@ -123,8 +123,14 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         '''
         from .tools import create_faiss_index_flat
 
+        # save documents:
+        if save_folder is not None:
+            os.makedirs(save_folder, exist_ok=True)
+            with open(os.path.join(save_folder, 'documents.json'), 'w') as file:
+                json.dump(documents, file)
+
         # create tokenizer arguments:
-        tokenizer_args = {'padding':True, 'truncation':True, 'return_special_tokens_mask':True, 'return_tensors':'pt'}
+        tokenizer_args = {'padding':True, 'truncation':True, 'return_tensors':'pt'}
         if max_length is not None:
             tokenizer_args['padding'] = 'max_length'
             tokenizer_args['max_length'] = max_length
@@ -145,12 +151,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             embeddings = np.concat(embeddings, axis=0)
 
         # create faiss index:
-        self._index = create_faiss_index_flat(embeddings, save_folder=save_folder, type_index='IP')
-
-        # save documents:
-        if save_folder is not None:
-            with open(os.path.join(save_folder, 'documents.json'), 'w') as file:
-                json.dump(documents, file)
+        self._index = create_faiss_index_flat(embeddings, save_path=os.path.join(save_folder, 'index.faiss'), type_index='IP')
         self._documents = np.array(documents, dtype=object)
 
     @property
@@ -249,16 +250,6 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             aGrad = {key: aGrad[key] * self._special_tokens_mask[key][:,None,:] for key in aGrad}
 
         return aGrad
-
-    def repAGrad(self, filter_special_tokens:bool=True) -> Tensor_t:
-        '''RepAGrad scores of the last batch.
-
-        Args:
-            filter_special_tokens:  If `True`, set the importance of special tokens to 0.
-
-        Returns:                    Importance scores with shape = (bs, n_heads, n_classes, n_outputs, n_inputs)'''
-
-        raise NotImplementedError()
 
     def gradIn(self, filter_special_tokens:bool=True) -> Tensor_t:
         '''GradIn (`dx ⊙ x`) scores of the last batch.
@@ -378,7 +369,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         # get chunk sizes:
         qry_size, ctx_size = [self._x[key].shape[0] for key in ['query', 'context']]
-        chunk_size = batch_size//max(qry_size, ctx_size)
+        chunk_size = max(batch_size//max(qry_size, ctx_size), 1)
 
         # get original outputs:
         in_qry_output = self._y['query'][None, :, :].to(in_qry_embeds)
@@ -724,18 +715,20 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             contexts:Optional[List[str]]=None,
             reorder:bool=False,
             output_texts:bool=False,
+            compute_grad:bool=True,
             batch_size:Optional[int]=None,
             max_length:Optional[int]=None,
             **kwargs
-        ):
+        ) -> Tuple[Union[List[str],NDArray[np.int_]],torch.FloatTensor]:
         
         # control gradient computation:
-        prev_grad = torch.is_grad_enabled()
-        torch.set_grad_enabled(True)
+        if compute_grad:
+            prev_grad = torch.is_grad_enabled()
+            torch.set_grad_enabled(True)
 
         # set attention implementation to eager if attention-
         # based explantions are active:
-        if kwargs.get('output_attentions', False):
+        if compute_grad and kwargs.get('output_attentions', False):
             self.query_encoder.set_attn_implementation('eager')
             self.context_encoder.set_attn_implementation('eager')
 
@@ -754,7 +747,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         qry_stmask = 1. - qry_input.pop('special_tokens_mask').detach().cpu()
         qry_embeds = qry_embed_fcn(qry_ids.to(self.query_encoder.device))
         qry_output = self.query_encoder(inputs_embeds=qry_embeds, **qry_input.to(self.query_encoder.device), **kwargs)
-    
+
         # retrieve contexts if necessary: 
         if contexts is None:
             if k is None: raise ValueError(
@@ -764,8 +757,11 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                 f'If `index` is not specified when creating an object of class `{type(self).__name__}`, ' \
                 f'`contexts` must be set in the call to `{type(self).__name__}.forward(...)`.'
             )
-            _, docs = self.index.search(qry_output.last_hidden_state[:, 0, :].detach().cpu().numpy(), k=k)
-            contexts = self.documents[docs].tolist()
+            _, context_ids = self.index.search(qry_output.last_hidden_state[:, 0, :].detach().cpu().numpy(), k=k)
+            context_ids = context_ids[0]
+            contexts = self.documents[context_ids].tolist()
+
+        else: context_ids = np.arange(len(contexts))
 
         if batch_size is None: batch_size = len(contexts)
         for batch in trange(0, len(contexts), batch_size, desc='Retrieving documents'):
@@ -786,58 +782,24 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                 ctx_ids.detach().cpu(),
                 self.tokenizer.pad_token_id
             )
-            self._special_tokens_mask = append_tensor_t(self._special_tokens_mask, append,
-                qry_stmask,
-                ctx_stmask,
-                0.
-            )
-
-            # Compute dot product:
-            sim_batch = qry_output.last_hidden_state[:, 0, :] @ ctx_output.last_hidden_state[:, 0, :].T
-
-            has_attentions = checkattr(qry_output, 'attentions') and checkattr(ctx_output, 'attentions')
-
-            # save gradients:
-            # register input embeddings for gradient computation:
-            qry_embeds.retain_grad()
-            qry_embeds.grad = None
-
-            ctx_embeds.retain_grad()
-            ctx_embeds.grad = None
-
-            # register attentions for gradient computation:
-            if has_attentions:
-                for a in qry_output.attentions + ctx_output.attentions:
-                    a.retain_grad()
-                    a.grad = None
-
-            # calculate gradients of output:
-            sim_batch.sum().backward(retain_graph = True)
-
-            # save gradients with regard to input embeddings:
-            # Tensor of shape (bs x n_inputs x encoding_size)
             self._phi = append_tensor_t(self._phi, append,
                 qry_embeds.detach().cpu(),
                 ctx_embeds.detach().cpu(),
                 torch.nan
             )
-            # Tensor of shape (bs x n_inputs x encoding_size)
-            self._dPhi = append_tensor_t(self._dPhi, append,
-                qry_embeds.grad.detach().cpu(),
-                ctx_embeds.grad.detach().cpu(),
-                0.,
-                is_grad=True
-            )
-            # Tensor of shape (bs x encoding_size)
             self._y = append_tensor_t(self._y, append,
                 qry_output.last_hidden_state[:, 0, :].detach().cpu(),
                 ctx_output.last_hidden_state[:, 0, :].detach().cpu(),
                 torch.nan
             )
-
-            # save gradients with regard to attention weights:
+            self._special_tokens_mask = append_tensor_t(self._special_tokens_mask, append,
+                qry_stmask,
+                ctx_stmask,
+                0.
+            )
+            
+            has_attentions = checkattr(qry_output, 'attentions') and checkattr(ctx_output, 'attentions')
             if has_attentions:
-                # Tensor of shape (bs x n_layers x n_heads x n_outputs x n_inputs)
                 self._a = append_tensor_t(self._a, append,
                     torch.stack(
                         [a.detach().clone().cpu() for a in qry_output.attentions],
@@ -849,22 +811,55 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                     ),
                     torch.nan
                 )
-                # Tensor of shape (bs x n_layers x n_heads x n_outputs x n_inputs)
-                self._da = append_tensor_t(self._da, append,
-                    torch.stack(
-                        [a.grad.detach().clone().cpu() for a in qry_output.attentions],
-                        dim=1
-                    ),
-                    torch.stack(
-                        [a.grad.detach().clone().cpu() for a in ctx_output.attentions],
-                        dim=1
-                    ),
+            else: self._a = None
+
+            # Compute dot product:
+            sim_batch = qry_output.last_hidden_state[:, 0, :] @ ctx_output.last_hidden_state[:, 0, :].T
+
+            # Compute gradients:
+            if compute_grad:
+                # register input embeddings for gradient computation:
+                qry_embeds.retain_grad()
+                qry_embeds.grad = None
+
+                ctx_embeds.retain_grad()
+                ctx_embeds.grad = None
+
+                # register attentions for gradient computation:
+                if has_attentions:
+                    for a in qry_output.attentions + ctx_output.attentions:
+                        a.retain_grad()
+                        a.grad = None
+
+                # calculate gradients of output:
+                sim_batch.sum().backward(retain_graph = True)
+
+                # save gradients with regard to input embeddings:
+                self._dPhi = append_tensor_t(self._dPhi, append,
+                    qry_embeds.grad.detach().cpu(),
+                    ctx_embeds.grad.detach().cpu(),
                     0.,
                     is_grad=True
                 )
-            else: self._a, self._da = None, None
 
-            # compute similarity and context ids:
+                # save gradients with regard to attention weights:
+                if has_attentions:
+                    self._da = append_tensor_t(self._da, append,
+                        torch.stack(
+                            [a.grad.detach().clone().cpu() for a in qry_output.attentions],
+                            dim=1
+                        ),
+                        torch.stack(
+                            [a.grad.detach().clone().cpu() for a in ctx_output.attentions],
+                            dim=1
+                        ),
+                        0.,
+                        is_grad=True
+                    )
+                else: self._da = None
+            else: self._dPhi, self._da = None, None
+
+            # Compute similarity and context ids:
             if not append:
                 similarity    = sim_batch[0].detach().cpu()
                 retrieved_ids = idx_batch
@@ -876,26 +871,31 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             similarity, ret_ids_batch = torch.sort(similarity, dim=0, descending=True)
             retrieved_ids             = retrieved_ids[ret_ids_batch]
 
-            # apply top-k:
+            # Apply top-k:
             if k is not None:
                 similarity    = similarity[:k]
                 retrieved_ids = retrieved_ids[:k]
                 ret_ids_batch = ret_ids_batch[:k]
 
-            # reorder contexts:
+            # Reorder contexts:
             if reorder:
                 self._x['context']                   = self._x['context'][ret_ids_batch]
                 self._phi['context']                 = self._phi['context'][ret_ids_batch]
-                self._dPhi['context']                = self._dPhi['context'][ret_ids_batch]
+
                 if has_attentions:
-                    self._a['context']               = self._a['context'][ret_ids_batch]
-                    self._da['context']              = self._da['context'][ret_ids_batch]
+                    self._a['context']              = self._a['context'][ret_ids_batch]
+
+                if compute_grad:
+                    self._dPhi['context']            = self._dPhi['context'][ret_ids_batch]
+
+                    if has_attentions:
+                        self._da['context']          = self._da['context'][ret_ids_batch]
+
                 self._special_tokens_mask['context'] = self._special_tokens_mask['context'][ret_ids_batch]
 
-                contexts                             = [contexts[i] for i in ret_ids_batch]
-
         # reset gradient computation:
-        torch.set_grad_enabled(prev_grad)
+        if compute_grad:
+            torch.set_grad_enabled(prev_grad)
 
-        if output_texts: return contexts, similarity
-        else: return retrieved_ids, similarity
+        if output_texts: return [contexts[i] for i in retrieved_ids], similarity
+        else: return context_ids[retrieved_ids], similarity

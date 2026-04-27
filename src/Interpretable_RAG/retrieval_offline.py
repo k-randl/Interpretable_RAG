@@ -3,7 +3,7 @@ import pickle
 import torch
 from tqdm.autonotebook import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
-from typing import Optional, List, Union, Dict
+from typing import Optional, List, Union, Dict, Tuple
 
 from .retrieval import RetrieverExplanationBase, List_t, Tensor_t
 
@@ -343,7 +343,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             output_texts:bool=False,
             max_length:Optional[int]=None,
             **kwargs
-        ):
+        ) -> Tuple[Union[List[str],torch.IntTensor],torch.FloatTensor]:
         # control gradient computation:
         prev_grad = torch.is_grad_enabled()
         torch.set_grad_enabled(True)

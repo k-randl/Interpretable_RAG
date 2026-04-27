@@ -10,6 +10,13 @@ from typing import Union, List, Dict, Literal, Optional, TypeAlias
 from abc import ABCMeta, abstractmethod
 
 #=======================================================================#
+# Methods:                                                              #
+#=======================================================================#
+
+METHODS = ('grad', 'aGrad', 'repAGrad', 'gradIn', 'intGrad')
+Methods_t:TypeAlias = Literal['grad', 'aGrad', 'repAGrad', 'gradIn', 'intGrad']
+
+#=======================================================================#
 # Types:                                                                #
 #=======================================================================#
 
@@ -56,7 +63,6 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
     # Methods:                                                          #
     #===================================================================#
 
-    @abstractmethod
     def grad(self, filter_special_tokens:bool=True) -> Out_t:
         '''Gradients towards the inputs of the last batch.
 
@@ -66,7 +72,6 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_inputs, n_tokens)'''
         raise NotImplementedError()
 
-    @abstractmethod
     def aGrad(self, filter_special_tokens:bool=True) -> Out_t:
         '''AGrad (`-da ⊙ a`) scores of the last batch.
 
@@ -76,7 +81,6 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_heads, n_inputs)'''
         raise NotImplementedError()
 
-    @abstractmethod
     def repAGrad(self, filter_special_tokens:bool=True) -> Out_t:
         '''RepAGrad scores of the last batch.
 
@@ -86,7 +90,6 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_heads, n_classes, n_inputs)'''
         raise NotImplementedError()
 
-    @abstractmethod
     def gradIn(self, filter_special_tokens:bool=True) -> Out_t:
         '''GradIn (`dx ⊙ x`) scores of the last batch.
 
@@ -96,7 +99,6 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         raise NotImplementedError()
 
-    @abstractmethod
     def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
         '''Integrated gradient scores of the last batch.
 
@@ -106,11 +108,17 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         raise NotImplementedError()
 
-    def save_values(self, path:Optional[str]=None, *, filter_special_tokens:bool=True, num_steps:int=100, batch_size:int=64) -> Union[str, None]:
+    def save_values(self, path:Optional[str]=None, *,
+            methods:Optional[List[Methods_t]]=None,
+            filter_special_tokens:bool=True,
+            num_steps:int=100,
+            batch_size:int=64
+        ) -> Union[str, None]:
         """Saves the explanation data to a file.
 
         Args:
             path (str):                             The path where the values should be saved.
+            methods (Lits[str], optional):          List of explanation methods to save. Saves all by default.
             filter_special_tokens (bool, optional): If `True` (default), set the importance of special tokens to 0.
             num_steps (int, optional):              Number of approximation steps for the Rieman approximation
                                                     of the integral in `intGrad` (default 100).
@@ -125,20 +133,28 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
             'input': self.in_tokens
         }
 
-        try: data_to_save['grad'] = self.grad(filter_special_tokens=filter_special_tokens)
-        except NotImplementedError: pass
+        if methods is None:
+            methods = list(METHODS)
 
-        try: data_to_save['aGrad'] = self.aGrad(filter_special_tokens=filter_special_tokens)
-        except NotImplementedError: pass
+        if 'grad' in methods:
+            try: data_to_save['grad'] = self.grad(filter_special_tokens=filter_special_tokens)
+            except NotImplementedError: pass
+        
+        if 'aGrad' in methods:
+            try: data_to_save['aGrad'] = self.aGrad(filter_special_tokens=filter_special_tokens)
+            except NotImplementedError: pass
 
-        try: data_to_save['repAGrad'] = self.repAGrad(filter_special_tokens=filter_special_tokens)
-        except NotImplementedError: pass
+        if 'repAGrad' in methods:
+            try: data_to_save['repAGrad'] = self.repAGrad(filter_special_tokens=filter_special_tokens)
+            except NotImplementedError: pass
 
-        try: data_to_save['gradIn'] = self.gradIn(filter_special_tokens=filter_special_tokens)
-        except NotImplementedError: pass
+        if 'gradIn' in methods:
+            try: data_to_save['gradIn'] = self.gradIn(filter_special_tokens=filter_special_tokens)
+            except NotImplementedError: pass
 
-        try: data_to_save['intGrad'] = self.intGrad(filter_special_tokens=filter_special_tokens, num_steps=num_steps, batch_size=batch_size)
-        except NotImplementedError: pass
+        if 'intGrad' in methods:
+            try: data_to_save['intGrad'] = self.intGrad(filter_special_tokens=filter_special_tokens, num_steps=num_steps, batch_size=batch_size)
+            except NotImplementedError: pass
 
         if path is None: return data_to_save
 
