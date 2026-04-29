@@ -1043,7 +1043,8 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 n = 2 ** len(items)
 
                 # compute minimum number of necessary samples (at least 0.1% of the max):
-                min_samples = max(n//1000, len(items)*10)
+                #min_samples = max(n//1000, len(items)*10)
+                min_samples = len(items)*10
                 min_batches = max(1, min_samples//batch_size)
                 min_samples = min_batches*batch_size
 

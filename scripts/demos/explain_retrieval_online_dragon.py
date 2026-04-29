@@ -22,7 +22,7 @@ retriever = ExplainableAutoModelForRetrieval.from_pretrained(
 ).to('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Create RAG model:
-retriever(query, contexts, output_attentions=True, output_hidden_states=True)
+retriever(query, contexts=contexts, output_attentions=True, output_hidden_states=True)
 
 #%% aGrad:
 plot_importance_retriever(retriever, method='aGrad')
@@ -37,5 +37,9 @@ plot_importance_retriever(retriever, method='gradIn')
 higlight_importance_retriever(retriever, method='gradIn', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
 
 #%% Integrated Gradients:
-plot_importance_retriever(retriever, method='intGrad', base='pad')
-higlight_importance_retriever(retriever, method='intGrad', base='pad', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
+plot_importance_retriever(retriever, method='intGrad')
+higlight_importance_retriever(retriever, method='intGrad', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
+
+#%% Lime:
+plot_importance_retriever(retriever, method='lime')
+higlight_importance_retriever(retriever, method='lime', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)

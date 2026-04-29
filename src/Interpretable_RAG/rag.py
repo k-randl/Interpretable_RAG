@@ -305,6 +305,7 @@ class ExplainableAutoModelForRAG:
 
 class WARGScorer(ExplainableAutoModelForRAG):
     def __init__(self, index_path:str, generator_name_or_path:str, query_encoder_name_or_path:str, context_encoder_name_or_path:Optional[str]=None, *,
+            negative_sampling:Optional[Literal['top', 'rnd']]='top',
             retriever_kwargs:Dict[str, Any]={},
             generator_kwargs:Dict[str, Any]={},
             **kwargs
@@ -324,6 +325,15 @@ class WARGScorer(ExplainableAutoModelForRAG):
                 Name or path of the query encoder model.
             context_encoder_name_or_path (str, optional):
                 Name or path of the context encoder model.
+            negative_sampling (None | 'top' | 'rnd', optional):
+                Strategy for selecting the ceil(k/2) negative documents included
+                alongside the top-k in the WARG computation.
+                - None : no negative documents; WARG is computed on the top-k only.
+                - 'top': the next ceil(k/2) most relevant documents (hard negatives).
+                         This is the default and matches the original implementation.
+                - 'rnd': ceil(k/2) documents sampled uniformly at random from the
+                         entire corpus, excluding the top-k documents.
+                Defaults to 'top'.
             retriever_kwargs (Dict[str, Any], optional):
                 Additional keyword arguments passed to the retriever.
             generator_kwargs (Dict[str, Any], optional):
@@ -335,6 +345,11 @@ class WARGScorer(ExplainableAutoModelForRAG):
             - The scorer is fixed to online retrieval mode and uses a pre-built index.
             - Retrieved query results are cached internally to avoid recomputation.
         '''
+
+        # validate negative sampling mode:
+        if negative_sampling not in (None, 'top', 'rnd'):
+            raise ValueError(f"`negative_sampling` must be one of None, 'top', 'rnd'. Got: {negative_sampling!r}")
+        self._negative_sampling = negative_sampling
 
         # fix parameters to online retrieval:
         kwargs['offline'] = False
@@ -348,20 +363,25 @@ class WARGScorer(ExplainableAutoModelForRAG):
         self._index_path = index_path
         self._queries = {}
 
-    def __generate(self, query:str, k:int, n:int, *,
+    def __generate(self, query:str, k_pos:int, k_neg:int, *,
             generator_kwargs:Dict[str, Any] = {},
             retriever_kwargs:Dict[str, Any] = {}
         ) -> Tuple[NDArray[np.float64], NDArray[np.float64], List[str], List[str]]:
         '''Run retrieval-augmented generation for a single query and cache results.
 
-        This method retrieves `2k` documents, computes retriever and generator
-        document importances, and stores the results in the internal query cache.
+        For 'top' and None modes, retrieves k_pos + k_neg documents directly and
+        generates. For 'rnd' mode, first retrieves the top-k_pos documents, then
+        samples k_neg documents uniformly at random from the entire corpus
+        (excluding the top-k_pos), and generates using that combined selection.
 
         Args:
             query (str):
                 Input query string.
-            k (int):
-                Number of top documents used for scoring.
+            k_pos (int):
+                Number of top (positive) documents.
+            k_neg (int):
+                Number of negative documents to include alongside the top-k.
+                0 when negative_sampling is None.
             generator_kwargs (Dict[str, Any], optional):
                 Keyword arguments passed to the generator.
             retriever_kwargs (Dict[str, Any], optional):
@@ -371,21 +391,51 @@ class WARGScorer(ExplainableAutoModelForRAG):
             Tuple containing:
                 - retriever document importance scores
                 - generator document importance scores
-                - top-k retrieved documents
-                - remaining retrieved documents
+                - top-k_pos retrieved documents
+                - negative (remaining) retrieved documents
         '''
 
-        # Run generation
-        super().__call__(query, n, fast_retrieval=True,
-                        generator_kwargs=generator_kwargs,
-                        retriever_kwargs=retriever_kwargs)
-        
+        if self._negative_sampling in (None, 'top'):
+            # Retrieve k_pos + k_neg docs and generate directly.
+            super().__call__(query, k_pos + k_neg, fast_retrieval=True,
+                            generator_kwargs=generator_kwargs,
+                            retriever_kwargs=retriever_kwargs)
+        elif self._negative_sampling == 'rnd':
+            # Fast retrieval to obtain the top-k_pos document texts.
+            top_docs, _ = self.retriever(
+                self.retriever_query_format.format(query=query),
+                k=k_pos,
+                reorder=True,
+                output_texts=True,
+                compute_grad=False,
+                output_attentions=False,
+                output_hidden_states=False,
+                batch_size=retriever_kwargs.get('batch_size', 64)
+            )
+
+            # Sample k_neg documents uniformly at random from the full corpus,
+            # excluding the top-k_pos documents.
+            all_docs = self.retriever.documents  # numpy array of all corpus texts
+            non_top_k_indices = np.where(~np.isin(all_docs, top_docs))[0]
+            neg_indices = np.random.choice(
+                non_top_k_indices,
+                size=min(k_neg, len(non_top_k_indices)),
+                replace=False
+            )
+            selected_docs = list(top_docs) + all_docs[neg_indices].tolist()
+
+            super().__call__(query, contexts=selected_docs, fast_retrieval=True,
+                            generator_kwargs=generator_kwargs,
+                            retriever_kwargs=retriever_kwargs)
+
+        else: raise ValueError(f"`negative_sampling` must be one of None, 'top', 'rnd'. Got: {self._negative_sampling!r}")
+
         # Get importance scores
         document_importance = (
             self.retriever_document_importance,
             self.generator_document_importance,
-            self.retrieved_docs[:k],
-            self.retrieved_docs[k:]
+            self.retrieved_docs[:k_pos],
+            self.retrieved_docs[k_pos:]
         )
 
         self._queries[query] = document_importance
@@ -444,8 +494,9 @@ class WARGScorer(ExplainableAutoModelForRAG):
         if isinstance(queries, str):
             queries = [queries]
 
-        # Get total retrieved samples:
-        n = int(np.ceil(k*1.5))
+        # Number of negative documents and total WARG set size:
+        k_neg    = 0 if self._negative_sampling is None else int(np.ceil(k / 2))
+        k_total = k + k_neg
 
         # Init generation arguments:
         generator_kwargs['do_sample']           = generator_kwargs.get('do_sample', False)
@@ -456,7 +507,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
         generator_kwargs['batch_size']          = batch_size
         retriever_kwargs['batch_size']          = batch_size
         gen_args = {
-            'k':k, 'n':n,
+            'k_pos':k, 'k_neg':k_neg,
             'generator_kwargs':generator_kwargs,
             'retriever_kwargs':retriever_kwargs
         }
@@ -471,13 +522,13 @@ class WARGScorer(ExplainableAutoModelForRAG):
 
             except KeyError:
                 ret_scores, gen_scores, ret_docs, cnt_docs = self.__generate(query, **gen_args)
-            
-            if n > min(len(ret_scores), len(gen_scores)):
+
+            if k_total > min(len(ret_scores), len(gen_scores)):
                 ret_scores, gen_scores, ret_docs, cnt_docs = self.__generate(query, **gen_args)
 
             # Get indices:
-            ret_rank = np.argsort(ret_scores[:n])
-            gen_rank = np.argsort(gen_scores[:n])
+            ret_rank = np.argsort(ret_scores[:k_total])
+            gen_rank = np.argsort(gen_scores[:k_total])
 
             # Compute rbo:
             rbo = 0.0
@@ -544,6 +595,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
             dump_dict['retriever']['context_encoder'] = self.retriever.context_encoder_name_or_path
 
         # Write the full configuration and cached results to a JSON file
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w') as fp:
             json.dump(dump_dict, fp, indent=2)
 

@@ -24,13 +24,15 @@ MAX_GEN_LEN = 256
 # %% Load Pipeline:
 model = ExplainableAutoModelForRAG(
     query_encoder_name_or_path='Snowflake/snowflake-arctic-embed-l-v2.0',
+    dir='./demos/index_snowflake',
+
     retriever_query_format='query: {query}',
     retriever_token_processor=lambda s: s.replace('▁', ' '),
     retriever_kwargs={'add_pooling_layer':False},
 
     generator_name_or_path='meta-llama/Llama-3.1-8B-Instruct',
     generator_token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'),
-    generator_kwargs={'device_map':'auto', 'torch_dtype':torch.bfloat16}
+    generator_kwargs={'device_map':'auto', 'dtype':torch.bfloat16}
 )
 
 # We use msmarco query and passages as an example
@@ -47,7 +49,6 @@ contexts = [
 output = model(
     query=query,
     contexts=contexts,
-    dir='./demos/index_snowflake',
     k=5,
     generator_kwargs={
         'max_new_tokens':MAX_GEN_LEN,

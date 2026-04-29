@@ -277,7 +277,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         return gradIn
 
     def intGrad(self, filter_special_tokens:bool=True, num_steps:int=100, batch_size:int=64, *,
-            base:Optional[Literal['pos', 'mask', 'pad', 'unk']]=None,
+            base:Optional[Literal['pos', 'mask', 'pad', 'unk']]='unk',
             output_offset:bool=False,
             output_coverage:bool=False,
             verbose:bool=True) -> Tensor_t:
@@ -504,13 +504,13 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         Args:
             filter_special_tokens:      If `True`, set the importance of special tokens to 0.
             batch_size:                 Batch size used for calculating the perturbation outputs (default 64).
-            max_samples_query (int):    Maximum number of samples used for computing SHAP atribution values for the query.
-                                        If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
-                                        If `inf` is passed, always computes the precise SHAP values.
+            max_samples_query (int):    Maximum number of samples used for computing LIME attribution values for the query.
+                                        If `2**len(tokens) <= max_samples`, this automatically computes the precise LIME values instead of approximations.
+                                        If `inf` is passed, always computes the precise LIME values.
                                         If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
-            max_samples_context (int):  Maximum number of samples used for computing SHAP atribution values for the context documents.
-                                        If `2**len(contexts) <= max_samples`, this automatically computes the precise SHAP values instead of kernel SHAP approximations.
-                                        If `inf` is passed, always computes the precise SHAP values.
+            max_samples_context (int):  Maximum number of samples used for computing LIME attribution values for the context documents.
+                                        If `2**len(tokens) <= max_samples`, this automatically computes the precise LIME values instead of approximations.
+                                        If `inf` is passed, always computes the precise LIME values.
                                         If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
             base:                       Optional value for the mask_token. Possible values are ...
                                         - `'mask'` mask token
@@ -547,9 +547,11 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # generate perturbed prompts:
         if max_samples_query == 'auto':    max_samples_query = (batch_size // num_inputs) * num_qrys
         elif max_samples_query == 'inf':   max_samples_query = int(2 ** int(num_qry_tokens.sum()))
+        max_samples_query = max(max_samples_query, (num_qry_tokens*10).max())
 
         if max_samples_context == 'auto':  max_samples_context = (batch_size // num_inputs) * num_ctxs
         elif max_samples_context == 'inf': max_samples_context = int(2 ** int(num_ctx_tokens.sum()))
+        max_samples_context = max(max_samples_context, (num_ctx_tokens*10).max())
 
         # get mask token:
         if   base == 'mask': ptb_id = self.tokenizer.mask_token_id
@@ -606,7 +608,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         for i in iterator:
             batch_qrys, batch_ctxs = list(zip(*targets[i*chunk_size:(i+1)*chunk_size]))
             batch_input_ids = input_ids[i*chunk_size:(i+1)*chunk_size]
-            batch_output_sim = torch.empty((chunk_size, num_qrys, num_ctxs), dtype=torch.float)
+            batch_output_sim = torch.empty((len(batch_input_ids), num_qrys, num_ctxs), dtype=torch.float)
 
             # process perturbed queries in the batch:
             batch_qrys     = torch.tensor(batch_qrys)
@@ -658,17 +660,20 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             def kernel_fn(d):
                 return np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
 
-        # pack inputs:
+        # pack inputs as binary presence indicators (1 = token present, 0 = masked):
         x = []
-        m = []
         for q in range(num_qrys):
-            item = self._x['query'][q,:][None,:].detach().cpu().numpy().repeat(len(output_sim), axis=0)
-            item[targets[:,0] == q,:] = [ids for ids, i in zip(input_ids, targets[:,0]) if i == q]
-            x.append(item[:,qry_attention_mask[q,:].cpu().numpy()])
+            item = np.ones((len(output_sim), int(num_qry_tokens[q])), dtype=float)
+            q_mask = targets[:, 0] == q
+            if q_mask.any():
+                item[q_mask] = 1. - qry_ptb[q][0]
+            x.append(item),
         for c in range(num_ctxs):
-            item = self._x['context'][c,:][None,:].detach().cpu().numpy().repeat(len(output_sim), axis=0)
-            item[targets[:,1] == c,:] = [ids for ids, i in zip(input_ids, targets[:,1]) if i == c]
-            x.append(item[:,ctx_attention_mask[c,:].cpu().numpy()])
+            item = np.ones((len(output_sim), int(num_ctx_tokens[c])), dtype=float)
+            c_mask = targets[:, 1] == c
+            if c_mask.any():
+                item[c_mask] = 1. - ctx_ptb[c][0]
+            x.append(item)
         x = np.concat(x, axis=1)
 
         # pack outputs:
@@ -692,12 +697,6 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             lime['context'][c,:n] = torch.tensor(lr.coef_[:,offset:offset+n].sum(axis=0))
             offset += n
 
-        # check additivity:
-        #coverage_qry = lime['query'].sum(axis=-1) / (in_qry_similarity - bl_qry_similarity).sum()
-        #coverage_ctx = lime['context'].sum(axis=-1) / (in_ctx_similarity - bl_ctx_similarity).squeeze()
-        #if (coverage_qry < .95).any(): print(f'WARNING: query attributions add up to only {coverage_qry.min()*100.:.1f}% of the score. Please increase number of steps!')
-        #if (coverage_ctx < .95).any(): print(f'WARNING: context attributions add up to only {coverage_ctx.min()*100.:.1f}% of the score. Please increase number of steps!')
-
         if filter_special_tokens:
             # set the importance of special tokens to 0.
             lime = {key: lime[key] * self._special_tokens_mask[key] for key in lime}
@@ -706,8 +705,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             return lime
 
         result = (lime, )
-        if output_offset:   result = result + ({'query': sum(lr.intercept_), 'context': lr.intercept_},)
-        #if output_coverage: result = result + ({'query': coverage_qry, 'context': coverage_ctx},)
+        if output_offset:   result = result + ({'query': lr.intercept_, 'context': lr.intercept_},)
         if output_coverage: result = result + (prediction_score,)
         return result
 

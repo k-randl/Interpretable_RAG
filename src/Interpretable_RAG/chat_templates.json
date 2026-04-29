@@ -1,1 +1,370 @@
-{"meta-llama/Llama-3.1-8B-Instruct": {"system": {"sot": {"text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n", "tokens": ["<|begin_of_text|>", "<|start_header_id|>", "system", "<|end_header_id|>", "\u010a\u010a"], "ids": [128000, 128006, 9125, 128007, 271]}, "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}}, "user": {"sot": {"text": "<|start_header_id|>user<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "user", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 882, 128007, 271]}, "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}}, "assistant": {"sot": {"text": "<|start_header_id|>assistant<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "assistant", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 78191, 128007, 271]}, "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}}}, "meta-llama/Llama-3.3-70B-Instruct": {"system": {"sot": {"text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n", "tokens": ["<|begin_of_text|>", "<|start_header_id|>", "system", "<|end_header_id|>", "\u010a\u010a"], "ids": [128000, 128006, 9125, 128007, 271]}, "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}}, "user": {"sot": {"text": "<|start_header_id|>user<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "user", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 882, 128007, 271]}, "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}}, "assistant": {"sot": {"text": "<|start_header_id|>assistant<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "assistant", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 78191, 128007, 271]}, "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}}}, "meta-llama/Llama-3.1-70B-Instruct": {"system": {"sot": {"text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n", "tokens": ["<|begin_of_text|>", "<|start_header_id|>", "system", "<|end_header_id|>", "\u010a\u010a"], "ids": [128000, 128006, 9125, 128007, 271]}, "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}}, "user": {"sot": {"text": "<|start_header_id|>user<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "user", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 882, 128007, 271]}, "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}}, "assistant": {"sot": {"text": "<|start_header_id|>assistant<|end_header_id|>\n\n", "tokens": ["<|start_header_id|>", "assistant", "<|end_header_id|>", "\u010a\u010a"], "ids": [128006, 78191, 128007, 271]}, "eot": {"text": "<|eot_id|>", "tokens": ["<|eot_id|>"], "ids": [128009]}}}, "Qwen/Qwen2.5-7B-Instruct": {"system": {"sot": {"text": "<|im_start|>system", "tokens": ["<|im_start|>", "system"], "ids": [151644, 8948]}, "eot": {"text": "<|im_end|>", "tokens": ["<|im_end|>"], "ids": [151645]}}, "user": {"sot": {"text": "<|im_start|>user", "tokens": ["<|im_start|>", "user"], "ids": [151644, 872]}, "eot": {"text": "<|im_end|>", "tokens": ["<|im_end|>"], "ids": [151645]}}, "assistant": {"sot": {"text": "<|im_start|>assistant", "tokens": ["<|im_start|>", "assistant"], "ids": [151644, 77091]}, "eot": {"text": "<|im_end|>", "tokens": ["<|im_end|>"], "ids": [151645]}}}}
+{
+    "meta-llama/Llama-3.1-8B-Instruct": {
+        "system": {
+            "sot": {
+                "text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n",
+                "tokens": [
+                    "<|begin_of_text|>",
+                    "<|start_header_id|>",
+                    "system",
+                    "<|end_header_id|>",
+                    "ĊĊ"
+                ],
+                "ids": [
+                    128000,
+                    128006,
+                    9125,
+                    128007,
+                    271
+                ]
+            },
+            "eot": {
+                "text": "<|eot_id|>",
+                "tokens": [
+                    "<|eot_id|>"
+                ],
+                "ids": [
+                    128009
+                ]
+            }
+        },
+        "user": {
+            "sot": {
+                "text": "<|start_header_id|>user<|end_header_id|>\n\n",
+                "tokens": [
+                    "<|start_header_id|>",
+                    "user",
+                    "<|end_header_id|>",
+                    "ĊĊ"
+                ],
+                "ids": [
+                    128006,
+                    882,
+                    128007,
+                    271
+                ]
+            },
+            "eot": {
+                "text": "<|eot_id|>",
+                "tokens": [
+                    "<|eot_id|>"
+                ],
+                "ids": [
+                    128009
+                ]
+            }
+        },
+        "assistant": {
+            "sot": {
+                "text": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+                "tokens": [
+                    "<|start_header_id|>",
+                    "assistant",
+                    "<|end_header_id|>",
+                    "ĊĊ"
+                ],
+                "ids": [
+                    128006,
+                    78191,
+                    128007,
+                    271
+                ]
+            },
+            "eot": {
+                "text": "<|eot_id|>",
+                "tokens": [
+                    "<|eot_id|>"
+                ],
+                "ids": [
+                    128009
+                ]
+            }
+        }
+    },
+    "meta-llama/Llama-3.3-70B-Instruct": {
+        "system": {
+            "sot": {
+                "text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n",
+                "tokens": [
+                    "<|begin_of_text|>",
+                    "<|start_header_id|>",
+                    "system",
+                    "<|end_header_id|>",
+                    "ĊĊ"
+                ],
+                "ids": [
+                    128000,
+                    128006,
+                    9125,
+                    128007,
+                    271
+                ]
+            },
+            "eot": {
+                "text": "<|eot_id|>",
+                "tokens": [
+                    "<|eot_id|>"
+                ],
+                "ids": [
+                    128009
+                ]
+            }
+        },
+        "user": {
+            "sot": {
+                "text": "<|start_header_id|>user<|end_header_id|>\n\n",
+                "tokens": [
+                    "<|start_header_id|>",
+                    "user",
+                    "<|end_header_id|>",
+                    "ĊĊ"
+                ],
+                "ids": [
+                    128006,
+                    882,
+                    128007,
+                    271
+                ]
+            },
+            "eot": {
+                "text": "<|eot_id|>",
+                "tokens": [
+                    "<|eot_id|>"
+                ],
+                "ids": [
+                    128009
+                ]
+            }
+        },
+        "assistant": {
+            "sot": {
+                "text": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+                "tokens": [
+                    "<|start_header_id|>",
+                    "assistant",
+                    "<|end_header_id|>",
+                    "ĊĊ"
+                ],
+                "ids": [
+                    128006,
+                    78191,
+                    128007,
+                    271
+                ]
+            },
+            "eot": {
+                "text": "<|eot_id|>",
+                "tokens": [
+                    "<|eot_id|>"
+                ],
+                "ids": [
+                    128009
+                ]
+            }
+        }
+    },
+    "meta-llama/Llama-3.1-70B-Instruct": {
+        "system": {
+            "sot": {
+                "text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n",
+                "tokens": [
+                    "<|begin_of_text|>",
+                    "<|start_header_id|>",
+                    "system",
+                    "<|end_header_id|>",
+                    "ĊĊ"
+                ],
+                "ids": [
+                    128000,
+                    128006,
+                    9125,
+                    128007,
+                    271
+                ]
+            },
+            "eot": {
+                "text": "<|eot_id|>",
+                "tokens": [
+                    "<|eot_id|>"
+                ],
+                "ids": [
+                    128009
+                ]
+            }
+        },
+        "user": {
+            "sot": {
+                "text": "<|start_header_id|>user<|end_header_id|>\n\n",
+                "tokens": [
+                    "<|start_header_id|>",
+                    "user",
+                    "<|end_header_id|>",
+                    "ĊĊ"
+                ],
+                "ids": [
+                    128006,
+                    882,
+                    128007,
+                    271
+                ]
+            },
+            "eot": {
+                "text": "<|eot_id|>",
+                "tokens": [
+                    "<|eot_id|>"
+                ],
+                "ids": [
+                    128009
+                ]
+            }
+        },
+        "assistant": {
+            "sot": {
+                "text": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+                "tokens": [
+                    "<|start_header_id|>",
+                    "assistant",
+                    "<|end_header_id|>",
+                    "ĊĊ"
+                ],
+                "ids": [
+                    128006,
+                    78191,
+                    128007,
+                    271
+                ]
+            },
+            "eot": {
+                "text": "<|eot_id|>",
+                "tokens": [
+                    "<|eot_id|>"
+                ],
+                "ids": [
+                    128009
+                ]
+            }
+        }
+    },
+    "Qwen/Qwen2.5-7B-Instruct": {
+        "system": {
+            "sot": {
+                "text": "<|im_start|>system",
+                "tokens": [
+                    "<|im_start|>",
+                    "system"
+                ],
+                "ids": [
+                    151644,
+                    8948
+                ]
+            },
+            "eot": {
+                "text": "<|im_end|>",
+                "tokens": [
+                    "<|im_end|>"
+                ],
+                "ids": [
+                    151645
+                ]
+            }
+        },
+        "user": {
+            "sot": {
+                "text": "<|im_start|>user",
+                "tokens": [
+                    "<|im_start|>",
+                    "user"
+                ],
+                "ids": [
+                    151644,
+                    872
+                ]
+            },
+            "eot": {
+                "text": "<|im_end|>",
+                "tokens": [
+                    "<|im_end|>"
+                ],
+                "ids": [
+                    151645
+                ]
+            }
+        },
+        "assistant": {
+            "sot": {
+                "text": "<|im_start|>assistant",
+                "tokens": [
+                    "<|im_start|>",
+                    "assistant"
+                ],
+                "ids": [
+                    151644,
+                    77091
+                ]
+            },
+            "eot": {
+                "text": "<|im_end|>",
+                "tokens": [
+                    "<|im_end|>"
+                ],
+                "ids": [
+                    151645
+                ]
+            }
+        }
+    },
+    "google/gemma-3-12b-it": {
+        "user": {
+            "sot": {
+                "text": "<start_of_turn>user\n",
+                "tokens": [
+                    "<start_of_turn>",
+                    "user",
+                    "\n"
+                ],
+                "ids": [
+                    105,
+                    2364,
+                    107
+                ]
+            },
+            "eot": {
+                "text": "<end_of_turn>\n",
+                "tokens": [
+                    "<end_of_turn>",
+                    "\n"
+                ],
+                "ids": [
+                    106,
+                    107
+                ]
+            }
+        },
+        "assistant": {
+            "sot": {
+                "text": "<start_of_turn>model\n",
+                "tokens": [
+                    "<start_of_turn>",
+                    "model",
+                    "\n"
+                ],
+                "ids": [
+                    105,
+                    4368,
+                    107
+                ]
+            },
+            "eot": {
+                "text": "<end_of_turn>\n",
+                "tokens": [
+                    "<end_of_turn>",
+                    "\n"
+                ],
+                "ids": [
+                    106,
+                    107
+                ]
+            }
+        }
+    }
+}
