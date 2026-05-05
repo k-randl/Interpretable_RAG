@@ -217,6 +217,10 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             filter_special_tokens:  If `True`, set the importance of special tokens to 0.
 
         Returns:                    Importance scores with shape = (bs, n_inputs, n_tokens)'''
+        assert self._x is not None and self._y is not None and \
+               self._special_tokens_mask is not None and \
+               self._dPhi is not None, \
+               'Must call forward() with `compute_grad=True` before grad()'
 
         # compute importance:
         grad = {
@@ -237,6 +241,11 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             filter_special_tokens:  If `True`, set the importance of special tokens to 0.
 
         Returns:                    Importance scores with shape = (bs, n_heads, n_outputs, n_inputs)'''
+        assert self._x is not None and self._y is not None and \
+               self._a is not None and self._da is not None and \
+               self._special_tokens_mask is not None and \
+               self._dPhi is not None, \
+               'Must call forward() with `compute_grad=True` before aGrad()'
 
         # compute attention weigths and gradients:
         a  = {key:self._a[key][:,-1,:,0,:] for key in self._a}     # shape: (bs x n_layers x n_heads x n_outputs x n_inputs)
@@ -258,6 +267,10 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             filter_special_tokens:  If `True`, set the importance of special tokens to 0.
             
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
+        assert self._x is not None and self._y is not None and \
+               self._special_tokens_mask is not None and \
+               self._dPhi is not None, \
+               'Must call forward() with `compute_grad=True` before gradIn()'
 
         # compute gradient to input:
         dx = self.grad(filter_special_tokens=False)
@@ -300,6 +313,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             verbose:                If `True`, shows a progress bar.
             
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
+        assert self._x is not None and self._y is not None and self._special_tokens_mask is not None, \
+            'Must call forward() before intGrad()'
+
         # get the embedings:
         in_qry_embeds_fn = self.query_encoder.get_input_embeddings()
         in_qry_embeds = in_qry_embeds_fn(self._x['query'].detach().clone().to(device=self.query_encoder.device))
@@ -525,10 +541,10 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             'Must call forward() before lime()'
 
         # get attention masks:
-        qry_attention_mask = torch.tensor(self._x['query'] != self.tokenizer.pad_token_id,
-                                          device=self.query_encoder.device, dtype=torch.bool)
-        ctx_attention_mask = torch.tensor(self._x['context'] != self.tokenizer.pad_token_id,
-                                          device=self.context_encoder.device, dtype=torch.bool)
+        qry_attention_mask = (self._x['query'] != self.tokenizer.pad_token_id).detach()
+        qry_attention_mask = qry_attention_mask.to(device=self.query_encoder.device, dtype=torch.bool)
+        ctx_attention_mask = (self._x['context'] != self.tokenizer.pad_token_id).detach()
+        ctx_attention_mask = ctx_attention_mask.to(device=self.context_encoder.device, dtype=torch.bool)
         
         # get input sizes:
         num_qrys = len(self._x['query'])
