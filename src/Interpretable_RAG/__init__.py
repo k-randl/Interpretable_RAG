@@ -56,11 +56,11 @@ from .methods import get_shapley_values
 # Type definitions
 from .types import (
     ShapleyValues,
-    AttributionMethod,
-    GradientMethod,
     Embedding,
     EmbeddingBatch,
 )
+from .retrieval import Methods_t
+from .generation import Aggregations_t
 
 __all__ = [
     # Version
@@ -86,8 +86,8 @@ __all__ = [
     "get_shapley_values",
     # Types
     "ShapleyValues",
-    "AttributionMethod",
-    "GradientMethod",
+    "Methods_t",
+    "Aggregations_t",
     "Embedding",
     "EmbeddingBatch",
 ]
