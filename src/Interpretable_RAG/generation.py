@@ -868,16 +868,24 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                             model_kwargs=model_kwargs
                         )
 
+                # check prepare_inputs_for_generation signature once for both calls:
+                _pifg_sig = inspect.signature(self.prepare_inputs_for_generation).parameters
+                _supports_next_seq_len = 'next_sequence_length' in _pifg_sig
+                _supports_first_iter   = 'is_first_iteration'   in _pifg_sig
+
                 with torch.no_grad():
 
                     # calculate p(t_0):
+                    _prefill_kwargs = {'is_first_iteration': True} if _supports_first_iter else {}
                     model_inputs = self.prepare_inputs_for_generation(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
+                        **_prefill_kwargs,
                         **model_kwargs
                     )
-                    model_outputs = self.forward(input_ids=input_ids, attention_mask=attention_mask, return_dict=True, use_cache=True, **model_kwargs)
-                    model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs, num_new_tokens=input_ids.shape[1])
+                    model_inputs.setdefault('use_cache', True)
+                    model_outputs = self.forward(**model_inputs, return_dict=True)
+                    model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs)
                     torch.cuda.empty_cache()
 
                     # update inputs:
@@ -891,9 +899,11 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     # p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_1|t_0...t_(j-1)):
                     step = batch_size if single_input else 1
                     for i in tqdm.tqdm(range(1, outputs.shape[1], step),total=int(outputs.shape[1]/step), desc='Calculating probabilities'):
+                        _decode_kwargs = {'next_sequence_length': nxt.shape[1]} if _supports_next_seq_len else {}
                         model_inputs = self.prepare_inputs_for_generation(
                             input_ids=input_ids,
                             attention_mask=attention_mask,
+                            **_decode_kwargs,
                             **model_kwargs
                         )
                         model_outputs = self.forward(**model_inputs, return_dict=True)
