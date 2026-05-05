@@ -5,6 +5,7 @@ import torch
 import numpy as np
 from math import ceil
 from tqdm.autonotebook import trange
+from scipy.special import comb
 from sklearn.linear_model import Ridge
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
 from typing import Optional, List, Literal, Union, Callable, Any, Tuple
@@ -51,6 +52,10 @@ def append_tensor_t(obj:Optional[Tensor_t], append:bool, qry:torch.Tensor, ctx:t
         ctx = new_c
     
     return {'query': qry, 'context': ctx}
+
+def compute_cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    return a @ b.T
+compute_cosine_similarity_batched = torch.vmap(compute_cosine_similarity)
 
 #=======================================================================#
 # Generic Model Class:                                                  #
@@ -373,10 +378,6 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         def ctx_path_fn(t:torch.Tensor): return bl_ctx_embeds.to(in_ctx_embeds) + (t.to(in_ctx_embeds) * in_ctx_embeds)
         ctx_path_fn_batched = torch.vmap(ctx_path_fn)
         
-        # chunk wise dot product gradients:
-        def calculate_sim(a:torch.Tensor, b:torch.Tensor): return a @ b.T
-        calculate_sim_batched = torch.vmap(calculate_sim)
-
         # get chunk sizes:
         qry_size, ctx_size = [self._x[key].shape[0] for key in ['query', 'context']]
         chunk_size = max(batch_size//max(qry_size, ctx_size), 1)
@@ -438,8 +439,8 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             ).last_hidden_state[:, 0, :].view(batch.shape[0], ctx_size, -1)
 
             # compute dot product similarity:
-            batch_qry_similarity = calculate_sim_batched(batch_qry_output, in_ctx_output.repeat(batch.shape[0], 1, 1))
-            batch_ctx_similarity = calculate_sim_batched(in_qry_output.repeat(batch.shape[0], 1, 1), batch_ctx_output)
+            batch_qry_similarity = compute_cosine_similarity_batched(batch_qry_output, in_ctx_output.repeat(batch.shape[0], 1, 1))
+            batch_ctx_similarity = compute_cosine_similarity_batched(in_qry_output.repeat(batch.shape[0], 1, 1), batch_ctx_output)
 
             # save first and last output:
             if 0 in batch:
@@ -557,112 +558,17 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # generate perturbed prompts:
         if max_samples_query == 'auto':    max_samples_query = (batch_size // num_inputs) * num_qrys
         elif max_samples_query == 'inf':   max_samples_query = int(2 ** int(num_qry_tokens.sum()))
-        max_samples_query = max(max_samples_query, (num_qry_tokens*10).max())
+        max_samples_query = max(max_samples_query, int(num_qry_tokens.sum()*10))
 
         if max_samples_context == 'auto':  max_samples_context = (batch_size // num_inputs) * num_ctxs
         elif max_samples_context == 'inf': max_samples_context = int(2 ** int(num_ctx_tokens.sum()))
-        max_samples_context = max(max_samples_context, (num_ctx_tokens*10).max())
+        max_samples_context = max(max_samples_context, int(num_ctx_tokens.sum()*10))
 
-        # get mask token:
-        if   base == 'mask': ptb_id = self.tokenizer.mask_token_id
-        elif base == 'pad':  ptb_id = self.tokenizer.pad_token_id
-        elif base == 'unk':  ptb_id = self.tokenizer.unk_token_id
-        else: raise ValueError(f'Parameter `base` must be one of `\'mask\'`, `\'pad\'`, or `\'unk\'` but is {base}.')
-
-        # sample perturbed inputs:
-        def perturbe_input(indices, input_ids):
-            _ids = input_ids.clone()
-            if len(indices) > 0:
-                _ids[torch.stack(indices)] = ptb_id
-            return _ids
-        qry_ptb = [sample_perturbations(
-                    torch.arange(n),
-                    lambda i: perturbe_input(i, x),
-                    num_samples=max_samples_query//num_qrys) for x, n in zip(self._x['query'], num_qry_tokens)]
-        ctx_ptb = [sample_perturbations(
-                    torch.arange(n),
-                    lambda i: perturbe_input(i, x),
-                    num_samples=max_samples_context//num_ctxs) for x, n in zip(self._x['context'], num_ctx_tokens)]
-
-        # pack perturbed inputs:
-        targets, distances, input_ids = [], [], []
-        for i, (m, s) in enumerate(qry_ptb):
-            targets.extend([(i,-1)]*len(m))
-            distances.extend(m.sum(axis=1).tolist())
-            input_ids.extend(s)
-        for i, (m, s) in enumerate(ctx_ptb):
-            targets.extend([(-1,i)]*len(m))
-            distances.extend(m.sum(axis=1).tolist())
-            input_ids.extend(s)
-
-        # convert to numpy:
-        targets = np.array(targets, dtype=int)
-        distances = np.array(distances, dtype=float)
-
-        # batched dot product:
-        def calculate_sim(a:torch.Tensor, b:torch.Tensor): return a @ b.T
-        calculate_sim_batched = torch.vmap(calculate_sim)
-
-        # get chunk sizes:
-        chunk_size = batch_size//max(num_qrys, num_ctxs)
-
-        # get original outputs:
-        in_qry_output = self._y['query'][None, :, :].to(self.query_encoder.device)
-        in_ctx_output = self._y['context'][None, :, :].to(self.context_encoder.device)
-
-        iterator = None
-        if verbose: iterator = trange(ceil((max_samples_query+max_samples_context)/chunk_size))
-        else:       iterator = range(ceil((max_samples_query+max_samples_context)/chunk_size))
-
-        output_sim = np.empty((len(input_ids), num_qrys, num_ctxs), dtype=float)
-        for i in iterator:
-            batch_qrys, batch_ctxs = list(zip(*targets[i*chunk_size:(i+1)*chunk_size]))
-            batch_input_ids = input_ids[i*chunk_size:(i+1)*chunk_size]
-            batch_output_sim = torch.empty((len(batch_input_ids), num_qrys, num_ctxs), dtype=torch.float)
-
-            # process perturbed queries in the batch:
-            batch_qrys     = torch.tensor(batch_qrys)
-            batch_qry_mask = batch_qrys >= 0
-            batch_qrys     = batch_qrys[batch_qry_mask]
-            num_batch_qrys = int(batch_qry_mask.sum())
-            if num_batch_qrys > 0:
-                # get queries only:
-                batch_qry_ids = torch.stack([ids for ids, is_qry in zip(batch_input_ids, batch_qry_mask) if is_qry])
-
-                # init output:
-                batch_qry_output = in_qry_output.repeat(num_batch_qrys, 1, 1).clone()
-
-                # compute embeddings: take the last-layer hidden state of the [CLS] token
-                batch_qry_output[torch.arange(num_batch_qrys),batch_qrys,:] = self.query_encoder(
-                    input_ids=batch_qry_ids.to(self.query_encoder.device),
-                    attention_mask=qry_attention_mask[batch_qrys]
-                ).last_hidden_state[:, 0, :]
-
-                # compute dot product similarity:
-                batch_output_sim[batch_qry_mask] = calculate_sim_batched(batch_qry_output, in_ctx_output.repeat(num_batch_qrys, 1, 1)).detach().cpu()
-
-            # process perturbed contexts in the batch:
-            batch_ctxs     = torch.tensor(batch_ctxs)
-            batch_ctx_mask = batch_ctxs >= 0
-            batch_ctxs     = batch_ctxs[batch_ctx_mask]
-            num_batch_ctxs = int(batch_ctx_mask.sum())
-            if num_batch_ctxs > 0:
-                # get contexts only:
-                batch_ctx_ids = torch.stack([ids for ids, is_ctx in zip(batch_input_ids, batch_ctx_mask) if is_ctx])
-
-                # init output:
-                batch_ctx_output = in_ctx_output.repeat(num_batch_ctxs, 1, 1).clone()
-
-                # compute embeddings: take the last-layer hidden state of the [CLS] token
-                batch_ctx_output[torch.arange(num_batch_ctxs),batch_ctxs,:] = self.context_encoder(
-                    input_ids=batch_ctx_ids.to(self.context_encoder.device),
-                    attention_mask=ctx_attention_mask[batch_ctxs]
-                ).last_hidden_state[:, 0, :]
-
-                # compute dot product similarity:
-                batch_output_sim[batch_ctx_mask] = calculate_sim_batched(in_qry_output.repeat(num_batch_ctxs, 1, 1), batch_ctx_output).detach().cpu()
-
-            output_sim[i*chunk_size:(i+1)*chunk_size] = batch_output_sim.numpy()
+        x, y, targets, distances = self.__sample_perturbations(
+            base, max_samples_query, max_samples_context,
+            qry_attention_mask, ctx_attention_mask,
+            num_qrys, num_ctxs, num_qry_tokens, num_ctx_tokens,
+            batch_size, verbose)
 
         # kernel function:
         # (see https://github.com/marcotcr/lime/blob/master/lime/lime_text.py)
@@ -670,30 +576,11 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             def kernel_fn(d):
                 return np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
 
-        # pack inputs as binary presence indicators (1 = token present, 0 = masked):
-        x = []
-        for q in range(num_qrys):
-            item = np.ones((len(output_sim), int(num_qry_tokens[q])), dtype=float)
-            q_mask = targets[:, 0] == q
-            if q_mask.any():
-                item[q_mask] = 1. - qry_ptb[q][0]
-            x.append(item),
-        for c in range(num_ctxs):
-            item = np.ones((len(output_sim), int(num_ctx_tokens[c])), dtype=float)
-            c_mask = targets[:, 1] == c
-            if c_mask.any():
-                item[c_mask] = 1. - ctx_ptb[c][0]
-            x.append(item)
-        x = np.concat(x, axis=1)
-
-        # pack outputs:
-        y = output_sim.reshape(output_sim.shape[0], -1)
-
         # get weights:
         w = kernel_fn(distances)
 
         # fit linear regressor:
-        lr = Ridge(alpha=1, fit_intercept=True, solver='cholesky')
+        lr = Ridge(alpha=0.01, fit_intercept=True, solver='cholesky')
         lr.fit(x, y, sample_weight=w)
         prediction_score = lr.score(x, y, sample_weight=w)
 
@@ -718,6 +605,263 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         if output_offset:   result = result + ({'query': lr.intercept_, 'context': lr.intercept_},)
         if output_coverage: result = result + (prediction_score,)
         return result
+
+    def shap(self, filter_special_tokens:bool=True, batch_size:int=64, *,
+            max_samples_query:Union[int, Literal['inf', 'auto']]='auto',
+            max_samples_context:Union[int, Literal['inf', 'auto']]='auto',
+            base:Literal['mask', 'pad', 'unk']='unk',
+            complementary:bool=True,
+            output_offset:bool=False,
+            verbose:bool=True) -> Union[Tensor_t, Tuple[Tensor_t, dict[str, Any]]]:
+        '''KernelSHAP scores of the last batch.
+
+        Args:
+            filter_special_tokens:      If `True`, set the importance of special tokens to 0.
+            batch_size:                 Batch size used for calculating the perturbation outputs (default 64).
+            max_samples_query (int):    Maximum number of samples used for computing KernelSHAP attribution values for the query.
+                                        If `2**len(tokens) <= max_samples`, this automatically computes the precise SHAP values instead of approximations.
+                                        If `inf` is passed, always computes the precise SHAP values.
+                                        If `auto` is passed, `max_samples` gets the same value as `batch_size` (default: `auto`).
+            max_samples_context (int):  Maximum number of samples used for computing KernelSHAP attribution values for the context documents.
+                                        If `2**len(tokens) <= max_samples`, this automatically computes the precise SHAP values instead of approximations.
+                                        If `inf` is passed, always computes the precise SHAP values.
+                                        If `auto` is passed, `max_samples` gets the same value as `batch_size` (default: `auto`).
+            base:                       Token used to mask absent features. Possible values are ...
+                                        - `'mask'` mask token
+                                        - `'pad'` pad token
+                                        - `'unk'` unk token (default)
+            complementary:              If `True`, sampled coalitions are drawn as complementary pairs, halving
+                                        variance at the same sample budget (default: `True`).
+            output_offset:              If `True` returns a tuple for which the first element are the attribution scores
+                                        and the second element are the baseline predictions as a dictionary (default: `False`).
+            verbose:                    If `True`, shows a progress bar.
+
+        Returns:                        Importance scores with shape = (bs, n_inputs)'''
+        assert self._x is not None and self._y is not None and self._special_tokens_mask is not None, \
+            'Must call forward() before shap()'
+
+        # get attention masks:
+        qry_attention_mask = (self._x['query'] != self.tokenizer.pad_token_id).detach()
+        qry_attention_mask = qry_attention_mask.to(device=self.query_encoder.device, dtype=torch.bool)
+        ctx_attention_mask = (self._x['context'] != self.tokenizer.pad_token_id).detach()
+        ctx_attention_mask = ctx_attention_mask.to(device=self.context_encoder.device, dtype=torch.bool)
+
+        # get input sizes:
+        num_qrys = len(self._x['query'])
+        num_ctxs = len(self._x['context'])
+        num_inputs = num_qrys + num_ctxs
+
+        num_qry_tokens = qry_attention_mask.sum(dim=1)
+        num_ctx_tokens = ctx_attention_mask.sum(dim=1)
+
+        # generate perturbed prompts:
+        if max_samples_query == 'auto':    max_samples_query = (batch_size // num_inputs) * num_qrys
+        elif max_samples_query == 'inf':   max_samples_query = int(2 ** int(num_qry_tokens.sum()))
+        max_samples_query = max(max_samples_query, int(num_qry_tokens.sum()*10))
+
+        if max_samples_context == 'auto':  max_samples_context = (batch_size // num_inputs) * num_ctxs
+        elif max_samples_context == 'inf': max_samples_context = int(2 ** int(num_ctx_tokens.sum()))
+        max_samples_context = max(max_samples_context, int(num_ctx_tokens.sum()*10))
+
+        # complementary sampling requires an even sample count:
+        if complementary:
+            if max_samples_query   % 2 != 0: max_samples_query   -= 1
+            if max_samples_context % 2 != 0: max_samples_context -= 1
+
+        x, y, targets, distances = self.__sample_perturbations(
+            base, max_samples_query, max_samples_context,
+            qry_attention_mask, ctx_attention_mask,
+            num_qrys, num_ctxs, num_qry_tokens, num_ctx_tokens,
+            batch_size, verbose, complementary=complementary)
+
+        # SHAP kernel weight (Lundberg & Lee 2017):
+        # pi(z) = (M-1) / (C(M, |z|) * |z| * (M - |z|))
+        # empty and full coalitions (denominator = 0) receive 1e-10; they are
+        # excluded from each group's inner_rows anyway.
+        def _get_shap_weights(n, s):
+            denominator = comb(n, s) * s * (n - s)
+            if denominator == 0: return 1e-10
+            return (n - 1) / denominator
+
+        w = np.empty(len(targets), dtype=float)
+        for j in range(len(targets)):
+            qry_idx, ctx_idx = targets[j]
+            if qry_idx >= 0:
+                n = int(num_qry_tokens[qry_idx])
+            else:
+                n = int(num_ctx_tokens[ctx_idx])
+            s = n - int(distances[j])   # number of present (non-masked) tokens
+            w[j] = _get_shap_weights(n, s)
+
+        # Per-group regression with the official SHAP algebraic constraint.
+        # For each group g with n_g tokens, sample_perturbations guarantees:
+        #   all_rows[0]  = full coalition  (bitmask 0,   no tokens masked)
+        #   all_rows[-1] = empty coalition (bitmask n-1, all tokens masked)
+        # The transformation eliminates the last token column so that
+        # solve(X'WX, X'Wy) enforces Σφᵢ = sim(full) − sim(empty) exactly.
+        shap = {key: torch.zeros(self._x[key].shape, dtype=torch.float) for key in self._x}
+        null_outputs = {'query': [], 'context': []}
+        col_offset = 0
+
+        for key, idx_range, n_tokens_arr, target_col in [
+                ('query',   range(num_qrys), num_qry_tokens, 0),
+                ('context', range(num_ctxs), num_ctx_tokens, 1)]:
+
+            for i in idx_range:
+                n_group = int(n_tokens_arr[i])
+                rows    = np.where(targets[:, target_col] == i)[0]
+
+                y_full_group = y[rows[0]]    # (n_outputs,)
+                y_null_group = y[rows[-1]]   # (n_outputs,)
+                null_outputs[key].append(y_null_group)
+
+                if n_group == 1 or len(rows) <= 2:
+                    # single token or no inner samples: attribution is the direct difference
+                    phi_group = (y_full_group - y_null_group)[None, :]   # (1, n_outputs)
+
+                else:
+                    x_group = x[rows[1:-1], col_offset:col_offset+n_group]   # (n_inner, n_group)
+                    y_group = y[rows[1:-1]]   # (n_inner, n_outputs)
+                    w_group = w[rows[1:-1]]   # (n_inner,)
+
+                    # Eliminate last token column (official SHAP transformation):
+                    x_adj = x_group[:, :-1] - x_group[:, -1:]
+                    y_adj = y_group - y_null_group - x_group[:, -1:] * (y_full_group - y_null_group)
+
+                    # Solve (X'WX)φ = X'Wy as in official _kernel.py:
+                    WX        = w_group[:, None] * x_adj                  # avoids materialising diag(w)
+                    phi_other = np.linalg.solve(x_adj.T@WX, WX.T@y_adj)   # (n_group-1, n_outputs)
+
+                    # Recover the eliminated token via the constraint:
+                    phi_last  = (y_full_group - y_null_group) - phi_other.sum(axis=0)
+                    phi_group = np.vstack([phi_other, phi_last[None, :]]) # (n_group, n_outputs)
+
+                # Sum over output dimensions, consistent with the current decode convention:
+                shap[key][i, :n_group] = torch.tensor(phi_group.sum(axis=1).astype(np.float32))
+                col_offset += n_group
+
+        if filter_special_tokens:
+            shap = {key: shap[key] * self._special_tokens_mask[key] for key in shap}
+
+        if not output_offset:
+            return shap
+
+        return shap, null_outputs
+
+    def __sample_perturbations(self,
+            base: Literal['mask', 'pad', 'unk'],
+            max_samples_query: int,
+            max_samples_context: int,
+            qry_attention_mask: torch.Tensor,
+            ctx_attention_mask: torch.Tensor,
+            num_qrys: int,
+            num_ctxs: int,
+            num_qry_tokens: torch.Tensor,
+            num_ctx_tokens: torch.Tensor,
+            batch_size: int,
+            verbose: bool,
+            complementary: bool = False,
+        ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        # map base string to replacement token id:
+        if   base == 'mask': ptb_id = self.tokenizer.mask_token_id
+        elif base == 'pad':  ptb_id = self.tokenizer.pad_token_id
+        elif base == 'unk':  ptb_id = self.tokenizer.unk_token_id
+        else: raise ValueError(f'Parameter `base` must be one of `\'mask\'`, `\'pad\'`, or `\'unk\'` but is {base}.')
+
+        # sample perturbed inputs:
+        def perturbe_input(indices, input_ids):
+            _ids = input_ids.clone()
+            if len(indices) > 0:
+                _ids[torch.stack(indices)] = ptb_id
+            return _ids
+        qry_ptb = [sample_perturbations(
+                    torch.arange(n),
+                    lambda i: perturbe_input(i, x),
+                    num_samples=max_samples_query//num_qrys,
+                    complementary=complementary) for x, n in zip(self._x['query'], num_qry_tokens)]
+        ctx_ptb = [sample_perturbations(
+                    torch.arange(n),
+                    lambda i: perturbe_input(i, x),
+                    num_samples=max_samples_context//num_ctxs,
+                    complementary=complementary) for x, n in zip(self._x['context'], num_ctx_tokens)]
+
+        # pack perturbed inputs:
+        targets, distances, input_ids = [], [], []
+        for i, (m, s) in enumerate(qry_ptb):
+            targets.extend([(i,-1)]*len(m))
+            distances.extend(m.sum(axis=1).tolist())
+            input_ids.extend(s)
+        for i, (m, s) in enumerate(ctx_ptb):
+            targets.extend([(-1,i)]*len(m))
+            distances.extend(m.sum(axis=1).tolist())
+            input_ids.extend(s)
+
+        targets   = np.array(targets,   dtype=int)
+        distances = np.array(distances, dtype=float)
+
+        # evaluate model outputs for each perturbation:
+        chunk_size = batch_size // max(num_qrys, num_ctxs)
+
+        in_qry_output = self._y['query'][None, :, :].to(self.query_encoder.device)
+        in_ctx_output = self._y['context'][None, :, :].to(self.context_encoder.device)
+
+        if verbose: iterator = trange(ceil((max_samples_query+max_samples_context)/chunk_size))
+        else:       iterator = range(ceil((max_samples_query+max_samples_context)/chunk_size))
+
+        output_sim = np.empty((len(input_ids), num_qrys, num_ctxs), dtype=float)
+        for i in iterator:
+            batch_qrys, batch_ctxs = list(zip(*targets[i*chunk_size:(i+1)*chunk_size]))
+            batch_input_ids = input_ids[i*chunk_size:(i+1)*chunk_size]
+            batch_output_sim = torch.empty((len(batch_input_ids), num_qrys, num_ctxs), dtype=torch.float)
+
+            batch_qrys     = torch.tensor(batch_qrys)
+            batch_qry_mask = batch_qrys >= 0
+            batch_qrys     = batch_qrys[batch_qry_mask]
+            num_batch_qrys = int(batch_qry_mask.sum())
+            if num_batch_qrys > 0:
+                batch_qry_ids = torch.stack([ids for ids, is_qry in zip(batch_input_ids, batch_qry_mask) if is_qry])
+                batch_qry_output = in_qry_output.repeat(num_batch_qrys, 1, 1).clone()
+                batch_qry_output[torch.arange(num_batch_qrys),batch_qrys,:] = self.query_encoder(
+                    input_ids=batch_qry_ids.to(self.query_encoder.device),
+                    attention_mask=qry_attention_mask[batch_qrys]
+                ).last_hidden_state[:, 0, :]
+                batch_output_sim[batch_qry_mask] = compute_cosine_similarity_batched(batch_qry_output, in_ctx_output.repeat(num_batch_qrys, 1, 1)).detach().cpu()
+
+            batch_ctxs     = torch.tensor(batch_ctxs)
+            batch_ctx_mask = batch_ctxs >= 0
+            batch_ctxs     = batch_ctxs[batch_ctx_mask]
+            num_batch_ctxs = int(batch_ctx_mask.sum())
+            if num_batch_ctxs > 0:
+                batch_ctx_ids = torch.stack([ids for ids, is_ctx in zip(batch_input_ids, batch_ctx_mask) if is_ctx])
+                batch_ctx_output = in_ctx_output.repeat(num_batch_ctxs, 1, 1).clone()
+                batch_ctx_output[torch.arange(num_batch_ctxs),batch_ctxs,:] = self.context_encoder(
+                    input_ids=batch_ctx_ids.to(self.context_encoder.device),
+                    attention_mask=ctx_attention_mask[batch_ctxs]
+                ).last_hidden_state[:, 0, :]
+                batch_output_sim[batch_ctx_mask] = compute_cosine_similarity_batched(in_qry_output.repeat(num_batch_ctxs, 1, 1), batch_ctx_output).detach().cpu()
+
+            output_sim[i*chunk_size:(i+1)*chunk_size] = batch_output_sim.numpy()
+
+        # pack inputs as binary presence indicators (1 = token present, 0 = masked):
+        x = []
+        for q in range(num_qrys):
+            item = np.ones((len(output_sim), int(num_qry_tokens[q])), dtype=float)
+            q_mask = targets[:, 0] == q
+            if q_mask.any():
+                item[q_mask] = 1. - qry_ptb[q][0]
+            x.append(item),
+        for c in range(num_ctxs):
+            item = np.ones((len(output_sim), int(num_ctx_tokens[c])), dtype=float)
+            c_mask = targets[:, 1] == c
+            if c_mask.any():
+                item[c_mask] = 1. - ctx_ptb[c][0]
+            x.append(item)
+        x = np.concat(x, axis=1)
+
+        # pack outputs:
+        y = output_sim.reshape(output_sim.shape[0], -1)
+
+        return x, y, targets, distances
 
     def forward(self, query:str, k:Optional[int]=None, *,
             contexts:Optional[List[str]]=None,

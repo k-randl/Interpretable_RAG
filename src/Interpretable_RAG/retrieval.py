@@ -13,7 +13,7 @@ from abc import ABCMeta, abstractmethod
 # Methods:                                                              #
 #=======================================================================#
 
-METHODS = ('grad', 'aGrad', 'repAGrad', 'gradIn', 'intGrad')
+METHODS = ('grad', 'aGrad', 'repAGrad', 'gradIn', 'intGrad', 'lime', 'shap')
 Methods_t:TypeAlias = Literal['grad', 'aGrad', 'repAGrad', 'gradIn', 'intGrad']
 
 #=======================================================================#

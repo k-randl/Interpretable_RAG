@@ -60,7 +60,6 @@ ValueFunction = Callable[[Coalition], float]
 ShapleyValues = Float64Array
 
 # Attribution types
-AttributionMethod = Literal["token", "sequence", "bow", "nucleus"]
 ShapleyResult = Dict[str, NDArrayFloat]
 
 # ============================================================================
@@ -78,10 +77,6 @@ EmbeddingBatch = Float32Array  # Shape: [batch, dim]
 SearchDistances = Float32Array  # Shape: [num_queries, top_k]
 SearchIndices = IntArray  # Shape: [num_queries, top_k]
 SearchResult = Tuple[SearchDistances, SearchIndices]
-
-# Gradient-based attribution methods
-GradientMethod = Literal["grad", "gradIn", "intGrad", "aGrad"]
-BaselineType = Literal["zero", "unk", "mask", "random"]
 
 # ============================================================================
 # Generation Types
