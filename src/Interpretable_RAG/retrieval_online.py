@@ -302,16 +302,16 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         # get the embedings:
         in_qry_embeds_fn = self.query_encoder.get_input_embeddings()
-        in_qry_embeds = in_qry_embeds_fn(torch.tensor(self._x['query'], device=self.query_encoder.device))
+        in_qry_embeds = in_qry_embeds_fn(self._x['query'].detach().clone().to(device=self.query_encoder.device))
 
         in_ctx_embeds_fn = self.context_encoder.get_input_embeddings()
-        in_ctx_embeds = in_ctx_embeds_fn(torch.tensor(self._x['context'], device=self.context_encoder.device))
+        in_ctx_embeds = in_ctx_embeds_fn(self._x['context'].detach().clone().to(device=self.context_encoder.device))
 
         # get attention masks:
-        qry_attention_mask = torch.tensor(self._x['query'] != self.tokenizer.pad_token_id,
-                                          device=in_qry_embeds.device, dtype=in_qry_embeds.dtype)
-        ctx_attention_mask = torch.tensor(self._x['context'] != self.tokenizer.pad_token_id,
-                                          device=in_ctx_embeds.device, dtype=in_ctx_embeds.dtype)
+        qry_attention_mask = (self._x['query'] != self.tokenizer.pad_token_id).detach()
+        qry_attention_mask = qry_attention_mask.to(device=in_qry_embeds.device, dtype=in_qry_embeds.dtype)
+        ctx_attention_mask = (self._x['context'] != self.tokenizer.pad_token_id).detach()
+        ctx_attention_mask = ctx_attention_mask.to(device=in_ctx_embeds.device, dtype=in_ctx_embeds.dtype)
 
         # get baseline embeddings:
         bl_qry_embeds_fn = lambda t: in_qry_embeds_fn(torch.full(self._x['query'].shape, torch.tensor(t), device=self.query_encoder.device))
@@ -339,16 +339,10 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         else: raise ValueError(f'Parameter `base` must be one of `\'pos\'`, `\'mask\'`, `\'pad\'`, `\'unk\'`, or `None` but is {base}.')
 
         # baseline is baseline tokens + special tokens:
-        bl_qry_mask = qry_attention_mask[:,:,None] * torch.tensor(
-            self._special_tokens_mask['query'],
-            device=self.query_encoder.device
-        )[:,:,None]
+        bl_qry_mask = qry_attention_mask[:,:,None] * self._special_tokens_mask['query'].to(device=self.query_encoder.device)[:,:,None]
         bl_qry_embeds = torch.where(bl_qry_mask.to(torch.bool), bl_qry_embeds, in_qry_embeds)
 
-        bl_ctx_mask = ctx_attention_mask[:,:,None] * torch.tensor(
-            self._special_tokens_mask['context'],
-            device=self.context_encoder.device
-        )[:,:,None]
+        bl_ctx_mask = ctx_attention_mask[:,:,None] * self._special_tokens_mask['context'].to(device=self.context_encoder.device)[:,:,None]
         bl_ctx_embeds = torch.where(bl_ctx_mask.to(torch.bool), bl_ctx_embeds, in_ctx_embeds)
 
         in_qry_embeds -= bl_qry_embeds
