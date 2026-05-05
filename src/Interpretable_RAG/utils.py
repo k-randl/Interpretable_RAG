@@ -411,7 +411,7 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
             while len(s) < size:
                 s.add(random.randint(1, population)) # range is 1 to (n//2)
 
-            sample[1:size+1]  = np.array(list(s))
+            sample[1:size+1]  = np.array(list(s), dtype=int)
             sample[size+1:-1] = np.invert(sample[1:size+1]) & (n-1)
 
         else: sample = np.arange(num_samples)
@@ -426,7 +426,7 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
             while len(s) < size:
                 s.add(random.randint(1, population)) # range is 1 to n-1
 
-            sample[1:-1] = np.array(list(s))
+            sample[1:-1] = np.array(list(s), dtype=int)
 
         else: sample = np.arange(num_samples)
 
