@@ -1,11 +1,12 @@
 import os
 import pickle
+import torch
 import numpy as np
 
 from transformers import PreTrainedTokenizer, AutoTokenizer
 from torch import Tensor, FloatTensor
 from numpy.typing import NDArray
-from typing import Union, List, Dict, Literal, Optional, TypeAlias
+from typing import Union, List, Dict, Literal, Optional, TypeAlias, Any
 
 from abc import ABCMeta, abstractmethod
 
@@ -14,7 +15,7 @@ from abc import ABCMeta, abstractmethod
 #=======================================================================#
 
 METHODS = ('grad', 'aGrad', 'repAGrad', 'gradIn', 'intGrad', 'lime', 'shap')
-Methods_t:TypeAlias = Literal['grad', 'aGrad', 'repAGrad', 'gradIn', 'intGrad']
+RetrieverMethods_t:TypeAlias = Literal['grad', 'aGrad', 'repAGrad', 'gradIn', 'intGrad', 'lime', 'shap']
 
 #=======================================================================#
 # Types:                                                                #
@@ -24,6 +25,65 @@ List_t:TypeAlias   = Dict[Literal['query', 'context'], List]
 Array_t:TypeAlias  = Dict[Literal['query', 'context'], NDArray]
 Tensor_t:TypeAlias = Dict[Literal['query', 'context'], Tensor]
 Out_t:TypeAlias    = Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]
+
+#=======================================================================#
+# Helper Functions:                                                     #
+#=======================================================================#
+
+def append_tensor_t(obj:Optional[Tensor_t], append:bool, qry:torch.Tensor, ctx:torch.Tensor,
+        pad_val:Any, is_grad:bool=False) -> Tensor_t:
+    """Build or extend a Tensor_t dict with query and context tensors.
+
+    Args:
+        obj:        Existing Tensor_t to extend, or None to create a fresh one.
+        append:     If True, extend `obj`; if False, ignore `obj` and return a new dict.
+        qry:        Query tensor.
+        ctx:        Context tensor to append as new rows.
+        pad_val:    Fill value used when expanding the context tensor to the new shape.
+        is_grad:    If True, accumulate query gradients instead of asserting equality.
+
+    Returns:
+        A Tensor_t dict with keys ``'query'`` and ``'context'``.
+    """
+    if obj is not None and append:
+        if is_grad: qry += obj['query']
+        else: assert torch.equal(obj['query'], qry)
+
+        old_shape = obj['context'].shape
+        new_shape = tuple([old_shape[0] + ctx.shape[0],] + [max(*s) for s in zip(old_shape[1:], ctx.shape[1:], strict=True)])
+
+        new_c = torch.full(new_shape, pad_val,
+                    dtype=obj['context'].dtype, device=obj['context'].device)
+        idx = tuple([slice(0, old_shape[0])] + [slice(0, s) for s in old_shape[1:]])
+        new_c[idx] = obj['context']
+        idx = tuple([slice(old_shape[0], None)] + [slice(0, s) for s in ctx.shape[1:]])
+        new_c[idx] = ctx
+
+        ctx = new_c
+    
+    return {'query': qry, 'context': ctx}
+
+def compute_cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Compute pairwise dot-product similarity between rows of `a` and `b`.
+
+    Args:
+        a: Tensor of shape ``(m, d)``.
+        b: Tensor of shape ``(n, d)``.
+
+    Returns:
+        Similarity matrix of shape ``(m, n)``.
+    """
+    return a @ b.T
+compute_cosine_similarity_batched = torch.vmap(compute_cosine_similarity)
+compute_cosine_similarity_batched.__doc__ = """Batched version of `compute_cosine_similarity` via `torch.vmap`.
+
+Args:
+    a: Tensor of shape ``(batch, m, d)``.
+    b: Tensor of shape ``(batch, n, d)``.
+
+Returns:
+    Similarity matrices of shape ``(batch, m, n)``.
+"""
 
 #=======================================================================#
 # Retriever Explanation:                                                #
@@ -108,8 +168,26 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         raise NotImplementedError()
 
+    def lime(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
+        '''Lime scores of the last batch.
+
+        Args:
+            filter_special_tokens:  If `True`, set the importance of special tokens to 0.
+            
+        Returns:                    Importance scores with shape = (bs, n_inputs)'''
+        raise NotImplementedError()
+
+    def shap(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
+        '''KernelSHAP scores of the last batch.
+
+        Args:
+            filter_special_tokens:  If `True`, set the importance of special tokens to 0.
+            
+        Returns:                    Importance scores with shape = (bs, n_inputs)'''
+        raise NotImplementedError()
+
     def save_values(self, path:Optional[str]=None, *,
-            methods:Optional[List[Methods_t]]=None,
+            methods:Optional[List[RetrieverMethods_t]]=None,
             filter_special_tokens:bool=True,
             num_steps:int=100,
             batch_size:int=64
@@ -154,6 +232,14 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
 
         if 'intGrad' in methods:
             try: data_to_save['intGrad'] = self.intGrad(filter_special_tokens=filter_special_tokens, num_steps=num_steps, batch_size=batch_size)
+            except NotImplementedError: pass
+
+        if 'lime' in methods:
+            try: data_to_save['lime'] = self.lime(filter_special_tokens=filter_special_tokens, batch_size=batch_size)
+            except NotImplementedError: pass
+
+        if 'shap' in methods:
+            try: data_to_save['shap'] = self.shap(filter_special_tokens=filter_special_tokens, batch_size=batch_size)
             except NotImplementedError: pass
 
         if path is None: return data_to_save
@@ -225,6 +311,8 @@ class RetrieverExplanation(RetrieverExplanationBase):
         result._repAGrad = data.get('repAGrad')
         result._gradIn = data.get('gradIn')
         result._intGrad = data.get('intGrad')
+        result._lime = data.get('lime')
+        result._shap = data.get('shap')
 
         if query_encoder_name_or_path is None: result._query_encoder_name_or_path = data['query_encoder_name_or_path'] 
         else: result._query_encoder_name_or_path = query_encoder_name_or_path
@@ -298,3 +386,19 @@ class RetrieverExplanation(RetrieverExplanationBase):
             Importance scores with shape = (bs, n_inputs)'''
         if self._intGrad is None: raise NotImplementedError("No `intGrad` values were saved.")
         return self._intGrad
+
+    def lime(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
+        '''Lime scores of the last batch.
+            
+        Returns:
+            Importance scores with shape = (bs, n_inputs)'''
+        if self._lime is None: raise NotImplementedError("No `lime` values were saved.")
+        return self._lime
+
+    def shap(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
+        '''KernelSHAP scores of the last batch.
+            
+        Returns:
+            Importance scores with shape = (bs, n_inputs)'''
+        if self._shap is None: raise NotImplementedError("No `shap` values were saved.")
+        return self._shap

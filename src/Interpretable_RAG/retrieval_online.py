@@ -11,7 +11,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTo
 from typing import Optional, List, Literal, Union, Callable, Any, Tuple
 from numpy.typing import NDArray
 
-from .retrieval import RetrieverExplanationBase, List_t, Tensor_t
+from .retrieval import RetrieverExplanationBase, List_t, Tensor_t, append_tensor_t, compute_cosine_similarity_batched
 from .utils import sample_perturbations
 
 #=======================================================================#
@@ -32,30 +32,6 @@ def embedding_backward(model:PreTrainedModel, dPhi:torch.Tensor) -> torch.Tensor
     #   => f'(input_ids, token_type_ids, token_ps) = nn'(input_ids, token_type_ids, token_ps) @ W
     w = model.embeddings.word_embeddings.weight.T.detach().to(dPhi)
     return torch.vmap(lambda grad: grad @ w)(dPhi)
-
-def append_tensor_t(obj:Optional[Tensor_t], append:bool, qry:torch.Tensor, ctx:torch.Tensor,
-        pad_val:Any, is_grad:bool=False) -> Tensor_t:
-    if obj is not None and append:
-        if is_grad: qry += obj['query']
-        else: assert torch.equal(obj['query'], qry)
-
-        old_shape = obj['context'].shape
-        new_shape = tuple([old_shape[0] + ctx.shape[0],] + [max(*s) for s in zip(old_shape[1:], ctx.shape[1:], strict=True)])
-
-        new_c = torch.full(new_shape, pad_val,
-                    dtype=obj['context'].dtype, device=obj['context'].device)
-        idx = tuple([slice(0, old_shape[0])] + [slice(0, s) for s in old_shape[1:]])
-        new_c[idx] = obj['context']
-        idx = tuple([slice(old_shape[0], None)] + [slice(0, s) for s in ctx.shape[1:]])
-        new_c[idx] = ctx
-
-        ctx = new_c
-    
-    return {'query': qry, 'context': ctx}
-
-def compute_cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    return a @ b.T
-compute_cosine_similarity_batched = torch.vmap(compute_cosine_similarity)
 
 #=======================================================================#
 # Generic Model Class:                                                  #
@@ -564,7 +540,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         elif max_samples_context == 'inf': max_samples_context = int(2 ** int(num_ctx_tokens.sum()))
         max_samples_context = max(max_samples_context, int(num_ctx_tokens.sum()*10))
 
-        x, y, targets, distances = self.__sample_perturbations(
+        x, y, targets, distances, features = self.__sample_perturbations(
             base, max_samples_query, max_samples_context,
             qry_attention_mask, ctx_attention_mask,
             num_qrys, num_ctxs, num_qry_tokens, num_ctx_tokens,
@@ -579,20 +555,34 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # get weights:
         w = kernel_fn(distances)
 
-        # fit linear regressor:
-        lr = Ridge(alpha=0.01, fit_intercept=True, solver='cholesky')
-        lr.fit(x, y, sample_weight=w)
-        prediction_score = lr.score(x, y, sample_weight=w)
-
-        # decode:
-        lime = {key:torch.zeros(self._x[key].shape, dtype=torch.float) for key in self._x}
+        # fit one Ridge regressor per group and decode:
+        lime = {key: torch.zeros(self._x[key].shape, dtype=torch.float) for key in self._x}
+        intercepts = {'query': [], 'context': []}
+        prediction_scores = []
         offset = 0
-        for q, n in enumerate(num_qry_tokens):
-            lime['query'][q,:n] = torch.tensor(lr.coef_[:,offset:offset+n].sum(axis=0))
-            offset += n
-        for c, n in enumerate(num_ctx_tokens):
-            lime['context'][c,:n] = torch.tensor(lr.coef_[:,offset:offset+n].sum(axis=0))
-            offset += n
+
+        for key, idx_range, n_tokens_arr, target_col in [
+                ('query',   range(num_qrys), num_qry_tokens, 0),
+                ('context', range(num_ctxs), num_ctx_tokens, 1)]:
+            for i, n in zip(idx_range, n_tokens_arr):
+                groups   = features[key][i]
+                rows     = np.where(targets[:, target_col] == i)[0]
+                x_group  = x[rows, offset:offset + len(groups)]
+                y_group  = y[rows]
+                w_group  = w[rows]
+
+                lr = Ridge(alpha=0.01, fit_intercept=True, solver='cholesky')
+                lr.fit(x_group, y_group, sample_weight=w_group)
+
+                prediction_scores.append(lr.score(x_group, y_group, sample_weight=w_group))
+                intercepts[key].append(lr.intercept_)
+
+                coef = lr.coef_.sum(axis=0)
+                coef = np.repeat(coef, [len(group) for group in groups])
+                lime[key][i, :n] = torch.tensor(coef)
+                offset += len(groups)
+
+        prediction_score = float(np.mean(prediction_scores))
 
         if filter_special_tokens:
             # set the importance of special tokens to 0.
@@ -602,7 +592,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             return lime
 
         result = (lime, )
-        if output_offset:   result = result + ({'query': lr.intercept_, 'context': lr.intercept_},)
+        if output_offset:   result = result + (intercepts,)
         if output_coverage: result = result + (prediction_score,)
         return result
 
@@ -663,12 +653,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         elif max_samples_context == 'inf': max_samples_context = int(2 ** int(num_ctx_tokens.sum()))
         max_samples_context = max(max_samples_context, int(num_ctx_tokens.sum()*10))
 
-        # complementary sampling requires an even sample count:
-        if complementary:
-            if max_samples_query   % 2 != 0: max_samples_query   -= 1
-            if max_samples_context % 2 != 0: max_samples_context -= 1
-
-        x, y, targets, distances = self.__sample_perturbations(
+        x, y, targets, distances, features = self.__sample_perturbations(
             base, max_samples_query, max_samples_context,
             qry_attention_mask, ctx_attention_mask,
             num_qrys, num_ctxs, num_qry_tokens, num_ctx_tokens,
@@ -687,10 +672,10 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         for j in range(len(targets)):
             qry_idx, ctx_idx = targets[j]
             if qry_idx >= 0:
-                n = int(num_qry_tokens[qry_idx])
+                n = len(features['query'][qry_idx])
             else:
-                n = int(num_ctx_tokens[ctx_idx])
-            s = n - int(distances[j])   # number of present (non-masked) tokens
+                n = len(features['context'][ctx_idx])
+            s = n - int(distances[j])   # number of present (non-masked) features
             w[j] = _get_shap_weights(n, s)
 
         # Per-group regression with the official SHAP algebraic constraint.
@@ -708,23 +693,25 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                 ('context', range(num_ctxs), num_ctx_tokens, 1)]:
 
             for i in idx_range:
-                n_group = int(n_tokens_arr[i])
-                rows    = np.where(targets[:, target_col] == i)[0]
+                n_tokens       = int(n_tokens_arr[i])
+                features_group = features[key][i]
+                n_features     = len(features_group)
+                rows           = np.where(targets[:, target_col] == i)[0]
 
                 y_full_group = y[rows[0]]    # (n_outputs,)
                 y_null_group = y[rows[-1]]   # (n_outputs,)
                 null_outputs[key].append(y_null_group)
 
-                if n_group == 1 or len(rows) <= 2:
-                    # single token or no inner samples: attribution is the direct difference
+                if n_features == 1 or len(rows) <= 2:
+                    # single feature or no inner samples: attribution is the direct difference
                     phi_group = (y_full_group - y_null_group)[None, :]   # (1, n_outputs)
 
                 else:
-                    x_group = x[rows[1:-1], col_offset:col_offset+n_group]   # (n_inner, n_group)
+                    x_group = x[rows[1:-1], col_offset:col_offset+n_features]   # (n_inner, n_features)
                     y_group = y[rows[1:-1]]   # (n_inner, n_outputs)
                     w_group = w[rows[1:-1]]   # (n_inner,)
 
-                    # Eliminate last token column (official SHAP transformation):
+                    # Eliminate last feature column (official SHAP transformation):
                     x_adj = x_group[:, :-1] - x_group[:, -1:]
                     y_adj = y_group - y_null_group - x_group[:, -1:] * (y_full_group - y_null_group)
 
@@ -732,13 +719,14 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                     WX        = w_group[:, None] * x_adj                  # avoids materialising diag(w)
                     phi_other = np.linalg.solve(x_adj.T@WX, WX.T@y_adj)   # (n_group-1, n_outputs)
 
-                    # Recover the eliminated token via the constraint:
+                    # Recover the eliminated feature via the constraint:
                     phi_last  = (y_full_group - y_null_group) - phi_other.sum(axis=0)
-                    phi_group = np.vstack([phi_other, phi_last[None, :]]) # (n_group, n_outputs)
+                    phi_group = np.vstack([phi_other, phi_last[None, :]])      # (n_features, n_outputs)
 
-                # Sum over output dimensions, consistent with the current decode convention:
-                shap[key][i, :n_group] = torch.tensor(phi_group.sum(axis=1).astype(np.float32))
-                col_offset += n_group
+                # Sum over output dims, broadcast feature attributions to token-level:
+                phi_per_token = np.repeat(phi_group.sum(axis=1), [len(f) for f in features_group]).astype(np.float32)
+                shap[key][i, :n_tokens] = torch.tensor(phi_per_token)
+                col_offset += n_features
 
         if filter_special_tokens:
             shap = {key: shap[key] * self._special_tokens_mask[key] for key in shap}
@@ -768,22 +756,38 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         elif base == 'unk':  ptb_id = self.tokenizer.unk_token_id
         else: raise ValueError(f'Parameter `base` must be one of `\'mask\'`, `\'pad\'`, or `\'unk\'` but is {base}.')
 
+        # build feature groups: n//63 groups of ceil(n/63) adjacent tokens when n >= 64:
+        def _make_groups(n):
+            n = int(n)
+            k = max(1, int(np.ceil(n / 63)))
+            tokens = torch.arange(n, dtype=torch.int)
+            return [tokens[i:i+k] for i in range(0, n, k)]
+        qry_features = [_make_groups(n) for n in num_qry_tokens]
+        ctx_features = [_make_groups(n) for n in num_ctx_tokens]
+        features = {'query': qry_features, 'context': ctx_features}
+
+        total_qry_features = sum(len(f) for f in qry_features)
+        total_ctx_features = sum(len(f) for f in ctx_features)
+
         # sample perturbed inputs:
-        def perturbe_input(indices, input_ids):
+        def _perturbe_input(groups, input_ids):
             _ids = input_ids.clone()
-            if len(indices) > 0:
-                _ids[torch.stack(indices)] = ptb_id
+            if len(groups) > 0:
+                _ids[torch.cat(groups)] = ptb_id
             return _ids
+        def _n_samples(budget, n_features, total_features):
+            n = budget * n_features // total_features
+            return n - (n % 2) if complementary else n
         qry_ptb = [sample_perturbations(
-                    torch.arange(n),
-                    lambda i: perturbe_input(i, x),
-                    num_samples=max_samples_query//num_qrys,
-                    complementary=complementary) for x, n in zip(self._x['query'], num_qry_tokens)]
+                    qry_features[q],
+                    lambda i: _perturbe_input(i, x),
+                    num_samples=_n_samples(max_samples_query, len(qry_features[q]), total_qry_features),
+                    complementary=complementary) for q, x in enumerate(self._x['query'])]
         ctx_ptb = [sample_perturbations(
-                    torch.arange(n),
-                    lambda i: perturbe_input(i, x),
-                    num_samples=max_samples_context//num_ctxs,
-                    complementary=complementary) for x, n in zip(self._x['context'], num_ctx_tokens)]
+                    ctx_features[c],
+                    lambda i: _perturbe_input(i, x),
+                    num_samples=_n_samples(max_samples_context, len(ctx_features[c]), total_ctx_features),
+                    complementary=complementary) for c, x in enumerate(self._x['context'])]
 
         # pack perturbed inputs:
         targets, distances, input_ids = [], [], []
@@ -805,8 +809,8 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         in_qry_output = self._y['query'][None, :, :].to(self.query_encoder.device)
         in_ctx_output = self._y['context'][None, :, :].to(self.context_encoder.device)
 
-        if verbose: iterator = trange(ceil((max_samples_query+max_samples_context)/chunk_size))
-        else:       iterator = range(ceil((max_samples_query+max_samples_context)/chunk_size))
+        if verbose: iterator = trange(ceil(len(targets)/chunk_size))
+        else:       iterator = range(ceil(len(targets)/chunk_size))
 
         output_sim = np.empty((len(input_ids), num_qrys, num_ctxs), dtype=float)
         for i in iterator:
@@ -842,16 +846,16 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
             output_sim[i*chunk_size:(i+1)*chunk_size] = batch_output_sim.numpy()
 
-        # pack inputs as binary presence indicators (1 = token present, 0 = masked):
+        # pack inputs as binary presence indicators (1 = feature present, 0 = masked):
         x = []
         for q in range(num_qrys):
-            item = np.ones((len(output_sim), int(num_qry_tokens[q])), dtype=float)
+            item = np.ones((len(output_sim), len(qry_features[q])), dtype=float)
             q_mask = targets[:, 0] == q
             if q_mask.any():
                 item[q_mask] = 1. - qry_ptb[q][0]
             x.append(item),
         for c in range(num_ctxs):
-            item = np.ones((len(output_sim), int(num_ctx_tokens[c])), dtype=float)
+            item = np.ones((len(output_sim), len(ctx_features[c])), dtype=float)
             c_mask = targets[:, 1] == c
             if c_mask.any():
                 item[c_mask] = 1. - ctx_ptb[c][0]
@@ -861,7 +865,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         # pack outputs:
         y = output_sim.reshape(output_sim.shape[0], -1)
 
-        return x, y, targets, distances
+        return x, y, targets, distances, features
 
     def forward(self, query:str, k:Optional[int]=None, *,
             contexts:Optional[List[str]]=None,

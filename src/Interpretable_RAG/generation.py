@@ -24,7 +24,10 @@ from abc import ABCMeta, abstractmethod
 MAXINT = int(2**31 - 1) # Maximum value for signed int32
 
 AGGREGATIONS = ('token', 'sequence', 'bow', 'nucleus')
-Aggregations_t:TypeAlias = Literal['token', 'sequence', 'bow', 'nucleus']
+GeneratorAggregations_t:TypeAlias = Literal['token', 'sequence', 'bow', 'nucleus']
+
+METHODS = ('lime', 'shap')
+GeneratorMethods_t:TypeAlias = Literal['lime', 'shap']
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -212,9 +215,8 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
     #===================================================================#
 
     @abstractmethod
-    def get_shapley_values(self,
-            key:Union[Literal['query', 'context'], None],
-            aggregation:Aggregations_t='token',
+    def shap(self,
+            key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token',
             **kwargs
         ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
         """Generates Shapley feature attribution values for the chosen aggregation method.
@@ -231,8 +233,26 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
         """
         raise NotImplementedError()
 
+    @abstractmethod
+    def lime(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token',
+            **kwargs
+        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+        """Generates LIME feature attribution values for the chosen aggregation method.
+
+        Args:
+            key (str):              Explanation key. Can either be `'query'` or `'context'`.
+                                    If `None` returns a dictionary of both.
+            aggregation (str):      Aggregation method for probabilities (default: `'token'`).
+
+        Returns:
+            A dictionary containing the following two keys (if `key` is specified) or one of the following:
+            - `'query'`: a `numpy.ndarray` containing the LIME values for the query
+            - `'context'`: a `numpy.ndarray` containing the LIME values for the contexts.
+        """
+        raise NotImplementedError()
+
     def save_values(self, path:Optional[str]=None, *,
-            aggregations:Optional[List[Aggregations_t]]=None,
+            aggregations:Optional[List[GeneratorAggregations_t]]=None,
         ) -> Union[str, None]:
         """Saves the explanation data to a file.
 
@@ -256,7 +276,8 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
             aggregations = list(AGGREGATIONS)
 
         for aggregation in aggregations:
-            data_to_save['shapley_values_' + aggregation] = self.get_shapley_values(None, aggregation)
+            data_to_save['shapley_values_' + aggregation] = self.shap(None, aggregation)
+            data_to_save['lime_' + aggregation] = self.lime(None, aggregation)
 
         if path is None: return data_to_save
 
@@ -322,9 +343,13 @@ class GeneratorExplanation(GeneratorExplanationBase):
         result._qry_precise = data['shap_qry_precise']
         result._ctx_precise = data['shap_ctx_precise']
 
-        result._shapley_values = {}
+        result._shapley_attributions = {}
         for aggregation in ['token', 'sequence', 'bow', 'nucleus']:
-            result._shapley_values[aggregation] = data['shapley_values_' + aggregation]
+            result._shapley_attributions[aggregation] = data.get('shapley_values_' + aggregation)
+
+        result._lime_attributions = {}
+        for aggregation in ['token', 'sequence', 'bow', 'nucleus']:
+            result._lime_attributions[aggregation] = data.get('lime_' + aggregation)
 
         if model_name_or_path is None: result._model_name_or_path = data['model_name_or_path'] 
         else: result._model_name_or_path = model_name_or_path
@@ -364,9 +389,7 @@ class GeneratorExplanation(GeneratorExplanationBase):
         """The huggingface string identifier of the generator model."""
         return self._model_name_or_path
 
-    def get_shapley_values(self,
-            key:Union[Literal['query', 'context'], None],
-            aggregation:Aggregations_t='token',
+    def shap(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token',
             **kwargs
         ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
         """Generates Shapley feature attribution values for the chosen aggregation method.
@@ -381,8 +404,26 @@ class GeneratorExplanation(GeneratorExplanationBase):
             - `'query'`: a `numpy.ndarray` containing the Shapley values for the query
             - `'context'`: a `numpy.ndarray` containing the Shapley values for the contexts.
         """
-        if key is None: return self._shapley_values[aggregation]
-        else: return self._shapley_values[aggregation][key]
+        if key is None: return self._shapley_attributions[aggregation]
+        else: return self._shapley_attributions[aggregation][key]
+
+    def lime(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token',
+            **kwargs
+        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+        """Generates LIME feature attribution values for the chosen aggregation method.
+
+        Args:
+            key (str):              Explanation key. Can either be `'query'` or `'context'`.
+                                    If `None` returns a dictionary of both.
+            aggregation (str):      Aggregation method for probabilities (default: `'token'`).
+
+        Returns:
+            A dictionary containing the following two keys (if `key` is specified) or one of the following:
+            - `'query'`: a `numpy.ndarray` containing the LIME values for the query
+            - `'context'`: a `numpy.ndarray` containing the LIME values for the contexts.
+        """
+        if key is None: return self._lime_attributions[aggregation]
+        else: return self._lime_attributions[aggregation][key]
 
 
 #=======================================================================#
@@ -1061,7 +1102,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # generate prompts:
                 if max_samples == 0:
                     # do not generate prompts:
-                    perturbed_prompts = []
+                    perturbed_prompts = [func([]), func(items)]
                     cache = None
 
                 elif max_samples >= n or min_samples >= n:
@@ -1083,9 +1124,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 return cache, perturbed_prompts
 
 
-            def get_shapley_values(self,
-                key:Union[Literal['query', 'context'], None],
-                aggregation:Aggregations_t='token',
+            def shap(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token', *,
                 num_samples:int=100,
                 sample_size:int=10,
                 **kwargs
@@ -1138,12 +1177,12 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 result = {'query': None, 'context': None} if key is None else {key: None}
                 for k in result:
                     if self._shap_cache[k] is None: result[k] = None
-                    elif self._shap_cache[k]['precise']: result[k] = self._get_shapley_values_precise(probs, **self._shap_cache[k])
-                    else: result[k] = self._get_shapley_values_monte_carlo(probs, num_samples=num_samples, sample_size=sample_size, **self._shap_cache[k])
+                    elif self._shap_cache[k]['precise']: result[k] = self._get_shapley_attributions_precise(probs, **self._shap_cache[k])
+                    else: result[k] = self._get_shapley_attributions_monte_carlo(probs, num_samples=num_samples, sample_size=sample_size, **self._shap_cache[k])
 
                 return result if key is None else result[key]
 
-            def _get_shapley_values_precise(self, probs:NDArray[np.float64], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool) -> NDArray[np.float64]:
+            def _get_shapley_attributions_precise(self, probs:NDArray[np.float64], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool) -> NDArray[np.float64]:
                 assert precise is True, 'Precise SHAP values can only be calculated for precise values!'
 
                 # Get the shape of the permutations matrix: (num_permutations, num_sets)
@@ -1174,7 +1213,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # Return SHAP values for all but the baseline (first one)
                 return p_shap.squeeze()
 
-            def _get_shapley_values_monte_carlo(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float64]:
+            def _get_shapley_attributions_monte_carlo(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float64]:
                 assert precise is False, 'Monte Carlo SHAP values can only be calculated for approximate values!'
 
                 index_size = len(indices)
@@ -1201,7 +1240,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                         sample = np.concatenate([sample, (index_size-1)-sample])
 
                     attributions.append(
-                        self._get_shapley_values_kernel(
+                        self._get_shapley_attributions_kernel(
                             probs   = probs,
                             indices = np.concatenate([indices[:1], indices[sample], indices[-1:]]),
                             sets    = np.concatenate([sets[:1], sets[sample], sets[-1:]]),
@@ -1212,44 +1251,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # Return the mean of the attributions across all samples:
                 return np.mean(attributions, axis=0)
             
-            def _get_shapley_values_complementary(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, **kwargs) -> NDArray[np.float64]:
-                assert precise is False, 'Complementary SHAP values can only be calculated for approximate values!'
-
-                # Initialize array to store marginal contributions for each permutation step
-                p_marginal = np.empty((indices.shape[0] - 2, 2) + probs[0].shape, dtype=probs[0].dtype)
-
-                # calculate complementary marginal contributions:
-                p_marginal[:,0] = np.stack([probs[i] for i in indices[1:-1]]) - probs[0]
-                p_marginal[:,1] = probs[-1] - p_marginal[:,0]
-
-                # fit a ridge regressor using the SHAP kernel:
-                def _get_shap_weights(z):
-                    l, s = len(z), sum(z)
-                    denominator = comb(l, s) * s * (l - s)
-                    if denominator == 0: return 1e-10
-                    else: return (l-1) / denominator
-
-                lr = Ridge(alpha=0.001, solver='cholesky')  # Fast solver with minimal regularization
-                x  = np.concatenate((
-                    #[sets[0], sets[-1]],
-                    sets[1:-1],
-                    ~sets[1:-1]
-                ), axis=0, dtype=float)
-                y  = np.concatenate((
-                    #[probs[0], probs[-1]],
-                    p_marginal[:,0],
-                    p_marginal[:,1]
-                ), axis=0, dtype=float)
-                w  = [_get_shap_weights(z) for z in x]
-                lr.fit(x, y, w)
-
-                # attributions are estimated SHAP values:
-                attributions = lr.coef_.T
-
-                # rescale attributions to fit prediction:
-                return attributions
-            
-            def _get_shapley_values_kernel(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, **kwargs) -> NDArray[np.float64]:
+            def _get_shapley_attributions_kernel(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, **kwargs) -> NDArray[np.float64]:
                 assert precise is False, 'Kernel SHAP values can only be calculated for approximate values!'
 
                 # fit a ridge regressor using the SHAP kernel:
@@ -1269,6 +1271,119 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # rescale attributions to fit prediction:
                 return attributions
             
+            
+            def lime(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token', *,
+                    kernel_width:int=25,
+                    kernel_fn:Optional[Callable]=None,
+                    **kwargs
+                ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+                """Generates LIME feature attribution values for the chosen aggregation method.
+
+                Args:
+                    key (str):              Explanation key. Can either be `'query'` or `'context'`.
+                                            If `None` returns a dictionary of both.
+                    aggregation (str):      Aggregation method for probabilities (default: `'token'`).
+                    kernel_width (int):     Width of the exponential similarity kernel (default: `25`).
+                    kernel_fn (callable):   Similarity kernel taking distances and returning weights.
+                                            If `None`, defaults to `sqrt(exp(-d^2 / kernel_width^2))`.
+
+                Returns:
+                    A dictionary containing the following two keys (if `key` is specified) or one of the following:
+                    - `'query'`: a `numpy.ndarray` containing the LIME values for the query
+                    - `'context'`: a `numpy.ndarray` containing the LIME values for the contexts.
+                """
+
+                # Get the correct probabilities based on the `aggreagtion` parameter:
+                if aggregation == 'nucleus':
+                    # Flatten each token probability array from compared documents:
+                    probs = [p.flatten() for p in self.cmp_nucleus_probs(**kwargs)]
+
+                    # Add the generated token probabilities as the final "player" in the SHAP context:
+                    probs.append(self.gen_nucleus_probs(**kwargs).flatten())
+
+
+                elif aggregation == 'sequence':
+                    # Convert the scalar probability from compared documents to a ndarray:
+                    probs = [np.array(p) for p in self.cmp_sequence_probs]
+
+                    # Add the generated token probabilities as the final "player" in the SHAP context:
+                    probs.append(np.array(self.gen_sequence_prob))
+
+
+                elif hasattr(self, f'gen_{aggregation}_probs') and hasattr(self, f'cmp_{aggregation}_probs'):
+                    # Flatten each token probability array from compared documents:
+                    probs = [p.flatten() for p in eval(f'self.cmp_{aggregation}_probs')]
+
+                    # Add the generated token probabilities as the final "player" in the SHAP context:
+                    probs.append(eval(f'self.gen_{aggregation}_probs').flatten())
+
+
+                else: raise ValueError(f'Unknown value for parameter `aggregation`: "{aggregation}"')
+
+                # Default exponential kernel (see https://github.com/marcotcr/lime/blob/master/lime/lime_text.py):
+                if kernel_fn is None:
+                    kernel_fn = lambda d: np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
+
+                # Call actual method:
+                result = {'query': None, 'context': None} if key is None else {key: None}
+                for k in result:
+                    if self._shap_cache[k] is None: result[k] = None
+                    elif self._shap_cache[k]['precise']: result[k] = self._get_lime_attributions_precise(probs, kernel_fn=kernel_fn, **self._shap_cache[k])
+                    else: result[k] = self._get_lime_attributions_approx(probs, kernel_fn=kernel_fn, **self._shap_cache[k])
+
+                return result if key is None else result[key]
+
+            def _get_lime_attributions_precise(self, probs:NDArray[np.float64], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool, kernel_fn:Callable, **kwargs) -> NDArray[np.float64]:
+                assert precise is True
+
+                n_permutations, n_steps = indices.shape
+                n_features = n_steps - 1
+
+                # Collect unique coalitions and their global probs indices via permutation paths:
+                coalition_map = {}
+                for i in range(n_permutations):
+                    features_so_far = set()
+                    for j in range(n_steps):
+                        coalition = frozenset(features_so_far)
+                        if coalition not in coalition_map:
+                            coalition_map[coalition] = int(indices[i, j])
+                        if j < n_features:
+                            features_so_far.add(int(new_docs[i, j]))
+
+                # Build binary presence matrix (1 = feature present):
+                coalitions = sorted(coalition_map.keys(), key=len)
+                x = np.array([[1. if f in c else 0. for f in range(n_features)] for c in coalitions], dtype=float)
+                y = np.stack([probs[coalition_map[c]] for c in coalitions])
+
+                # Exclude empty and full coalitions:
+                mask = (x.sum(axis=1) > 0) & (x.sum(axis=1) < n_features)
+                x, y = x[mask], y[mask]
+
+                # Distance = number of absent features (Hamming distance to full instance):
+                distances = n_features - x.sum(axis=1)
+                w = kernel_fn(distances)
+
+                lr = Ridge(alpha=0.01, fit_intercept=True, solver='cholesky')
+                lr.fit(x, y, sample_weight=w)
+                return lr.coef_.T
+
+            def _get_lime_attributions_approx(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, kernel_fn:Callable, **kwargs) -> NDArray[np.float64]:
+                assert precise is False
+
+                n_features = sets.shape[1]
+
+                # Exclude empty (row 0) and full (row -1) coalitions:
+                x = sets[1:-1].astype(float)
+                y = np.stack([probs[i] for i in indices[1:-1]])
+
+                # Distance = number of absent features (Hamming distance to full instance):
+                distances = n_features - x.sum(axis=1)
+                w = kernel_fn(distances)
+
+                lr = Ridge(alpha=0.01, fit_intercept=True, solver='cholesky')
+                lr.fit(x, y, sample_weight=w)
+                return lr.coef_.T
+
             def _extract_top_exp_prob(self, top_k = 200):
                 """Extracts the top-k probabilities and their corresponding tokens from the generated tensors.
 
@@ -1424,9 +1539,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
     @abstractmethod
-    def get_shapley_values(self,
-            key:Union[Literal['query', 'context'], None],
-            aggregation:Aggregations_t='token',
+    def shap(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token', *,
             num_samples:int=100,
             sample_size:int=10,
             **kwargs
@@ -1446,6 +1559,29 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             A dicionary containing the following two keys (if `key` is specified) or one of the following:
             - `'query'`: a `numpy.ndarray` containing the Shapley values for the query
             - `'context'`: a `numpy.ndarray` containing the Shapley values for the contexts.
+        """
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
+    @abstractmethod
+    def lime(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token', *,
+            kernel_width:int=25,
+            kernel_fn:Optional[Callable]=None,
+            **kwargs
+        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+        """Generates LIME feature attribution values for the chosen aggregation method.
+
+        Args:
+            key (str):              Explanation key. Can either be `'query'` or `'context'`.
+                                    If `None` returns a dictionary of both.
+            aggregation (str):      Aggregation method for probabilities (default: `'token'`).
+            kernel_width (int):     Width of the exponential similarity kernel (default: `25`).
+            kernel_fn (callable):   Similarity kernel taking distances and returning weights.
+                                    If `None`, defaults to `sqrt(exp(-d^2 / kernel_width^2))`.
+
+        Returns:
+            A dictionary containing the following two keys (if `key` is specified) or one of the following:
+            - `'query'`: a `numpy.ndarray` containing the LIME values for the query
+            - `'context'`: a `numpy.ndarray` containing the LIME values for the contexts.
         """
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 

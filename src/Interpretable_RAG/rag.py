@@ -3,10 +3,10 @@ import json
 import torch
 import numpy as np
 from scipy.stats import spearmanr
-from .retrieval import Methods_t
+from .retrieval import RetrieverMethods_t
 from .retrieval_offline import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOfflineRetrieval
 from .retrieval_online  import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOnlineRetrieval
-from .generation import ExplainableAutoModelForGeneration, Aggregations_t
+from .generation import ExplainableAutoModelForGeneration, GeneratorAggregations_t
 from .utils import tokens2words
 
 from typing import Optional, Union, Callable, Literal, Dict, List, Tuple, Any
@@ -186,7 +186,7 @@ class ExplainableAutoModelForRAG:
     @property
     def generator_document_importance(self) -> NDArray[np.float64]:
         '''Normalized document importance of the generator.'''
-        doc_importance_generator = self.generator.get_shapley_values('context', 'token').sum(axis=1)
+        doc_importance_generator = self.generator.shap('context', 'token').sum(axis=1)
         #doc_importance_generator = self.generator.get_shapley_values('context', 'sequence')
         doc_importance_generator /= np.abs(doc_importance_generator).sum()
 
@@ -248,7 +248,7 @@ class ExplainableAutoModelForRAG:
     @property
     def generator_query_importance(self) -> NDArray[np.float64]:
         '''Normalized word importance of the query during generation.'''
-        qry_importance_generator = self.generator.get_shapley_values('query', 'token').sum(axis=1)
+        qry_importance_generator = self.generator.shap('query', 'token').sum(axis=1)
         #qry_importance_generator = self.generator.get_shapley_values('query', 'sequence')
         qry_importance_generator /= np.abs(qry_importance_generator).sum()
 
@@ -273,8 +273,8 @@ class ExplainableAutoModelForRAG:
         return r
     
     def save_values(self, path:str, file_name:str, *,
-            ret_methods:Optional[List[Methods_t]]=None,
-            gen_aggregations:Optional[List[Aggregations_t]]=None,
+            ret_methods:Optional[List[RetrieverMethods_t]]=None,
+            gen_aggregations:Optional[List[GeneratorAggregations_t]]=None,
             filter_special_tokens:bool=True,
             num_steps:int=100,
             batch_size:int=64

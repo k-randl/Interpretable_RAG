@@ -379,10 +379,10 @@ def plot_waterfall(ax:Axes, scores:NDArray[np.float64], x_labels:Optional[List[s
 # Plots for retrieval:                                               #
 #====================================================================#
 
-from .retrieval import Methods_t, RetrieverExplanationBase
+from .retrieval import RetrieverMethods_t, RetrieverExplanationBase
 
 def plot_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Methods_t='intGrad',
+        method:RetrieverMethods_t='intGrad',
         absolute:bool=True,
         figsize: Tuple[int, int] = (12, 6),
         cmap:str='tab10',
@@ -453,7 +453,7 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, document_nam
     else: return fig
 
 def higlight_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Methods_t='intGrad',
+        method:RetrieverMethods_t='intGrad',
         threshold:float=0.0,
         token_processor:Optional[Callable[[str],str]]=None,
         cmap:str='ragbin',
@@ -543,7 +543,7 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
     else: return html_str
 
 def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *, 
-        method:Methods_t='intGrad',
+        method:RetrieverMethods_t='intGrad',
         normalize:bool=True,
         threshold:float=.9,
         figsize: Tuple[int, int] = (12, 6),
@@ -616,7 +616,7 @@ def plot_importance_summary_retriever(explanation:RetrieverExplanationBase, docu
     else: return fig
 
 def visualize_importance_retriever(explanation:RetrieverExplanationBase, document_names:Optional[List[str]]=None, *,
-        method:Methods_t='intGrad',
+        method:RetrieverMethods_t='intGrad',
         cmap:str='ragbin',
         show:bool=True,
         **kwargs
@@ -651,6 +651,7 @@ from .generation import GeneratorExplanationBase
 
 def plot_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         aggregation:Literal['token', 'bow', 'nucleus']='token',
+        method:RetrieverMethods_t='shap',
         normalize:bool=True,
         figsize: Tuple[int, int] = (12, 6),
         cmap:str='tab10',
@@ -672,7 +673,9 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
     """
 
     # get attribution scores:
-    shap_values = explanation.get_shapley_values('context', aggregation)
+    if   method == 'shap': scores = explanation.shap('context', aggregation)
+    elif method == 'lime': scores = explanation.lime('context', aggregation)
+    else: raise ValueError(f'Unknown method `{method}`.')
 
     # get tokens:
     if aggregation == 'token':
@@ -681,17 +684,17 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
     elif aggregation == 'bow':
         # get the top-K varying tokens per document:
         K = 50
-        indices = np.unique(shap_values.var(axis=0).argsort()[:-K:-1])
+        indices = np.unique(scores.var(axis=0).argsort()[:-K:-1])
 
-        shap_values = shap_values[:,indices]
+        scores = scores[:,indices]
         tokens = explanation.tokenizer.convert_ids_to_tokens(indices[:,None])
 
     elif aggregation == 'nucleus':
         # get the top-K probable tokens per document: 
         K = 10
-        indices = np.unique(shap_values.argsort()[:,:-K:-1].flatten())
+        indices = np.unique(scores.argsort()[:,:-K:-1].flatten())
 
-        shap_values = shap_values[:,indices]
+        scores = scores[:,indices]
         tokens = explanation.tokenizer.convert_ids_to_tokens(indices[:,None])
 
     else: raise ValueError(f'Unknown value for parameter `aggregation`: "{aggregation}"')
@@ -702,7 +705,7 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
     # plot:
     fig, ax = plt.subplots(figsize=figsize)
     plot_token_vbars(ax,
-        scores         = shap_values,
+        scores         = scores,
         tokens         = tokens,
         document_names = document_names,
         normalize      = normalize,
@@ -719,6 +722,7 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
     else: return fig
 
 def higlight_attribution_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
+        method:RetrieverMethods_t='shap',
         threshold:float=.5,
         token_processor:Optional[Callable[[str],str]]=None,
         query_cmap:str='ragbin',
@@ -742,7 +746,9 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
     """
 
     # get attribution scores:
-    shap_values = explanation.get_shapley_values(None, 'token')
+    if   method == 'shap': scores = explanation.shap(None, 'token')
+    elif method == 'lime': scores = explanation.lime(None, 'token')
+    else: raise ValueError(f'Unknown method `{method}`.')
 
     # get indices of the actual content:
     # (excluding chat template specific tokens) 
@@ -760,15 +766,15 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
 
     # fallback for document names:
     if document_names is None:
-        document_names = [f'Document&nbsp;{i+1:d}' for i in range(len(shap_values['context']))]
-    elif len(document_names) != len(shap_values['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
+        document_names = [f'Document&nbsp;{i+1:d}' for i in range(len(scores['context']))]
+    elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # get special tokens:
     special_tokens = set(explanation.tokenizer.special_tokens_map.values())
 
     # create query html:
     html_query = highlight_dominant_passages(
-        scores          = shap_values['query'].mean(axis=1),
+        scores          = scores['query'].mean(axis=1),
         tokens          = explanation.qry_tokens,
         title           = 'Query',
         labels          = ['+', '-'],
@@ -780,7 +786,7 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
 
     # create response html:
     html_response = highlight_dominant_passages(
-        scores          = shap_values['context'][:,response['content']],
+        scores          = scores['context'][:,response['content']],
         tokens          = explanation.gen_tokens[response['content']],
         title           = role,
         labels          = document_names,
@@ -814,6 +820,7 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
 
 def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, document_names:Optional[List[str]]=None, *,
         aggregation:Literal['token', 'sequence', 'bow', 'nucleus']='token',
+        method:RetrieverMethods_t='shap',
         absolute:bool=False,
         normalize:bool=True,
         figsize: Tuple[int, int] = (12, 6),
@@ -837,21 +844,23 @@ def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, doc
     """
 
     # get attribution scores:
-    shap_values = explanation.get_shapley_values('context', aggregation)
+    if   method == 'shap': scores = explanation.shap('context', aggregation)
+    elif method == 'lime': scores = explanation.lime('context', aggregation)
+    else: raise ValueError(f'Unknown method `{method}`.')
 
     # fallback for document names:
     if document_names is None:
-        document_names = [f'Document {i+1:d}' for i in range(len(shap_values))]
-    elif len(document_names) != len(shap_values): raise ValueError('`len(document_names)` does not match the number of documents!')
+        document_names = [f'Document {i+1:d}' for i in range(len(scores))]
+    elif len(document_names) != len(scores): raise ValueError('`len(document_names)` does not match the number of documents!')
     
     # create figure:
     fig, ax = plt.subplots(figsize=figsize)
 
     if absolute:
         # calculate mean absolute attributions per document:
-        shap_values = np.mean(np.abs(shap_values), axis=1)
+        scores = np.mean(np.abs(scores), axis=1)
         plot_document_vbars(ax,
-            scores         = shap_values,
+            scores         = scores,
             document_names = document_names,
             normalize      = normalize,
             cmap           = cmap 
@@ -860,9 +869,9 @@ def plot_attribution_summary_generator(explanation:GeneratorExplanationBase, doc
         
     else:
         # calculate mean attributions per document
-        shap_values = np.mean(shap_values, axis=1)
+        scores = np.mean(scores, axis=1)
         plot_waterfall(ax,
-            scores    = shap_values,
+            scores    = scores,
             x_labels  = document_names,
             normalize = normalize,
             cmap      = cmap 
@@ -1017,9 +1026,10 @@ def plot_document_importance_rag(explanation:ExplainableAutoModelForRAG, documen
 
 def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_names:Optional[List[str]]=None, *,
         threshold:float=.5,
+        retriever_method:RetrieverMethods_t='intGrad',
+        generator_method:RetrieverMethods_t='shap',
         retriever_token_processor:Optional[Callable[[str],str]]=None,
         generator_token_processor:Optional[Callable[[str],str]]=None,
-        retriever_method:Methods_t='intGrad',
         query_cmap:str='ragbin',
         document_cmap:str='tab10',
         show:bool=True,
@@ -1065,7 +1075,9 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
     retriever_attr = {key:[np.abs(doc) for doc in docs] for key, docs in retriever_attr.items()}
 
     # get generator attribution scores:
-    generator_attr = explanation.generator.get_shapley_values(None, 'token')
+    if   generator_method == 'shap': generator_attr = explanation.generator.shap(None, 'token')
+    elif generator_method == 'lime': generator_attr = explanation.generator.lime(None, 'token')
+    else: raise ValueError(f'Unknown generator_method `{generator_method}`.')
 
     # get special tokens:
     retriever_special_tokens = set(explanation.retriever.tokenizer.special_tokens_map.values())

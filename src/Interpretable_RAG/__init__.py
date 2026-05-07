@@ -59,8 +59,8 @@ from .types import (
     Embedding,
     EmbeddingBatch,
 )
-from .retrieval import Methods_t
-from .generation import Aggregations_t
+from .retrieval import RetrieverMethods_t
+from .generation import GeneratorMethods_t, GeneratorAggregations_t
 
 __all__ = [
     # Version
@@ -86,8 +86,9 @@ __all__ = [
     "get_shapley_values",
     # Types
     "ShapleyValues",
-    "Methods_t",
-    "Aggregations_t",
+    "RetrieverMethods_t",
+    "GeneratorMethods_t",
+    "GeneratorAggregations_t",
     "Embedding",
     "EmbeddingBatch",
 ]
