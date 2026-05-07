@@ -1055,19 +1055,19 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 )
 
                 # combine prompt lists comparison output:
-                perturbed_prompts_combined = perturbed_prompts['query'][:-1] + perturbed_prompts['context'][1:]
+                perturbed_prompts_combined = perturbed_prompts['query'][:-1] + perturbed_prompts['context']
 
                 cache  = self._shap_cache['query']
                 if cache is not None:
-                    offset = len(perturbed_prompts['context']) - 2
+                    offset = len(perturbed_prompts['context']) - 1
                     if cache['precise']: cache['indices'][:,-1] += offset
                     else: cache['indices'][-1] += offset
 
                 cache = self._shap_cache['context']
                 if cache is not None:
-                    offset = len(perturbed_prompts['query']) - 2
-                    if cache['precise']: cache['indices'][:,1:] += offset
-                    else: cache['indices'][1:] += offset
+                    offset = len(perturbed_prompts['query']) - 1
+                    if cache['precise']: cache['indices'] += offset
+                    else: cache['indices'] += offset
 
                 # generate comparison output:
                 num_batches = int(np.ceil(len(perturbed_prompts_combined[:-1]) / batch_size))
@@ -1102,7 +1102,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # generate prompts:
                 if max_samples == 0:
                     # do not generate prompts:
-                    perturbed_prompts = [func([]), func(items)]
+                    perturbed_prompts = [func(items)]
                     cache = None
 
                 elif max_samples >= n or min_samples >= n:
