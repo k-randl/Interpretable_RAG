@@ -20,6 +20,11 @@ except ImportError:
 
 def normalize_answer(s: str) -> str:
     """Lower text and remove punctuation, articles and extra whitespace."""
+    def fix_tokenizer_artifacts(text):
+        # SentencePiece (Gemma, LLaMA) uses ▁ (U+2581) as a space prefix;
+        # BPE (GPT-2 family) uses Ġ. Replace both with a real space.
+        return text.replace('▁', ' ').replace('Ġ', ' ')
+
     def remove_articles(text):
         return re.sub(r'\b(a|an|the)\b', ' ', text)
 
@@ -33,7 +38,7 @@ def normalize_answer(s: str) -> str:
     def lower(text):
         return str(text).lower()
 
-    return white_space_fix(remove_articles(remove_punc(lower(s))))
+    return white_space_fix(remove_articles(remove_punc(fix_tokenizer_artifacts(lower(s)))))
 
 def exact_match_score(prediction: str, ground_truth: str) -> float:
     return float(normalize_answer(prediction) == normalize_answer(ground_truth))
