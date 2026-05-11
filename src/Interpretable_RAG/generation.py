@@ -1273,7 +1273,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             
             
             def lime(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token', *,
-                    kernel_width:int=25,
+                    kernel_width:Optional[float]=None,
                     kernel_fn:Optional[Callable]=None,
                     **kwargs
                 ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
@@ -1283,7 +1283,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     key (str):              Explanation key. Can either be `'query'` or `'context'`.
                                             If `None` returns a dictionary of both.
                     aggregation (str):      Aggregation method for probabilities (default: `'token'`).
-                    kernel_width (int):     Width of the exponential similarity kernel (default: `25`).
+                    kernel_width (float):   Width of the exponential similarity kernel (default: `min(25, k/2)`).
                     kernel_fn (callable):   Similarity kernel taking distances and returning weights.
                                             If `None`, defaults to `sqrt(exp(-d^2 / kernel_width^2))`.
 
@@ -1320,13 +1320,23 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 else: raise ValueError(f'Unknown value for parameter `aggregation`: "{aggregation}"')
 
-                # Default exponential kernel (see https://github.com/marcotcr/lime/blob/master/lime/lime_text.py):
-                if kernel_fn is None:
-                    kernel_fn = lambda d: np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
-
                 # Call actual method:
                 result = {'query': None, 'context': None} if key is None else {key: None}
                 for k in result:
+
+                    # Default kernel width:
+                    if kernel_width is None:
+                        if self._shap_cache[k]['precise']:
+                            num_docs = self._shap_cache[k]['new_docs'].shape[1]
+                        else:
+                            num_docs = self._shap_cache[k]['sets'].shape[1]
+
+                        kernel_width = min(25., num_docs/2.)
+
+                    # Default exponential kernel (see https://github.com/marcotcr/lime/blob/master/lime/lime_text.py):
+                    if kernel_fn is None:
+                        kernel_fn = lambda d: np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
+
                     if self._shap_cache[k] is None: result[k] = None
                     elif self._shap_cache[k]['precise']: result[k] = self._get_lime_attributions_precise(probs, kernel_fn=kernel_fn, **self._shap_cache[k])
                     else: result[k] = self._get_lime_attributions_approx(probs, kernel_fn=kernel_fn, **self._shap_cache[k])

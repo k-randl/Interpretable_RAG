@@ -186,8 +186,11 @@ class ExplainableAutoModelForRAG:
     @property
     def generator_document_importance(self) -> NDArray[np.float64]:
         '''Normalized document importance of the generator.'''
-        doc_importance_generator = self.generator.shap('context', 'token').sum(axis=1)
-        #doc_importance_generator = self.generator.get_shapley_values('context', 'sequence')
+        doc_importance_generator = self.generator.shap('context', 'token')
+
+        if doc_importance_generator.ndim == 2:
+            doc_importance_generator = doc_importance_generator.sum(axis=1)
+
         doc_importance_generator /= np.abs(doc_importance_generator).sum()
 
         return doc_importance_generator
@@ -248,8 +251,11 @@ class ExplainableAutoModelForRAG:
     @property
     def generator_query_importance(self) -> NDArray[np.float64]:
         '''Normalized word importance of the query during generation.'''
-        qry_importance_generator = self.generator.shap('query', 'token').sum(axis=1)
-        #qry_importance_generator = self.generator.get_shapley_values('query', 'sequence')
+        qry_importance_generator = self.generator.shap('query', 'token')
+
+        if qry_importance_generator.ndim == 2:
+            qry_importance_generator = qry_importance_generator.sum(axis=1)
+
         qry_importance_generator /= np.abs(qry_importance_generator).sum()
 
         return qry_importance_generator
