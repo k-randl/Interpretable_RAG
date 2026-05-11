@@ -50,15 +50,33 @@ def f1_score(prediction: str, ground_truth: str) -> float:
     f1 = (2 * precision * recall) / (precision + recall)
     return f1
 
+def qampari_recall(prediction: str, ground_truths: List[str]) -> float:
+    """Calculates recall for QAMPARI: how many ground truth answers are found in prediction."""
+    if not ground_truths:
+        return 0.0
+    
+    found_count = 0
+    norm_prediction = normalize_answer(prediction)
+    
+    for gt in ground_truths:
+        norm_gt = normalize_answer(gt)
+        if norm_gt in norm_prediction:
+            found_count += 1
+            
+    return found_count / len(ground_truths)
+
 def calculate_metrics(prediction: str, ground_truths: List[str]) -> Dict[str, float]:
     if not ground_truths:
-        return {'exact_match': 0.0, 'f1_score': 0.0, 'rougeL': 0.0}
+        return {'exact_match': 0.0, 'f1_score': 0.0, 'rougeL': 0.0, 'qampari_recall': 0.0}
         
     em_scores = [exact_match_score(prediction, gt) for gt in ground_truths]
     f1_scores = [f1_score(prediction, gt) for gt in ground_truths]
     
     best_em = max(em_scores) if em_scores else 0.0
     best_f1 = max(f1_scores) if f1_scores else 0.0
+    
+    # QAMPARI Recall
+    recall = qampari_recall(prediction, ground_truths)
     
     best_rougeL = 0.0
     if rouge_scorer is not None:
@@ -82,5 +100,6 @@ def calculate_metrics(prediction: str, ground_truths: List[str]) -> Dict[str, fl
         'exact_match': best_em,
         'f1_score': best_f1,
         'rougeL': best_rougeL,
-        'bert_score': best_bert_score
+        'bert_score': best_bert_score,
+        'qampari_recall': recall
     }

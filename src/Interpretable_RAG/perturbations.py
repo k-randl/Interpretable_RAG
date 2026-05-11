@@ -64,3 +64,25 @@ class PromptPerturbationModule:
             'B2': b2,
             'B3': b3
         }
+
+    def generate_intertwined_setup(self, ranked_docs: List[str], k: int = 5) -> Dict[str, List[str]]:
+        """
+        Creates C1, C2, C3 variations from a ranked list of documents.
+        C1: [Top-k, Low-k]
+        C2: [Low-k, Top-k]
+        C3: Shuffled [Top-k, Low-k]
+        """
+        top_docs = ranked_docs[:k]
+        low_docs = ranked_docs[k:2*k] if len(ranked_docs) >= 2*k else ranked_docs[k:]
+        
+        c1 = top_docs + low_docs
+        c2 = low_docs + top_docs
+        
+        c3 = c1.copy()
+        random.shuffle(c3)
+        
+        return {
+            'C1': c1,
+            'C2': c2,
+            'C3': c3
+        }
