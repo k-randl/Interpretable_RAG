@@ -43,7 +43,7 @@ def setup_models(retriever_id: str, generator_id: str):
 
 
 QUERY_PREFIXES = {
-    'snowflake': 'Represent this sentence for searching relevant passages: ',
+    'snowflake': 'query: ',
 }
 
 def main():
@@ -66,12 +66,6 @@ def main():
     parser.add_argument("--query_prefix", type=str, default=None,
                         help="Prefix prepended to queries before retrieval (e.g. for Snowflake Arctic Embed).")
     args = parser.parse_args()
-
-    # Resolve system prompt
-    if args.system_prompt == 'qampari':
-        args.system_prompt = QAMPARI_SYSTEM_PROMPT
-    elif args.system_prompt is None and args.dataset == 'qampari':
-        args.system_prompt = QAMPARI_SYSTEM_PROMPT
 
     # Resolve query prefix
     if args.query_prefix is None:

@@ -36,8 +36,7 @@ for GENERATOR in "${GENERATORS[@]}"; do
         --output_path "$OUTPUT_DIR" \
         --k "$K" \
         --batch_size "$BATCH_SIZE" \
-        --num_queries "$NUM_QUERIES" \
-        --system_prompt "qampari"
+        --num_queries "$NUM_QUERIES"
 
     echo ">>> Finished $GENERATOR"
 done
