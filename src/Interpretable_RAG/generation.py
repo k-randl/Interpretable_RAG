@@ -115,14 +115,6 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
             "Keep the answer under 200 words."
         )
 
-QAMPARI_SYSTEM_PROMPT = (
-    "Use the following retrieved documents to answer the user's query. "
-    "The answer requires listing MULTIPLE entities. "
-    "Respond with a comma-separated list of answers only. "
-    "Do not explain, do not cite documents, do not use bullet points. "
-    "Example format: Answer 1, Answer 2, Answer 3"
-)
-
     # Apply size limit
     if max_document_size is not None:
         for i, doc in enumerate(contexts):
@@ -136,6 +128,14 @@ QAMPARI_SYSTEM_PROMPT = (
         {"role": "system", "content": system},
         {"role": "user", "content": f"{context_text}\n\nQuery: {query}"}
     ]
+
+QAMPARI_SYSTEM_PROMPT = (
+    "Use the following retrieved documents to answer the user's query. "
+    "The answer requires listing MULTIPLE entities. "
+    "Respond with a comma-separated list of answers only. "
+    "Do not explain, do not cite documents, do not use bullet points. "
+    "Example format: Answer 1, Answer 2, Answer 3"
+)
 
 def logits2probs(logits:torch.Tensor, normalization:Literal['softmax', 'relu', 'offset']='softmax'):
     """Converts raw logits into probability distributions using a specified normalization normalization.
