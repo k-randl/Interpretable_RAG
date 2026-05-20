@@ -254,7 +254,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         query_encoder_name_or_path:Optional[str]=None,
         context_encoder_name_or_path:Optional[str]=None,
         tokenizer:Optional[PreTrainedTokenizer]=None,
-    ) -> Union['RetrieverExplanation', List['RetrieverExplanation']]:
+    ) -> Union['RetrieverExplanation', List['RetrieverExplanation'], Dict[str, 'RetrieverExplanation']]:
         """Loads the GeneratorExplanation from a file path or dictionary.
 
         Args:
@@ -267,9 +267,16 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if isinstance(saved_data, str):
             # load all files in a dir as a list:
             if os.path.isdir(saved_data):
-                return cls.load([os.path.join(saved_data, file)
+                keys, paths = list(zip(*[(file[:-4], os.path.join(saved_data, file))
                     for file in os.listdir(saved_data)
-                    if not file.endswith('.pkl')])
+                    if file.endswith('.pkl')]))
+
+                values = cls.load(paths,
+                    query_encoder_name_or_path=query_encoder_name_or_path,
+                    context_encoder_name_or_path=context_encoder_name_or_path,
+                    tokenizer=tokenizer)
+                
+                return {k:v for k,v in zip(keys, values)}
 
             # load file:
             with open(saved_data, 'rb') as f:

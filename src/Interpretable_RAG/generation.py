@@ -298,7 +298,7 @@ class GeneratorExplanation(GeneratorExplanationBase):
     def load(cls, saved_data:Union[str, Dict, Iterable], *,
         model_name_or_path:Optional[str]=None,
         tokenizer:Optional[transformers.PreTrainedTokenizer]=None
-    ) -> Union['GeneratorExplanation', List['GeneratorExplanation']]:
+    ) -> Union['GeneratorExplanation', List['GeneratorExplanation'], Dict[str, 'GeneratorExplanation']]:
         """Loads the GeneratorExplanation from a file path or dictionary.
 
         Args:
@@ -310,9 +310,15 @@ class GeneratorExplanation(GeneratorExplanationBase):
         if isinstance(saved_data, str):
             # load all files in a dir as a list:
             if os.path.isdir(saved_data):
-                return cls.load([os.path.join(saved_data, file)
+                keys, paths = list(zip(*[(file[:-4], os.path.join(saved_data, file))
                     for file in os.listdir(saved_data)
-                    if file.endswith('.pkl')])
+                    if file.endswith('.pkl')]))
+
+                values = cls.load(paths,
+                    model_name_or_path=model_name_or_path,
+                    tokenizer=tokenizer)
+                
+                return {k:v for k,v in zip(keys, values)}
 
             # load file:
             with open(saved_data, 'rb') as f:
@@ -322,21 +328,23 @@ class GeneratorExplanation(GeneratorExplanationBase):
             data = saved_data
 
         elif hasattr(saved_data, '__iter__') or hasattr(saved_data, '__len__'):
-            result = {}
+            result = []
 
             # load all entries separatelly:
             for item in saved_data:
                 try:
                     # load next file:
-                    result[item] = cls.load(
+                    result.append(
+                        cls.load(
                             item,
                             model_name_or_path=model_name_or_path,
                             tokenizer=tokenizer
                         )
+                    )
 
 
                     # avoid multiple instances of the tokenizer:
-                    if tokenizer is None: tokenizer = result[item].tokenizer
+                    if tokenizer is None: tokenizer = result[-1].tokenizer
 
                 except Exception as e:
                     print(f'WARNING: Could not load "{item}": {e}')
