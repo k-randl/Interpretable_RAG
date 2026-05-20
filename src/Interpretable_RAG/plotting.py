@@ -423,7 +423,7 @@ def plot_importance_retriever(explanation:RetrieverExplanationBase, document_nam
     elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # get special tokens:
-    special_tokens = set(explanation.tokenizer.special_tokens_map.values())
+    special_tokens = set(explanation.tokenizer.all_special_tokens)
 
     fig, axs = plt.subplots(len(scores['query']) + len(scores['context']), 1, figsize=figsize)
 
@@ -492,7 +492,7 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
     elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # get special tokens:
-    special_tokens = set(explanation.tokenizer.special_tokens_map.values())
+    special_tokens = set(explanation.tokenizer.all_special_tokens)
 
     # plot query:
     html = highlight_dominant_passages(
@@ -700,7 +700,7 @@ def plot_attribution_generator(explanation:GeneratorExplanationBase, document_na
     else: raise ValueError(f'Unknown value for parameter `aggregation`: "{aggregation}"')
 
     # get special tokens:
-    special_tokens = set(explanation.tokenizer.special_tokens_map.values())
+    special_tokens = set(explanation.tokenizer.all_special_tokens)
 
     # plot:
     fig, ax = plt.subplots(figsize=figsize)
@@ -770,7 +770,7 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
     elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
     # get special tokens:
-    special_tokens = set(explanation.tokenizer.special_tokens_map.values())
+    special_tokens = set(explanation.tokenizer.all_special_tokens)
 
     # create query html:
     html_query = highlight_dominant_passages(
