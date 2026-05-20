@@ -3,16 +3,220 @@ import json
 import torch
 import numpy as np
 from scipy.stats import spearmanr
-from .retrieval import RetrieverMethods_t
+from .retrieval import RetrieverExplanation, RetrieverMethods_t
 from .retrieval_offline import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOfflineRetrieval
 from .retrieval_online  import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOnlineRetrieval
-from .generation import ExplainableAutoModelForGeneration, GeneratorAggregations_t
+from .generation import ExplainableAutoModelForGeneration, GeneratorExplanation, GeneratorAggregations_t
 from .utils import tokens2words
 
 from typing import Optional, Union, Callable, Literal, Dict, List, Tuple, Any
 from numpy.typing import NDArray
 
-class ExplainableAutoModelForRAG:
+
+#=======================================================================#
+# RAGExplanation base class:                                            #
+#=======================================================================#
+
+class RAGExplanation:
+    """Base class for RAG explanation objects. All members can be used after
+    calling ``load()`` — no retriever or generator model weights are required."""
+
+    @classmethod
+    def load(cls, saved_data: Union[str, Tuple], *,
+             ret_kwargs: Dict[str, Any] = {},
+             gen_kwargs: Dict[str, Any] = {},
+    ) -> Union['RAGExplanation', Dict[str, 'RAGExplanation']]:
+        """Load a RAGExplanation from saved explanation pickles.
+
+        Args:
+            saved_data: A directory path that contains ``retrieval/`` and
+                        ``generation/`` subdirectories, or a ``(ret_data, gen_data)``
+                        tuple where each element is accepted by
+                        ``RetrieverExplanation.load()`` and
+                        ``GeneratorExplanation.load()`` respectively (i.e. a path,
+                        list of paths, or dict).
+            ret_kwargs: Extra keyword arguments forwarded to
+                        ``RetrieverExplanation.load()``.
+            gen_kwargs: Extra keyword arguments forwarded to
+                        ``GeneratorExplanation.load()``.
+
+        Returns:
+            A single ``RAGExplanation`` when both inputs resolve to a single
+            explanation object, or a dict keyed by filename stem when loading
+            entire directories.
+        """
+        if isinstance(saved_data, str) and os.path.isdir(saved_data):
+            ret_data = os.path.join(saved_data, 'retrieval')
+            gen_data = os.path.join(saved_data, 'generation')
+        elif isinstance(saved_data, tuple) and len(saved_data) == 2:
+            ret_data, gen_data = saved_data
+        else:
+            raise ValueError(
+                '`saved_data` must be a directory path or a (ret_data, gen_data) tuple'
+            )
+
+        ret_exps = RetrieverExplanation.load(ret_data, **ret_kwargs)
+        gen_exps = GeneratorExplanation.load(gen_data, **gen_kwargs)
+
+        def _make(ret_exp, gen_exp) -> 'RAGExplanation':
+            obj = cls.__new__(cls)
+            obj.retriever = ret_exp
+            obj.generator = gen_exp
+            return obj
+
+        if isinstance(ret_exps, dict) and isinstance(gen_exps, dict):
+            return {k: _make(ret_exps[k], gen_exps[k])
+                    for k in sorted(set(ret_exps) & set(gen_exps))}
+
+        return _make(ret_exps, gen_exps)
+
+    @property
+    def retriever_document_importance(self) -> NDArray[np.float64]:
+        '''Normalized document importance estimated by the retriever via intGrad attributions.'''
+        intGrad = self.retriever.intGrad()['context']
+        if hasattr(intGrad, 'numpy'):
+            intGrad = intGrad.numpy()
+        doc_importance = np.asarray(intGrad).sum(axis=1)
+        doc_importance = doc_importance / np.abs(doc_importance).sum()
+        return doc_importance
+
+    @property
+    def generator_document_importance(self) -> NDArray[np.float64]:
+        '''Normalized document importance of the generator.'''
+        doc_importance_generator = self.generator.shap('context', 'token')
+
+        if doc_importance_generator.ndim == 2:
+            doc_importance_generator = doc_importance_generator.sum(axis=1)
+
+        doc_importance_generator /= np.abs(doc_importance_generator).sum()
+
+        return doc_importance_generator
+
+    @property
+    def mean_document_importance(self) -> NDArray[np.float64]:
+        '''Mean normalized document importance of the rag pipeline.'''
+        return (self.retriever_document_importance + self.generator_document_importance) / 2.
+
+    @property
+    def document_agreement(self) -> NDArray[np.float64]:
+        '''Document importance disagreement between retriever and generator.'''
+
+        # get normalized importance rankings:
+        ret = np.argsort(self.retriever_document_importance)
+        gen = np.argsort(self.generator_document_importance)
+
+        # compute spearman correlation:
+        r, p = spearmanr(ret, gen)
+
+        return r
+
+    @property
+    def generator_query_importance(self) -> NDArray[np.float64]:
+        '''Normalized word importance of the query during generation.'''
+        qry_importance_generator = self.generator.shap('query', 'token')
+
+        if qry_importance_generator.ndim == 2:
+            qry_importance_generator = qry_importance_generator.sum(axis=1)
+
+        qry_importance_generator /= np.abs(qry_importance_generator).sum()
+
+        return qry_importance_generator
+
+    def warg(self, tau:float=1.5, *, _ret_scores=None) -> float:
+        '''Weighted Alignment between Retriever and Generator (WARG).
+
+        Measures how well the documents the generator attends to (high SHAP
+        attribution) align with the documents the retriever ranked highest.
+
+        In this base class, retriever scores are derived from intGrad token
+        attributions summed over the token dimension, used as a proxy for
+        cosine similarity. ``ExplainableAutoModelForRAG`` overrides this method
+        to use the exact cosine similarity from live retrieval.
+
+        Args:
+            tau (float): Threshold multiplier relative to the uniform baseline
+                         1/n. Documents with normalised generator score > tau/n
+                         are assigned weight 1 (high set H_g); all others weight
+                         0. Defaults to 1.5.
+
+        Returns:
+            WARG score in [-1, 1]:
+                +1  generator attends exactly to the retriever's top-h documents
+                 0  no alignment between retriever and generator
+                -1  generator attends to the documents the retriever ranked lowest
+        '''
+        # retriever scores: intGrad summed over token dimension as proxy for similarity
+        if _ret_scores is None:
+            ret_raw = self.retriever.intGrad()['context']
+            if hasattr(ret_raw, 'numpy'):
+                ret_raw = ret_raw.numpy()
+            ret_scores = np.asarray(ret_raw).sum(axis=1)
+        else: ret_scores = _ret_scores
+
+        # generator scores: SHAP attribution summed over the token dimension
+        gen_scores = self.generator.shap('context', 'token')
+        if hasattr(gen_scores, 'numpy'):
+            gen_scores = gen_scores.numpy()
+        gen_scores = np.asarray(gen_scores)
+        if gen_scores.ndim == 2:
+            gen_scores = gen_scores.sum(axis=1)
+
+        n = len(gen_scores)
+
+        # normalise so that uniform attention gives each doc a score of 1/n
+        gen_scores = gen_scores / np.sum([1e-9] + gen_scores[gen_scores > 0].tolist())
+
+        # binary weights w in {0,1}: 1 if doc exceeds tau times the uniform baseline
+        w      = gen_scores > tau / n
+        n_high = int(w.sum())
+
+        # weighted retriever means (weights in {0,1} reduce to masked means)
+        ret_mean_high = np.mean(ret_scores[ w]) if w.any()    else 0.
+        ret_mean_low  = np.mean(ret_scores[~w]) if (~w).any() else 0.
+
+        # oracle baseline: best achievable gap for a split of size h
+        ret_base_high = np.mean(ret_scores[:n_high]) if n_high > 0 else ret_scores[0]
+        ret_base_low  = np.mean(ret_scores[n_high:]) if n_high < n else ret_scores[-1]
+
+        nom   = ret_mean_high - ret_mean_low
+        denom = ret_base_high - ret_base_low
+        score = nom / denom if denom != 0 else float('nan')
+        return float(np.clip(score, -1., 1.))
+
+    def save_values(self, path: str, file_name: str, *,
+            ret_methods: Optional[List[RetrieverMethods_t]] = None,
+            gen_aggregations: Optional[List[GeneratorAggregations_t]] = None,
+            filter_special_tokens: bool = True,
+            num_steps: int = 100,
+            batch_size: int = 64
+        ) -> None:
+        """Saves the explanation data to a file.
+
+        Args:
+            path (str):                             The path where the values should be saved.
+            file_name (str):                        The name of the output file.
+            ret_methods (List[str]):                List of retriever explanations to save.
+            gen_aggregations (List[str]):           List of generation aggregations to save.
+                                                    If unspecified, saves all aggregations.
+            filter_special_tokens (bool, optional): If `True` (default), set the importance of special tokens to 0.
+            num_steps (int, optional):              Number of approximation steps for the Rieman approximation
+                                                    of the integral in `intGrad` (default 100).
+            batch_size (int, optional):             Batch size used for calculating the gradients in `intGrad` (default 64).
+        """
+        ret_dir = os.path.join(path, 'retrieval')
+        os.makedirs(ret_dir, exist_ok=True)
+        self.retriever.save_values(os.path.join(ret_dir, file_name), methods=ret_methods, filter_special_tokens=filter_special_tokens, num_steps=num_steps, batch_size=batch_size)
+
+        gen_dir = os.path.join(path, 'generation')
+        os.makedirs(gen_dir, exist_ok=True)
+        self.generator.save_values(os.path.join(gen_dir, file_name), aggregations=gen_aggregations)
+
+
+#=======================================================================#
+# ExplainableAutoModelForRAG:                                           #
+#=======================================================================#
+
+class ExplainableAutoModelForRAG(RAGExplanation):
     def __init__(self,
             generator_name_or_path:str,
             query_encoder_name_or_path:str,
@@ -67,7 +271,7 @@ class ExplainableAutoModelForRAG:
         self.__retriever_query_format = retriever_query_format
         self.__retriever_token_processor = retriever_token_processor
         self.__generator_token_processor = generator_token_processor
-        
+
         # instantiate generator:
         self.generator = ExplainableAutoModelForGeneration.from_pretrained(
             pretrained_model_name_or_path=generator_name_or_path,
@@ -119,7 +323,7 @@ class ExplainableAutoModelForRAG:
                                              In online mode, either `k` or `contexts` must be provided.
             contexts (List[str], optional):  A list of context strings to use for retrieval.
                                              If provided, overrides any contexts in retriever_kwargs.
-                                             In online mode, either `k` or `contexts` must be provided. 
+                                             In online mode, either `k` or `contexts` must be provided.
             fast_retrieval (bool, optional): If True, skips computation of gradients, attentions,
                                              and hidden states for faster retrieval. Defaults to True.
             generator_kwargs (Dict[str, Any], optional): Additional keyword arguments to pass to the
@@ -173,7 +377,7 @@ class ExplainableAutoModelForRAG:
 
     @property
     def retriever_document_importance(self) -> NDArray[np.float64]:
-        '''Normalized document importance estimated by the retriever.'''
+        '''Normalized document importance estimated by the retriever via cosine similarity.'''
 
         if not hasattr(self, 'retrieved_sim'):
             raise AttributeError('`__call__(...)` needs to be called at least once before accessing `document_importance`!')
@@ -182,36 +386,6 @@ class ExplainableAutoModelForRAG:
         doc_importance_retriever /= np.abs(doc_importance_retriever).sum()
 
         return doc_importance_retriever
-
-    @property
-    def generator_document_importance(self) -> NDArray[np.float64]:
-        '''Normalized document importance of the generator.'''
-        doc_importance_generator = self.generator.shap('context', 'token')
-
-        if doc_importance_generator.ndim == 2:
-            doc_importance_generator = doc_importance_generator.sum(axis=1)
-
-        doc_importance_generator /= np.abs(doc_importance_generator).sum()
-
-        return doc_importance_generator
-
-    @property
-    def mean_document_importance(self) -> NDArray[np.float64]:
-        '''Mean normalized document importance of the rag pipeline.'''
-        return (self.retriever_document_importance + self.generator_document_importance) / 2.
-
-    @property
-    def document_agreement(self) -> NDArray[np.float64]:
-        '''Document importance disagreement between retriever and generator.'''
-
-        # get normalized importance rankings:
-        ret = np.argsort(self.retriever_document_importance)
-        gen = np.argsort(self.generator_document_importance)
-
-        # compute spearman correlation:
-        r, p = spearmanr(ret, gen)
-
-        return r
 
     @property
     def retriever_query_importance(self) -> NDArray[np.float64]:
@@ -249,18 +423,6 @@ class ExplainableAutoModelForRAG:
         return qry_importance_retriever
 
     @property
-    def generator_query_importance(self) -> NDArray[np.float64]:
-        '''Normalized word importance of the query during generation.'''
-        qry_importance_generator = self.generator.shap('query', 'token')
-
-        if qry_importance_generator.ndim == 2:
-            qry_importance_generator = qry_importance_generator.sum(axis=1)
-
-        qry_importance_generator /= np.abs(qry_importance_generator).sum()
-
-        return qry_importance_generator
-
-    @property
     def mean_query_importance(self) -> NDArray[np.float64]:
         '''Mean word importance of the query for the rag pipeline.'''
         return (self.retriever_query_importance + self.generator_query_importance) / 2.
@@ -277,37 +439,46 @@ class ExplainableAutoModelForRAG:
         r, p = spearmanr(ret, gen)
 
         return r
-    
-    def save_values(self, path:str, file_name:str, *,
-            ret_methods:Optional[List[RetrieverMethods_t]]=None,
-            gen_aggregations:Optional[List[GeneratorAggregations_t]]=None,
-            filter_special_tokens:bool=True,
-            num_steps:int=100,
-            batch_size:int=64
-        ) -> Union[str, None]:
-        """Saves the explanation data to a file.
+
+    def warg(self, tau: float = 1.5) -> float:
+        '''Weighted Alignment between Retriever and Generator (WARG).
+
+        Measures how well the documents the generator attends to (high SHAP
+        attribution) align with the documents the retriever ranked highest.
+
+        Retriever scores are taken directly from the cosine similarity computed
+        during retrieval (``retrieved_sim``). The base class ``RAGExplanation``
+        uses intGrad token attributions instead, since the raw similarity is not
+        stored in the pickle files.
 
         Args:
-            path (str):                             The path where the values should be saved.
-            ret_methods (List[str]):                List of retriever explanations to save.
-            gen_aggregations (List[str]):           List of generation aggregations to save.
-                                                    If unspecified, saves all aggregations.
-            filter_special_tokens (bool, optional): If `True` (default), set the importance of special tokens to 0.
-            num_steps (int, optional):              Number of approximation steps for the Rieman approximation
-                                                    of the integral in `intGrad` (default 100).
-            batch_size (int, optional):             Batch size used for calculating the gradients in `intGrad` (default 64).
+            tau (float): Threshold multiplier relative to the uniform baseline
+                         1/n. Documents with normalised generator score > tau/n
+                         are assigned weight 1 (high set H_g); all others weight
+                         0. Defaults to 1.5.
 
         Returns:
-            If `path` is not specified, returns the saved data instead.
-        """
-        ret_dir = os.path.join(path, 'retrieval')
-        os.makedirs(ret_dir, exist_ok=True)
-        self.retriever.save_values(os.path.join(ret_dir, file_name), methods=ret_methods, filter_special_tokens=filter_special_tokens, num_steps=num_steps, batch_size=batch_size)
+            WARG score in [-1, 1]:
+                +1  generator attends exactly to the retriever's top-h documents
+                 0  no alignment between retriever and generator
+                -1  generator attends to the documents the retriever ranked lowest
+        '''
+        if not hasattr(self, 'retrieved_sim'):
+            raise AttributeError(
+                '`__call__(...)` must be called at least once before calling `warg()`.'
+            )
+        
+        # retriever scores: raw cosine similarity in descending rank order
+        ret_scores = np.asarray(
+            self.retrieved_sim.numpy() if hasattr(self.retrieved_sim, 'numpy')
+            else self.retrieved_sim
+        )
 
-        gen_dir = os.path.join(path, 'generation')
-        os.makedirs(gen_dir, exist_ok=True)
-        self.generator.save_values(os.path.join(gen_dir, file_name), aggregations=gen_aggregations)
+        return super().warg(tau=tau, _ret_scores=ret_scores)
 
+#=======================================================================#
+# WARGScorer:                                                           #
+#=======================================================================#
 
 class WARGScorer(ExplainableAutoModelForRAG):
     def __init__(self, index_path:str, generator_name_or_path:str, query_encoder_name_or_path:str, context_encoder_name_or_path:Optional[str]=None, *,
@@ -364,7 +535,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
         # init parent class:
         super().__init__(generator_name_or_path, query_encoder_name_or_path, context_encoder_name_or_path, index=index_path,
                          retriever_kwargs=retriever_kwargs, generator_kwargs=generator_kwargs, **kwargs)
-        
+
         # init query buffer:
         self._index_path = index_path
         self._queries = {}
@@ -447,7 +618,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
         self._queries[query] = document_importance
         return document_importance
 
-    def __call__(self, queries:Union[List[str], str], k:int, p:float=0.9, *,
+    def __call__(self, queries:Union[List[str], str], k:int, tau:float=1.5, *,
             batch_size:int=64,
             max_gen_len:int=200,
             checkpoint_path:Optional[str]=None,
@@ -457,15 +628,17 @@ class WARGScorer(ExplainableAutoModelForRAG):
         '''Compute WARG scores for one or more queries.
 
         For each query, this method compares retriever and generator document
-        rankings using Rank-Biased Overlap (RBO) and returns a disagreement score.
+        rankings using the WARG metric and returns an alignment score.
 
         Args:
             queries (Union[List[str], str]):
                 One or more query strings.
             k (int):
-                Cutoff for top-k document ranking comparison.
-            p (float, optional):
-                Persistence parameter for RBO. Defaults to 0.9.
+                Number of top documents retrieved per query.
+            tau (float, optional):
+                Threshold multiplier for the WARG computation. Documents with
+                normalised generator score > tau/n are assigned to the high set.
+                Defaults to 1.5.
             batch_size (int, optional):
                 Batch size used in generation and retrieval. Defaults to 64.
             max_gen_len (int, optional):
@@ -479,12 +652,12 @@ class WARGScorer(ExplainableAutoModelForRAG):
 
         Returns:
             numpy.ndarray:
-                Array of WARG disagreement scores (one per query).
+                Array of WARG scores in [-1, 1] (one per query).
+                +1 means the generator attends exactly to the retriever's top documents;
+                -1 means perfect inverse alignment.
 
         Notes:
             - Results are cached per query.
-            - Higher WARG values indicate greater disagreement between retriever
-              and generator importance rankings.
         '''
 
         # Recover from checkpoint:
@@ -532,23 +705,8 @@ class WARGScorer(ExplainableAutoModelForRAG):
             if k_total > min(len(ret_scores), len(gen_scores)):
                 ret_scores, gen_scores, ret_docs, cnt_docs = self.__generate(query, **gen_args)
 
-            # Get indices:
-            ret_rank = np.argsort(ret_scores[:k_total])
-            gen_rank = np.argsort(gen_scores[:k_total])
-
-            # Compute rbo:
-            rbo = 0.0
-            for i in range(2*k):
-                d = i + 1
-                a = set(ret_rank[:d])
-                b = set(gen_rank[:d])
-                overlap = len(a.intersection(b))
-                
-                term = (1 - p) * (p ** i) * (overlap / d)
-                rbo += term
-
-            # Calculate gap:
-            scores.append(1.0 - rbo)
+            # Compute WARG:
+            scores.append(self.warg(tau=tau))
             print(f'WARG = {scores[-1]:.2f}')
 
             # Save scorer checkpoint:
@@ -558,7 +716,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
             print('Done.\n')
 
         return np.array(scores)
-    
+
     def dump(self, path:str) -> None:
         '''Save the scorer state and cached query results to disk.
 
@@ -582,7 +740,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
 
         # Store index path used by the retriever
         dump_dict['index_path'] = self._index_path
-        
+
         # Store cached query results:
         #   k : query string
         #   r : retriever importance scores
