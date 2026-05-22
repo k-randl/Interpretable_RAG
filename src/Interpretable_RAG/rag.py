@@ -412,7 +412,7 @@ class ExplainableAutoModelForRAG(RAGExplanation):
             if suffix_size > 0: indices = indices[:-suffix_size]
 
         # get token importance:
-        qry_importance_retriever = np.abs(self.retriever.IntGrad()['query'].numpy()[0])
+        qry_importance_retriever = np.abs(self.retriever.intGrad()['query'].numpy()[0])
 
         # aggregate to word importance:
         qry_importance_retriever = [np.mean([qry_importance_retriever[i] for i in w]) for w in indices]
@@ -482,7 +482,7 @@ class ExplainableAutoModelForRAG(RAGExplanation):
 
 class WARGScorer(ExplainableAutoModelForRAG):
     def __init__(self, index_path:str, generator_name_or_path:str, query_encoder_name_or_path:str, context_encoder_name_or_path:Optional[str]=None, *,
-            negative_sampling:Optional[Literal['top', 'rnd']]='top',
+            negative_sampling:Optional[Literal['top', 'rnd']]=None,
             retriever_kwargs:Dict[str, Any]={},
             generator_kwargs:Dict[str, Any]={},
             **kwargs
