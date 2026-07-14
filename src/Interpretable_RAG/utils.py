@@ -213,14 +213,14 @@ def match_token_attributions(
     )
 
     # find position of generator text in retriever text:
-    offset = gen_txt.find(ret_txt)
+    offset = gen_txt.lower().find(ret_txt.lower())
     if offset >= 0:
         gen_txt  = gen_txt[offset:offset+len(ret_txt)]
         gen_attr = gen_attr[offset:offset+len(ret_txt)]
 
     else:
         # if not found: find position of retriever query in generator query:
-        offset = ret_txt.find(gen_txt)
+        offset = ret_txt.lower().find(gen_txt.lower())
         if offset >= 0:
             ret_txt  = ret_txt[offset:offset+len(gen_txt)]
             ret_attr = ret_attr[offset:offset+len(gen_txt)]
@@ -228,7 +228,7 @@ def match_token_attributions(
         # if still not found raise ValueError:
         else: raise ValueError()
 
-    assert gen_txt == ret_txt
+    assert gen_txt.lower() == ret_txt.lower()
 
     # combine:
     out_tokens   = [gen_txt[0]]
