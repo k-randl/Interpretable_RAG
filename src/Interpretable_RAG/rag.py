@@ -6,7 +6,7 @@ from scipy.stats import spearmanr
 from .retrieval import RetrieverExplanation, RetrieverMethods_t
 from .retrieval_offline import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOfflineRetrieval
 from .retrieval_online  import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOnlineRetrieval
-from .generation import ExplainableAutoModelForGeneration, GeneratorExplanation, GeneratorAggregations_t
+from .generation import ExplainableAutoModelForGeneration, GeneratorExplanation, GeneratorMethods_t, GeneratorAggregations_t
 from .utils import tokens2words
 
 from typing import Optional, Union, Callable, Literal, Dict, List, Tuple, Any
@@ -21,9 +21,18 @@ class RAGExplanation:
     """Base class for RAG explanation objects. All members can be used after
     calling ``load()`` — no retriever or generator model weights are required."""
 
+    def __init__(self) -> None:
+        self.retriever:RetrieverExplanation
+        self.generator:GeneratorExplanation
+
+        self.retriever_method:RetrieverMethods_t = 'intGrad'
+        self.generator_method:GeneratorMethods_t = 'shap'
+
     @classmethod
     def load(cls, saved_data: Union[str, Tuple], *,
+             ret_method: RetrieverMethods_t = 'intGrad',
              ret_kwargs: Dict[str, Any] = {},
+             gen_method: GeneratorMethods_t = 'shap',
              gen_kwargs: Dict[str, Any] = {},
     ) -> Union['RAGExplanation', Dict[str, 'RAGExplanation']]:
         """Load a RAGExplanation from saved explanation pickles.
@@ -35,8 +44,10 @@ class RAGExplanation:
                         ``RetrieverExplanation.load()`` and
                         ``GeneratorExplanation.load()`` respectively (i.e. a path,
                         list of paths, or dict).
+            ret_method: Method used to compute retreiver saliency (default: intGrad).
             ret_kwargs: Extra keyword arguments forwarded to
                         ``RetrieverExplanation.load()``.
+            gen_method: Method used to compute generator saliency (default: shap).
             gen_kwargs: Extra keyword arguments forwarded to
                         ``GeneratorExplanation.load()``.
 
@@ -62,6 +73,8 @@ class RAGExplanation:
             obj = cls.__new__(cls)
             obj.retriever = ret_exp
             obj.generator = gen_exp
+            obj.retriever_method = ret_method
+            obj.generator_method = gen_method
             return obj
 
         if isinstance(ret_exps, dict) and isinstance(gen_exps, dict):
@@ -70,57 +83,49 @@ class RAGExplanation:
 
         return _make(ret_exps, gen_exps)
 
+    def _get_ret_importance(self, key:Literal['query', 'context'], **kwargs) -> NDArray[np.float64]:
+        if   self.retriever_method == 'grad':    ret_raw = [doc.mean(axis=-1) for doc in self.retriever.grad(**kwargs)[key]]
+        elif self.retriever_method == 'aGrad':   ret_raw = [doc.mean(axis=0) for doc in self.retriever.aGrad(**kwargs)[key]]
+        else:
+            # try to call a method on the explanation object by name
+            method_fn = getattr(self.retriever, self.retriever_method, None)
+            if callable(method_fn): ret_raw = method_fn(**kwargs)[key]
+            else: raise ValueError(f"`{self.__class__.__name__}.retriever` has no callable method named '{self.retriever_method}'")
+
+        if hasattr(ret_raw, 'numpy'):
+            ret_raw = ret_raw.numpy()
+
+        return np.asarray(ret_raw)
+    
+    def _get_gen_importance(self, key:Literal['query', 'context'], **kwargs) -> NDArray[np.float64]:
+        # try to call a method on the explanation object by name
+        method_fn = getattr(self.generator, self.generator_method, None)
+        if callable(method_fn): gen_raw = method_fn(key, 'token', **kwargs)
+        else: raise ValueError(f"`{self.__class__.__name__}.generator` has no callable method named '{self.generator_method}'")
+
+        if gen_raw.ndim == 2:
+            gen_raw = gen_raw.sum(axis=1)
+
+        return gen_raw
+
     @property
     def retriever_document_importance(self) -> NDArray[np.float64]:
-        '''Normalized document importance estimated by the retriever via intGrad attributions.'''
-        intGrad = self.retriever.intGrad()['context']
-        if hasattr(intGrad, 'numpy'):
-            intGrad = intGrad.numpy()
-        doc_importance = np.asarray(intGrad).sum(axis=1)
-        doc_importance = doc_importance / np.abs(doc_importance).sum()
+        '''Normalized document importance estimated by the retriever.'''
+        doc_importance  = self._get_ret_importance('context').sum(axis=1)
+        doc_importance /= np.abs(doc_importance).sum()
         return doc_importance
 
     @property
     def generator_document_importance(self) -> NDArray[np.float64]:
         '''Normalized document importance of the generator.'''
-        doc_importance_generator = self.generator.shap('context', 'token')
-
-        if doc_importance_generator.ndim == 2:
-            doc_importance_generator = doc_importance_generator.sum(axis=1)
-
+        doc_importance_generator  = self._get_gen_importance('context')
         doc_importance_generator /= np.abs(doc_importance_generator).sum()
-
         return doc_importance_generator
 
     @property
     def mean_document_importance(self) -> NDArray[np.float64]:
         '''Mean normalized document importance of the rag pipeline.'''
         return (self.retriever_document_importance + self.generator_document_importance) / 2.
-
-    @property
-    def document_agreement(self) -> NDArray[np.float64]:
-        '''Document importance disagreement between retriever and generator.'''
-
-        # get normalized importance rankings:
-        ret = np.argsort(self.retriever_document_importance)
-        gen = np.argsort(self.generator_document_importance)
-
-        # compute spearman correlation:
-        r, p = spearmanr(ret, gen)
-
-        return r
-
-    @property
-    def generator_query_importance(self) -> NDArray[np.float64]:
-        '''Normalized word importance of the query during generation.'''
-        qry_importance_generator = self.generator.shap('query', 'token')
-
-        if qry_importance_generator.ndim == 2:
-            qry_importance_generator = qry_importance_generator.sum(axis=1)
-
-        qry_importance_generator /= np.abs(qry_importance_generator).sum()
-
-        return qry_importance_generator
 
     def warg(self, tau:float=1.5, *, _ret_scores=None) -> float:
         '''Weighted Alignment between Retriever and Generator (WARG).
@@ -145,21 +150,13 @@ class RAGExplanation:
                  0  no alignment between retriever and generator
                 -1  generator attends to the documents the retriever ranked lowest
         '''
-        # retriever scores: intGrad summed over token dimension as proxy for similarity
+        # retriever scores: saliency summed over token dimension as proxy for similarity
         if _ret_scores is None:
-            ret_raw = self.retriever.intGrad()['context']
-            if hasattr(ret_raw, 'numpy'):
-                ret_raw = ret_raw.numpy()
-            ret_scores = np.asarray(ret_raw).sum(axis=1)
+            ret_scores = self._get_ret_importance('context').sum(axis=1)
         else: ret_scores = _ret_scores
 
-        # generator scores: SHAP attribution summed over the token dimension
-        gen_scores = self.generator.shap('context', 'token')
-        if hasattr(gen_scores, 'numpy'):
-            gen_scores = gen_scores.numpy()
-        gen_scores = np.asarray(gen_scores)
-        if gen_scores.ndim == 2:
-            gen_scores = gen_scores.sum(axis=1)
+        # generator scores: saliency summed over the token dimension
+        gen_scores = self._get_gen_importance('context')
 
         n = len(gen_scores)
 
@@ -266,6 +263,8 @@ class ExplainableAutoModelForRAG(RAGExplanation):
             - In online mode, `dir` is ignored.
             - Models are automatically moved to GPU if available, otherwise CPU.
         '''
+        super().__init__()
+
         # save general info:
         self.__is_offline = offline
         self.__retriever_query_format = retriever_query_format
@@ -412,7 +411,7 @@ class ExplainableAutoModelForRAG(RAGExplanation):
             if suffix_size > 0: indices = indices[:-suffix_size]
 
         # get token importance:
-        qry_importance_retriever = np.abs(self.retriever.intGrad()['query'].numpy()[0])
+        qry_importance_retriever = np.abs(self._get_ret_importance('query')[0])
 
         # aggregate to word importance:
         qry_importance_retriever = [np.mean([qry_importance_retriever[i] for i in w]) for w in indices]
@@ -423,24 +422,18 @@ class ExplainableAutoModelForRAG(RAGExplanation):
         return qry_importance_retriever
 
     @property
+    def generator_query_importance(self) -> NDArray[np.float64]:
+        '''Normalized word importance of the query during generation.'''
+        qry_importance_generator  = self._get_gen_importance('query')
+        qry_importance_generator /= np.abs(qry_importance_generator).sum()
+        return qry_importance_generator
+
+    @property
     def mean_query_importance(self) -> NDArray[np.float64]:
         '''Mean word importance of the query for the rag pipeline.'''
         return (self.retriever_query_importance + self.generator_query_importance) / 2.
 
-    @property
-    def query_agreement(self) -> NDArray[np.float64]:
-        '''Word importance agreement of the query between retriever and generator.'''
-
-        # get normalized importance rankings:
-        ret = np.argsort(self.retriever_query_importance)
-        gen = np.argsort(self.generator_query_importance)
-
-        # compute spearman correlation:
-        r, p = spearmanr(ret, gen)
-
-        return r
-
-    def warg(self, tau: float = 1.5) -> float:
+    def warg(self, tau: float = 1.5, *, _ret_scores=None) -> float:
         '''Weighted Alignment between Retriever and Generator (WARG).
 
         Measures how well the documents the generator attends to (high SHAP
@@ -463,18 +456,19 @@ class ExplainableAutoModelForRAG(RAGExplanation):
                  0  no alignment between retriever and generator
                 -1  generator attends to the documents the retriever ranked lowest
         '''
-        if not hasattr(self, 'retrieved_sim'):
-            raise AttributeError(
-                '`__call__(...)` must be called at least once before calling `warg()`.'
+        # if  _ret_scores is provided, ``retrieved_sim`` is not used.
+        if _ret_scores is None:
+            if not hasattr(self, 'retrieved_sim'):
+                raise AttributeError(
+                    '`__call__(...)` must be called at least once before calling `warg()`.'
+                )
+            # retriever scores: raw cosine similarity in descending rank order
+            _ret_scores = np.asarray(
+                self.retrieved_sim.numpy() if hasattr(self.retrieved_sim, 'numpy')
+                else self.retrieved_sim
             )
-        
-        # retriever scores: raw cosine similarity in descending rank order
-        ret_scores = np.asarray(
-            self.retrieved_sim.numpy() if hasattr(self.retrieved_sim, 'numpy')
-            else self.retrieved_sim
-        )
 
-        return super().warg(tau=tau, _ret_scores=ret_scores)
+        return super().warg(tau=tau, _ret_scores=np.asarray(_ret_scores))
 
 #=======================================================================#
 # WARGScorer:                                                           #
@@ -705,8 +699,8 @@ class WARGScorer(ExplainableAutoModelForRAG):
             if k_total > min(len(ret_scores), len(gen_scores)):
                 ret_scores, gen_scores, ret_docs, cnt_docs = self.__generate(query, **gen_args)
 
-            # Compute WARG:
-            scores.append(self.warg(tau=tau))
+            # Compute WARG using top-k retriever scores from cached/checkpoint data:
+            scores.append(self.warg(tau=tau, _ret_scores=ret_scores[:k]))
             print(f'WARG = {scores[-1]:.2f}')
 
             # Save scorer checkpoint:
@@ -736,7 +730,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
                                    'query_format': self.retriever_query_format}
 
         # Store generator model identifier
-        dump_dict['generator']  = self.retriever.query_encoder_name_or_path
+        dump_dict['generator']  = self.generator.model_name_or_path
 
         # Store index path used by the retriever
         dump_dict['index_path'] = self._index_path
@@ -794,7 +788,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
                       generator_name_or_path       = generator_name_or_path,
                       query_encoder_name_or_path   = query_encoder_name_or_path,
                       context_encoder_name_or_path = context_encoder_name_or_path,
-                      retriever_query_format       = retriever_query_format
+                      retriever_query_format       = retriever_query_format,
                       **kwargs)
 
         # Restore cached query results:
