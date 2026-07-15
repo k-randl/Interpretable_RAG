@@ -24,7 +24,7 @@ Configuration:
 """
 
 __version__ = "0.1.0"
-__author__ = "Guido Rocchietti"
+__author__ = "Korbinian Randl & Guido Rocchietti"
 
 # Core classes
 from .generation import ExplainableAutoModelForGeneration
@@ -32,8 +32,7 @@ from .rag import ExplainableAutoModelForRAG
 
 # Retrieval models
 from .retrieval import RetrieverExplanation, RetrieverExplanationBase
-from .retrieval_offline import ExplainableAutoModelForRetrieval
-# from .retrieval_online import ExplainableRetriever
+from .retrieval_online import ExplainableAutoModelForRetrieval
 
 # Utilities
 from .tools import (
