@@ -43,3 +43,7 @@ higlight_importance_retriever(retriever, method='intGrad', token_processor=lambd
 #%% Lime:
 plot_importance_retriever(retriever, method='lime')
 higlight_importance_retriever(retriever, method='lime', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)
+
+#%% SHAP:
+plot_importance_retriever(retriever, method='shap')
+higlight_importance_retriever(retriever, method='shap', token_processor=lambda s: s[2:] if s.startswith('##') else ' ' + s)

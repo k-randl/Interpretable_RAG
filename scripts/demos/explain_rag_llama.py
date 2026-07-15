@@ -92,6 +92,4 @@ model.generator_query_importance
 # %%
 model.mean_query_importance
 # %%
-model.query_agreement
-# %%
-model.document_agreement
+model.warg()

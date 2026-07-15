@@ -1,6 +1,5 @@
 import os
 import torch
-import signal
 import inspect
 import numpy as np
 import transformers
@@ -13,7 +12,7 @@ from sklearn.linear_model import Ridge
 from .utils import decode_chat_template, get_model_type, generate_permutations, sample_perturbations
 
 from numpy.typing import NDArray
-from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable, Callable, TypeAlias
+from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable, Callable, TypeAlias, Any, cast
 
 from abc import ABCMeta, abstractmethod
 
@@ -28,6 +27,10 @@ GeneratorAggregations_t:TypeAlias = Literal['token', 'sequence', 'bow', 'nucleus
 
 METHODS = ('lime', 'shap')
 GeneratorMethods_t:TypeAlias = Literal['lime', 'shap']
+
+# Return type of `shap()`/`lime()`: a per-key value is `None` whenever that key
+# (e.g. `'query'`) was not perturbed/computed (e.g. `max_samples_query=0`).
+GeneratorAttribution_t:TypeAlias = Union[Dict[Literal['query', 'context'], Union[NDArray[np.float32], None]], NDArray[np.float32], None]
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -115,11 +118,12 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
             "Keep the answer under 200 words."
         )
 
-    # Apply size limit
+    # Apply size limit (build a new list instead of mutating the caller's `contexts`)
     if max_document_size is not None:
-        for i, doc in enumerate(contexts):
-            if len(doc) > max_document_size:
-                contexts[i] = doc[:max_document_size - 3] + '...'
+        contexts = [
+            doc[:max_document_size - 3] + '...' if len(doc) > max_document_size else doc
+            for doc in contexts
+        ]
 
     # Format the context into a single message
     context_text = "\n\n".join([f"Document {i+1}:\n{doc}" for i, doc in enumerate(contexts)])
@@ -128,14 +132,6 @@ def create_rag_prompt(query:str, contexts:List[str], *, system:Optional[str]=Non
         {"role": "system", "content": system},
         {"role": "user", "content": f"{context_text}\n\nQuery: {query}"}
     ]
-
-QAMPARI_SYSTEM_PROMPT = (
-    "Use the following retrieved documents to answer the user's query. "
-    "The answer requires listing MULTIPLE entities. "
-    "Respond with a comma-separated list of answers only. "
-    "Do not explain, do not cite documents, do not use bullet points. "
-    "Example format: Answer 1, Answer 2, Answer 3"
-)
 
 def logits2probs(logits:torch.Tensor, normalization:Literal['softmax', 'relu', 'offset']='softmax'):
     """Converts raw logits into probability distributions using a specified normalization normalization.
@@ -172,6 +168,34 @@ def logits2probs(logits:torch.Tensor, normalization:Literal['softmax', 'relu', '
     else: raise ValueError(f'Unknown value for parameter `normalization`: "{normalization}".')
 
     return probs
+
+def get_generator_scores(explanation:'GeneratorExplanationBase', method:GeneratorMethods_t, *,
+        key:Union[Literal['query', 'context'], None] = None,
+        aggregation:GeneratorAggregations_t = 'token',
+        **kwargs
+    ) -> GeneratorAttribution_t:
+    """Dispatch to a generator explanation's attribution method by name.
+
+    Args:
+        explanation: The generator explanation object (any object exposing a callable
+                     method named `method`, e.g. `shap()` or `lime()`).
+        method:      Name of the attribution method to use (e.g. `'shap'`, `'lime'`).
+        key:         Explanation key. Can either be `'query'` or `'context'`.
+                     If `None` returns a dictionary of both.
+        aggregation: Aggregation method for probabilities (default: `'token'`).
+        **kwargs:    Additional keyword arguments forwarded to the underlying method.
+
+    Returns:
+        A dicionary containing the following two keys (if `key` is specified) or one of the following:
+        - `'query'`: a `numpy.ndarray` containing the attribution values for the query
+        - `'context'`: a `numpy.ndarray` containing the attribution values for the contexts.
+
+    Raises:
+        ValueError: If `method` does not name a callable method on `explanation`.
+    """
+    method_fn = getattr(explanation, method, None)
+    if callable(method_fn): return cast(GeneratorAttribution_t, method_fn(key, aggregation, **kwargs))
+    raise ValueError(f"`{type(explanation).__name__}` has no callable method named '{method}'")
 
 #=======================================================================#
 # Generator Explanation:                                                #
@@ -218,6 +242,25 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
         """The huggingface string identifier of the generator model."""
         raise NotImplementedError()
 
+    @property
+    def focus(self) -> slice:
+        """The focus of the explanation, if set."""
+        if hasattr(self, '_focus'): return self._focus
+        return slice(None)
+
+    @focus.setter
+    def focus(self, value:Union[Tuple[int, int], None]) -> None:
+        """Sets the focus of the explanation."""
+        if value is None:
+            if hasattr(self, '_focus'): del self._focus
+
+        elif isinstance(value, tuple):
+            self._focus = slice(*value)
+
+        else: raise TypeError(
+            f'`focus` must be a tuple of two integers or `None`, but got `{type(value)}: {value}`'
+        )
+
     #===================================================================#
     # Methods:                                                          #
     #===================================================================#
@@ -226,7 +269,7 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
     def shap(self,
             key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token',
             **kwargs
-        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+        ) -> GeneratorAttribution_t:
         """Generates Shapley feature attribution values for the chosen aggregation method.
 
         Args:
@@ -244,7 +287,7 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
     @abstractmethod
     def lime(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token',
             **kwargs
-        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+        ) -> GeneratorAttribution_t:
         """Generates LIME feature attribution values for the chosen aggregation method.
 
         Args:
@@ -261,7 +304,7 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
 
     def save_values(self, path:Optional[str]=None, *,
             aggregations:Optional[List[GeneratorAggregations_t]]=None,
-        ) -> Union[str, None]:
+        ) -> Union[Dict[str, Any], None]:
         """Saves the explanation data to a file.
 
         Args:
@@ -294,6 +337,15 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
 
 
 class GeneratorExplanation(GeneratorExplanationBase):
+    _qry_tokens:List[str]
+    _gen_tokens:List[str]
+    _qry_precise:bool
+    _ctx_precise:bool
+    _shapley_attributions:Dict[str, Optional[Dict[Literal['query', 'context'], NDArray[np.float32]]]]
+    _lime_attributions:Dict[str, Optional[Dict[Literal['query', 'context'], NDArray[np.float32]]]]
+    _model_name_or_path:str
+    _tokenizer:transformers.PreTrainedTokenizer
+
     @classmethod
     def load(cls, saved_data:Union[str, Dict, Iterable], *,
         model_name_or_path:Optional[str]=None,
@@ -383,7 +435,7 @@ class GeneratorExplanation(GeneratorExplanationBase):
     @property
     def gen_tokens(self) -> List[str]:
         """The list of generated tokens."""
-        return self._gen_tokens
+        return self._gen_tokens[self.focus]
 
     @property
     def qry_precise(self) -> bool:
@@ -407,7 +459,7 @@ class GeneratorExplanation(GeneratorExplanationBase):
 
     def shap(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token',
             **kwargs
-        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+        ) -> GeneratorAttribution_t:
         """Generates Shapley feature attribution values for the chosen aggregation method.
 
         Args:
@@ -420,12 +472,24 @@ class GeneratorExplanation(GeneratorExplanationBase):
             - `'query'`: a `numpy.ndarray` containing the Shapley values for the query
             - `'context'`: a `numpy.ndarray` containing the Shapley values for the contexts.
         """
-        if key is None: return self._shapley_attributions[aggregation]
-        else: return self._shapley_attributions[aggregation][key]
+        if kwargs:
+            print(f'WARNING: `shap(...)` ignores keyword arguments {list(kwargs.keys())} when loaded from a pickle.')
+
+        if aggregation != 'token' and hasattr(self, '_focus'):
+            print(f'WARNING: `focus` is ignored for aggregation "{aggregation}"; only "token" aggregation supports it.')
+
+        if key is None:
+            result = self._shapley_attributions[aggregation]
+            if aggregation != 'token' or result is None: return result
+            return {k: (v[:, self.focus] if v is not None else None) for k, v in result.items()}
+
+        result = self._shapley_attributions[aggregation][key]
+        if aggregation != 'token' or result is None: return result
+        return result[:, self.focus]
 
     def lime(self, key:Union[Literal['query', 'context'], None], aggregation:GeneratorAggregations_t='token',
             **kwargs
-        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+        ) -> GeneratorAttribution_t:
         """Generates LIME feature attribution values for the chosen aggregation method.
 
         Args:
@@ -438,8 +502,20 @@ class GeneratorExplanation(GeneratorExplanationBase):
             - `'query'`: a `numpy.ndarray` containing the LIME values for the query
             - `'context'`: a `numpy.ndarray` containing the LIME values for the contexts.
         """
-        if key is None: return self._lime_attributions[aggregation]
-        else: return self._lime_attributions[aggregation][key]
+        if kwargs:
+            print(f'WARNING: `lime(...)` ignores keyword arguments {list(kwargs.keys())} when loaded from a pickle.')
+
+        if aggregation != 'token' and hasattr(self, '_focus'):
+            print(f'WARNING: `focus` is ignored for aggregation "{aggregation}"; only "token" aggregation supports it.')
+
+        if key is None:
+            result = self._lime_attributions[aggregation]
+            if aggregation != 'token' or result is None: return result
+            return {k: (v[:, self.focus] if v is not None else None) for k, v in result.items()}
+
+        result = self._lime_attributions[aggregation][key]
+        if aggregation != 'token' or result is None: return result
+        return result[:, self.focus]
 
 
 #=======================================================================#
@@ -476,9 +552,11 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 self._tokenizer.pad_token_id = self.tokenizer.eos_token_id
                 self._explain:bool = False
                 self._exp_logits:List[torch.Tensor] = []
-                self._gen_logits:torch.Tensor = []
-                self._gen_output = None
-                self._shap_cache = None
+                self._exp_logits_buffer:List[torch.Tensor] = []
+                self._gen_logits:torch.Tensor = torch.empty((0,), dtype=torch.float32)
+                self._gen_logits_buffer:List[torch.Tensor] = []
+                self._gen_output:Union[torch.Tensor, None] = None
+                self._shap_cache:Union[Dict[Literal['query', 'context'], Optional[Dict[str, Any]]], None] = None
 
             #===============================================================#
             # Properties:                                                   #
@@ -493,7 +571,8 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             def focus(self) -> slice:
                 """The focus of the explanation, if set."""
                 # generate(...) needs to be called first:
-                if len(self._gen_logits) == 0: return None
+                if self._gen_output is None:
+                    raise AttributeError('`generate(...)` needs to be called at least once before accessing `focus`!')
 
                 # return the focus:
                 if hasattr(self, '_focus'): return self._focus
@@ -504,7 +583,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 """Sets the focus of the explanation."""
                 # generate(...) needs to be called first:
                 if (value is not None) and (len(self._gen_logits) == 0):
-                    raise AttributeError('`generate(...)` needs to be called at least once before setting `focus`!')
+                    raise AttributeError('`generate(...)` needs to be called at least once before accessing `focus`!')
 
                 # set the focus:
                 if value is None:
@@ -537,7 +616,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             def gen_tokens(self) -> List[str]:
                 """The list of generated tokens."""
                 # generate(...) needs to be called first:
-                if len(self._gen_logits) == 0:
+                if self._gen_output is None:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_tokens`!')
 
                 # get focus:
@@ -595,10 +674,10 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             # Explanation properties:
             #---------------------------------------------------------------#
             @property
-            def gen_token_probs(self) -> NDArray[np.float64]:
+            def gen_token_probs(self) -> NDArray[np.float32]:
                 """Probability of each token in the original generation."""
                 # generate(...) needs to be called first:
-                if len(self._gen_logits) == 0:
+                if self._gen_output is None:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_token_probs`!')
 
                 # get focus:
@@ -607,20 +686,20 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # get generated token ids:
                 output_ids = self._gen_output[:, focus]
 
-                # get logits:
-                logits = self._gen_logits[:, focus, :]
+                # get probabilities:
+                probs = logits2probs(self._gen_logits[:, focus, :], normalization='softmax')
 
                 # return probability of each token in the original generation:
-                return np.array([ 
-                    [float(logits[i, j, id]) for j, id  in enumerate(seq)]
+                return np.array([
+                    [float(probs[i, j, id]) for j, id  in enumerate(seq)]
                     for i, seq in enumerate(output_ids)
                 ])
 
             @property
-            def cmp_token_probs(self) -> NDArray[np.float64]:
+            def cmp_token_probs(self) -> List[NDArray[np.float32]]:
                 """Probability of each token in the original generation given the compared input."""
                 # compare(...) needs to be called first:
-                if len(self._exp_logits) == 0:
+                if len(self._exp_logits) == 0 or self._gen_output is None:
                     raise AttributeError(
                         '`generate(...)` and `compare(...)` need to be called ' +
                         'at least once before accessing `cmp_token_probs`!'
@@ -632,21 +711,21 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # get generated token ids:
                 output_ids = self._gen_output[:, focus]
 
-                # get logits:
-                logits = [t[:, focus, :] for t in self._exp_logits]
+                # get probabilities:
+                probs = [logits2probs(t[:, focus, :], normalization='softmax') for t in self._exp_logits]
 
                 # return probability of each token in the original generation:
-                return [np.array([ 
+                return [np.array([
                     [float(t[i, j, id]) for j, id  in enumerate(seq)]
                     for i, seq in enumerate(output_ids)
-                ]) for t in logits]
+                ]) for t in probs]
 
 
             @property
-            def gen_sequence_prob(self) -> NDArray[np.float64]:
+            def gen_sequence_prob(self) -> NDArray[np.float32]:
                 """Total probability of generating the original sequence."""
                 # generate(...) needs to be called first:
-                if len(self._gen_logits) == 0:
+                if self._gen_output is None:
                     raise AttributeError('`generate(...)` needs to be called at least once before accessing `gen_sequence_prob`!')
 
                 # get focus:
@@ -666,10 +745,10 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 ], axis=-1)
 
             @property
-            def cmp_sequence_probs(self) -> NDArray[np.float64]:
+            def cmp_sequence_probs(self) -> List[NDArray[np.float32]]:
                 """Total probability of generating the original sequence given the compared input."""
                 # compare(...) needs to be called first:
-                if len(self._exp_logits) == 0:
+                if len(self._exp_logits) == 0 or self._gen_output is None:
                     raise AttributeError(
                         '`generate(...)` and `compare(...)` need to be called ' +
                         'at least once before accessing `cmp_sequence_probs`!'
@@ -693,7 +772,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
 
             @property
-            def gen_bow_probs(self) -> NDArray[np.float64]:
+            def gen_bow_probs(self) -> NDArray[np.float32]:
                 """Average probability of each token in the vocabulary of being generated given the original input."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
@@ -709,7 +788,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 return probs.mean(dim=1).float().numpy()
             
             @property
-            def cmp_bow_probs(self) -> NDArray[np.float64]:
+            def cmp_bow_probs(self) -> List[NDArray[np.float32]]:
                 """Average probability of each token in the vocabulary of being generated given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
@@ -728,7 +807,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 return [t.mean(dim=1).float().numpy() for t in probs]
             
 
-            def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
+            def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float32]:
                 """Average probability of each token in the vocabulary of being generated given the original input."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
@@ -743,7 +822,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # return accumulated probability of each token in the vocabulary:
                 return _nucleus_sampling(probs.float(),p=p).mean(dim=1).numpy()
 
-            def cmp_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
+            def cmp_nucleus_probs(self, p:float=0.9) -> List[NDArray[np.float32]]:
                 """Average probability of each token in the vocabulary of being generated given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
@@ -774,8 +853,8 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     outputs.logits = outputs.logits.squeeze(1)
 
                 # save token probabilities:
-                if self._explain: self._exp_logits[-1].append(outputs.logits[:,-1:,:].detach().cpu())
-                else:             self._gen_logits.append(outputs.logits[:,-1:,:].detach().cpu())
+                if self._explain: self._exp_logits_buffer.append(outputs.logits[:,-1:,:].detach().cpu())
+                else:             self._gen_logits_buffer.append(outputs.logits[:,-1:,:].detach().cpu())
 
                 # return token probabilities:
                 return outputs
@@ -802,14 +881,17 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 self.focus       = None
 
                 # reset token probabilities:
-                self._gen_logits  = []
-                self._exp_logits  = []
+                self._gen_logits_buffer = []
 
                 # generate:
                 self._gen_output = super().generate(**inputs, **kwargs).sequences[:, inputs.input_ids.shape[-1]:]
 
                 # finalize probabilities:
-                self._gen_logits  = torch.concatenate(self._gen_logits, dim=1)
+                self._gen_logits = torch.concatenate(self._gen_logits_buffer, dim=1)
+                self._exp_logits = []
+
+                # clear buffer:
+                self._gen_logits_buffer.clear()
 
                 # return generated text:
                 return self.tokenizer.batch_decode(self._gen_output)
@@ -849,19 +931,22 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
             def __compare_unconditional(self, inputs:List[str], **kwargs) -> torch.LongTensor:
                 # tokenize inputs:
-                inputs = self.tokenizer(inputs, truncation=True, padding=True, return_tensors='pt')
+                model_inputs = self.tokenizer(inputs, truncation=True, padding=True, return_tensors='pt')
 
                 # deactivate explanation mode:
-                self._explain    = True
+                self._explain = True
 
                 # reset token probabilities:
-                self._exp_logits.append([])
+                self._exp_logits_buffer = []
 
                 # generate:
-                output = super().generate(**inputs, **kwargs).sequences[:, inputs.input_ids.shape[-1]:]
+                output = super().generate(**model_inputs, **kwargs).sequences[:, model_inputs.input_ids.shape[-1]:]
 
                 # finalize probabilities:
-                self._exp_logits[-1] = torch.concatenate(self._exp_logits[-1], dim=1)
+                self._exp_logits.append(torch.concatenate(self._exp_logits_buffer, dim=1))
+
+                # clear buffer:
+                self._exp_logits_buffer.clear()
 
                 # split batch in elements if multiple inputs:
                 if len(inputs) > 1:
@@ -870,7 +955,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # return generated tokens:
                 return output
 
-            def __compare_conditional(self, inputs:List[str], outputs:Union[List[str], torch.LongTensor], batch_size:int=1, **kwargs) -> torch.LongTensor:
+            def __compare_conditional(self, inputs:List[str], outputs:Union[List[str], torch.Tensor], batch_size:int=1, **kwargs) -> torch.LongTensor:
                 # get batch size:
                 single_input  = len(inputs) == 1
                 single_output = len(outputs) == 1
@@ -881,7 +966,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 self._explain = True
 
                 # reset token probabilities:
-                self._exp_logits.append([])
+                self._exp_logits_buffer = []
 
                 # convert string to Iterable of tokens:
                 if isinstance(outputs[0], str):
@@ -889,9 +974,9 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 outputs = outputs.to(self.device)
 
                 # tokenize input:
-                inputs = self.tokenizer(inputs, padding=True, truncation=True, return_tensors='pt')
-                input_ids = inputs.input_ids.to(self.device)
-                attention_mask = inputs.attention_mask.to(self.device)
+                model_inputs = self.tokenizer(inputs, padding=True, truncation=True, return_tensors='pt')
+                input_ids = model_inputs.input_ids.to(self.device)
+                attention_mask = model_inputs.attention_mask.to(self.device)
 
                 # batch processing in case of single input:
                 if single_input:
@@ -977,9 +1062,12 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 # finalize probabilities:
                 if single_input and single_output:
-                    self._exp_logits[-1] = torch.concatenate(self._exp_logits[-1], dim=0).transpose(0,1)
+                    self._exp_logits.append(torch.concatenate(self._exp_logits_buffer, dim=0).transpose(0,1))
 
-                else: self._exp_logits[-1] = torch.concatenate(self._exp_logits[-1], dim=1)
+                else: self._exp_logits.append(torch.concatenate(self._exp_logits_buffer, dim=1))
+
+                # clear buffer:
+                self._exp_logits_buffer.clear()
 
                 # split batch in elements if multiple inputs for the same output:
                 if not single_input and single_output:
@@ -1144,7 +1232,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 num_samples:int=100,
                 sample_size:int=10,
                 **kwargs
-            ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+            ) -> GeneratorAttribution_t:
                 """Generates Shapley feature attribution values for the chosen aggregation method.
 
                 Args:
@@ -1181,16 +1269,17 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 elif hasattr(self, f'gen_{aggregation}_probs') and hasattr(self, f'cmp_{aggregation}_probs'):
                     # Flatten each token probability array from compared documents:
-                    probs = [p.flatten() for p in eval(f'self.cmp_{aggregation}_probs')]
+                    probs = [p.flatten() for p in getattr(self, f'cmp_{aggregation}_probs')]
 
                     # Add the generated token probabilities as the final "player" in the SHAP context:
-                    probs.append(eval(f'self.gen_{aggregation}_probs').flatten())
+                    probs.append(getattr(self, f'gen_{aggregation}_probs').flatten())
 
 
                 else: raise ValueError(f'Unknown value for parameter `aggregation`: "{aggregation}"')
 
                 # Call actual method:
-                result = {'query': None, 'context': None} if key is None else {key: None}
+                assert self._shap_cache is not None, '`explain_generate(...)` must be called before `shap(...)`!'
+                result:Dict[Literal['query', 'context'], Optional[NDArray[np.float32]]] = {'query': None, 'context': None} if key is None else {key: None}
                 for k in result:
                     if self._shap_cache[k] is None: result[k] = None
                     elif self._shap_cache[k]['precise']: result[k] = self._get_shapley_attributions_precise(probs, **self._shap_cache[k])
@@ -1198,7 +1287,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 return result if key is None else result[key]
 
-            def _get_shapley_attributions_precise(self, probs:NDArray[np.float64], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool) -> NDArray[np.float64]:
+            def _get_shapley_attributions_precise(self, probs:List[NDArray[np.float32]], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool) -> NDArray[np.float32]:
                 assert precise is True, 'Precise SHAP values can only be calculated for precise values!'
 
                 # Get the shape of the permutations matrix: (num_permutations, num_sets)
@@ -1227,9 +1316,9 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     p_shap[j] = p_marginal[new_docs == j].mean(0)
 
                 # Return SHAP values for all but the baseline (first one)
-                return p_shap.squeeze()
+                return p_shap
 
-            def _get_shapley_attributions_monte_carlo(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float64]:
+            def _get_shapley_attributions_monte_carlo(self, probs:List[NDArray[np.float32]], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float32]:
                 assert precise is False, 'Monte Carlo SHAP values can only be calculated for approximate values!'
 
                 index_size = len(indices)
@@ -1267,7 +1356,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # Return the mean of the attributions across all samples:
                 return np.mean(attributions, axis=0)
             
-            def _get_shapley_attributions_kernel(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, **kwargs) -> NDArray[np.float64]:
+            def _get_shapley_attributions_kernel(self, probs:List[NDArray[np.float32]], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, **kwargs) -> NDArray[np.float32]:
                 assert precise is False, 'Kernel SHAP values can only be calculated for approximate values!'
 
                 # fit a ridge regressor using the SHAP kernel:
@@ -1282,7 +1371,10 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 w  = [_get_shap_weights(z) for z in x]
                 lr.fit(x, y, w)
                 # attributions are estimated SHAP values:
-                attributions = lr.coef_.T
+                # Ridge collapses `coef_` to 1-D when there is only a single target column
+                # (e.g. aggregation='sequence'), so reshape explicitly using the known
+                # dimensions of `x`/`y` to guarantee a (num_docs, num_targets) result.
+                attributions = np.asarray(lr.coef_).reshape(y.shape[1], x.shape[1]).T
 
                 # rescale attributions to fit prediction:
                 return attributions
@@ -1292,7 +1384,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     kernel_width:Optional[float]=None,
                     kernel_fn:Optional[Callable]=None,
                     **kwargs
-                ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+                ) -> GeneratorAttribution_t:
                 """Generates LIME feature attribution values for the chosen aggregation method.
 
                 Args:
@@ -1328,17 +1420,21 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 elif hasattr(self, f'gen_{aggregation}_probs') and hasattr(self, f'cmp_{aggregation}_probs'):
                     # Flatten each token probability array from compared documents:
-                    probs = [p.flatten() for p in eval(f'self.cmp_{aggregation}_probs')]
+                    probs = [p.flatten() for p in getattr(self, f'cmp_{aggregation}_probs')]
 
                     # Add the generated token probabilities as the final "player" in the SHAP context:
-                    probs.append(eval(f'self.gen_{aggregation}_probs').flatten())
+                    probs.append(getattr(self, f'gen_{aggregation}_probs').flatten())
 
 
                 else: raise ValueError(f'Unknown value for parameter `aggregation`: "{aggregation}"')
 
                 # Call actual method:
-                result = {'query': None, 'context': None} if key is None else {key: None}
+                assert self._shap_cache is not None, '`explain_generate(...)` must be called before `lime(...)`!'
+                result:Dict[Literal['query', 'context'], Optional[NDArray[np.float32]]] = {'query': None, 'context': None} if key is None else {key: None}
                 for k in result:
+                    if self._shap_cache[k] is None:
+                        result[k] = None
+                        continue
 
                     # Default kernel width:
                     if kernel_width is None:
@@ -1350,16 +1446,17 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                         kernel_width = min(25., num_docs/2.)
 
                     # Default exponential kernel (see https://github.com/marcotcr/lime/blob/master/lime/lime_text.py):
+                    # (`kernel_width` is bound as a default arg so the lambda captures its
+                    # current, narrowed value instead of a live reference to the outer variable)
                     if kernel_fn is None:
-                        kernel_fn = lambda d: np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
+                        kernel_fn = lambda d, kernel_width=kernel_width: np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
 
-                    if self._shap_cache[k] is None: result[k] = None
-                    elif self._shap_cache[k]['precise']: result[k] = self._get_lime_attributions_precise(probs, kernel_fn=kernel_fn, **self._shap_cache[k])
+                    if self._shap_cache[k]['precise']: result[k] = self._get_lime_attributions_precise(probs, kernel_fn=kernel_fn, **self._shap_cache[k])
                     else: result[k] = self._get_lime_attributions_approx(probs, kernel_fn=kernel_fn, **self._shap_cache[k])
 
                 return result if key is None else result[key]
 
-            def _get_lime_attributions_precise(self, probs:NDArray[np.float64], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool, kernel_fn:Callable, **kwargs) -> NDArray[np.float64]:
+            def _get_lime_attributions_precise(self, probs:List[NDArray[np.float32]], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool, kernel_fn:Callable, **kwargs) -> NDArray[np.float32]:
                 assert precise is True
 
                 n_permutations, n_steps = indices.shape
@@ -1391,9 +1488,12 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 lr = Ridge(alpha=0.01, fit_intercept=True, solver='cholesky')
                 lr.fit(x, y, sample_weight=w)
-                return lr.coef_.T
+                # Ridge collapses `coef_` to 1-D when there is only a single target column
+                # (e.g. aggregation='sequence'), so reshape explicitly using the known
+                # dimensions of `x`/`y` to guarantee a (num_docs, num_targets) result.
+                return np.asarray(lr.coef_).reshape(y.shape[1], x.shape[1]).T
 
-            def _get_lime_attributions_approx(self, probs:NDArray[np.float64], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, kernel_fn:Callable, **kwargs) -> NDArray[np.float64]:
+            def _get_lime_attributions_approx(self, probs:List[NDArray[np.float32]], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, kernel_fn:Callable, **kwargs) -> NDArray[np.float32]:
                 assert precise is False
 
                 n_features = sets.shape[1]
@@ -1408,7 +1508,10 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 lr = Ridge(alpha=0.01, fit_intercept=True, solver='cholesky')
                 lr.fit(x, y, sample_weight=w)
-                return lr.coef_.T
+                # Ridge collapses `coef_` to 1-D when there is only a single target column
+                # (e.g. aggregation='sequence'), so reshape explicitly using the known
+                # dimensions of `x`/`y` to guarantee a (num_docs, num_targets) result.
+                return np.asarray(lr.coef_).reshape(y.shape[1], x.shape[1]).T
 
             def _extract_top_exp_prob(self, top_k = 200):
                 """Extracts the top-k probabilities and their corresponding tokens from the generated tensors.
@@ -1448,51 +1551,63 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
     #---------------------------------------------------------------#
     @property
     @abstractmethod
-    def gen_token_probs(self) -> NDArray[np.float64]:
+    def gen_token_probs(self) -> NDArray[np.float32]:
         """Probability of each token in the original generation."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
     @property
     @abstractmethod
-    def cmp_token_probs(self) -> NDArray[np.float64]:
+    def cmp_token_probs(self) -> List[NDArray[np.float32]]:
         """Probability of each token in the original generation given the compared input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
 
     @property
     @abstractmethod
-    def gen_sequence_prob(self) -> NDArray[np.float64]:
+    def gen_sequence_prob(self) -> NDArray[np.float32]:
         """Total probability of generating the original sequence."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
     @property
     @abstractmethod
-    def cmp_sequence_probs(self) -> NDArray[np.float64]:
+    def cmp_sequence_probs(self) -> List[NDArray[np.float32]]:
         """Total probability of generating the original sequence given the compared input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
 
     @property
     @abstractmethod
-    def gen_bow_probs(self) -> NDArray[np.float64]:
+    def gen_bow_probs(self) -> NDArray[np.float32]:
         """Average probability of each token in the vocabulary of being generated given the original input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
     
     @property
     @abstractmethod
-    def cmp_bow_probs(self) -> NDArray[np.float64]:
+    def cmp_bow_probs(self) -> List[NDArray[np.float32]]:
         """Average probability of each token in the vocabulary of being generated given the compared input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
     
 
     @abstractmethod
-    def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
+    def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float32]:
         """Average probability of each token in the vocabulary of being generated given the original input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
     @abstractmethod
-    def cmp_nucleus_probs(self, p:float=0.9) -> NDArray[np.float64]:
+    def cmp_nucleus_probs(self, p:float=0.9) -> List[NDArray[np.float32]]:
         """Average probability of each token in the vocabulary of being generated given the compared input."""
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
+    @property
+    @abstractmethod
+    def focus(self) -> slice:
+        """The focus of the explanation, if set."""
+        raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
+
+    @focus.setter
+    @abstractmethod
+    def focus(self, value:Union[Tuple[int, int], None]) -> None:
+        """Sets the focus of the explanation."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
     # Abstract methods for documentation purposes:
@@ -1569,7 +1684,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             num_samples:int=100,
             sample_size:int=10,
             **kwargs
-        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+        ) -> GeneratorAttribution_t:
         """Generates Shapley feature attribution values for the chosen aggregation method.
 
         Args:
@@ -1593,7 +1708,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             kernel_width:int=25,
             kernel_fn:Optional[Callable]=None,
             **kwargs
-        ) -> Union[Dict[Literal['query', 'context'], NDArray[np.float64]], NDArray[np.float64]]:
+        ) -> GeneratorAttribution_t:
         """Generates LIME feature attribution values for the chosen aggregation method.
 
         Args:

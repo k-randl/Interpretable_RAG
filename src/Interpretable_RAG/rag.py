@@ -2,11 +2,10 @@ import os
 import json
 import torch
 import numpy as np
-from scipy.stats import spearmanr
-from .retrieval import RetrieverExplanation, RetrieverMethods_t
+from .retrieval import RetrieverExplanation, RetrieverExplanationBase, RetrieverMethods_t, get_retriever_scores
 from .retrieval_offline import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOfflineRetrieval
 from .retrieval_online  import ExplainableAutoModelForRetrieval as ExplainableAutoModelForOnlineRetrieval
-from .generation import ExplainableAutoModelForGeneration, GeneratorExplanation, GeneratorMethods_t, GeneratorAggregations_t
+from .generation import ExplainableAutoModelForGeneration, GeneratorExplanation, GeneratorExplanationBase, GeneratorMethods_t, GeneratorAggregations_t, get_generator_scores
 from .utils import tokens2words
 
 from typing import Optional, Union, Callable, Literal, Dict, List, Tuple, Any
@@ -21,12 +20,18 @@ class RAGExplanation:
     """Base class for RAG explanation objects. All members can be used after
     calling ``load()`` — no retriever or generator model weights are required."""
 
-    def __init__(self) -> None:
-        self.retriever:RetrieverExplanation
-        self.generator:GeneratorExplanation
+    def __init__(self, ret_method:RetrieverMethods_t='intGrad', gen_method:GeneratorMethods_t='shap') -> None:
+        """Initialize the attribution methods used to derive document/word importance.
 
-        self.retriever_method:RetrieverMethods_t = 'intGrad'
-        self.generator_method:GeneratorMethods_t = 'shap'
+        Args:
+            ret_method (str): Retriever attribution method used by `_get_ret_importance()` (default: `'intGrad'`).
+            gen_method (str): Generator attribution method used by `_get_gen_importance()` (default: `'shap'`).
+        """
+        self.retriever:RetrieverExplanationBase
+        self.generator:GeneratorExplanationBase
+
+        self.retriever_method:RetrieverMethods_t = ret_method
+        self.generator_method:GeneratorMethods_t = gen_method
 
     @classmethod
     def load(cls, saved_data: Union[str, Tuple], *,
@@ -44,7 +49,7 @@ class RAGExplanation:
                         ``RetrieverExplanation.load()`` and
                         ``GeneratorExplanation.load()`` respectively (i.e. a path,
                         list of paths, or dict).
-            ret_method: Method used to compute retreiver saliency (default: intGrad).
+            ret_method: Method used to compute retriever saliency (default: intGrad).
             ret_kwargs: Extra keyword arguments forwarded to
                         ``RetrieverExplanation.load()``.
             gen_method: Method used to compute generator saliency (default: shap).
@@ -83,58 +88,47 @@ class RAGExplanation:
 
         return _make(ret_exps, gen_exps)
 
-    def _get_ret_importance(self, key:Literal['query', 'context'], **kwargs) -> NDArray[np.float64]:
-        if   self.retriever_method == 'grad':    ret_raw = [doc.mean(axis=-1) for doc in self.retriever.grad(**kwargs)[key]]
-        elif self.retriever_method == 'aGrad':   ret_raw = [doc.mean(axis=0) for doc in self.retriever.aGrad(**kwargs)[key]]
-        else:
-            # try to call a method on the explanation object by name
-            method_fn = getattr(self.retriever, self.retriever_method, None)
-            if callable(method_fn): ret_raw = method_fn(**kwargs)[key]
-            else: raise ValueError(f"`{self.__class__.__name__}.retriever` has no callable method named '{self.retriever_method}'")
+    def _get_ret_importance(self, key:Literal['query', 'context'], **kwargs) -> NDArray[np.float32]:
+        """Raw, per-token retriever attribution scores for `key`, computed via `self.retriever_method`."""
+        ret_raw = get_retriever_scores(self.retriever, self.retriever_method, **kwargs)[key]
 
         if hasattr(ret_raw, 'numpy'):
             ret_raw = ret_raw.numpy()
 
         return np.asarray(ret_raw)
-    
-    def _get_gen_importance(self, key:Literal['query', 'context'], **kwargs) -> NDArray[np.float64]:
-        # try to call a method on the explanation object by name
-        method_fn = getattr(self.generator, self.generator_method, None)
-        if callable(method_fn): gen_raw = method_fn(key, 'token', **kwargs)
-        else: raise ValueError(f"`{self.__class__.__name__}.generator` has no callable method named '{self.generator_method}'")
 
-        if gen_raw.ndim == 2:
-            gen_raw = gen_raw.sum(axis=1)
-
-        return gen_raw
+    def _get_gen_importance(self, key:Literal['query', 'context'], **kwargs) -> NDArray[np.float32]:
+        """Per-document/word generator attribution scores for `key`, computed via `self.generator_method`."""
+        return get_generator_scores(self.generator, self.generator_method, key=key, **kwargs)
 
     @property
-    def retriever_document_importance(self) -> NDArray[np.float64]:
-        '''Normalized document importance estimated by the retriever.'''
+    def retriever_document_importance(self) -> NDArray[np.float32]:
+        """Normalized document importance estimated by the retriever."""
         doc_importance  = self._get_ret_importance('context').sum(axis=1)
         doc_importance /= np.abs(doc_importance).sum()
         return doc_importance
 
     @property
-    def generator_document_importance(self) -> NDArray[np.float64]:
-        '''Normalized document importance of the generator.'''
-        doc_importance_generator  = self._get_gen_importance('context')
+    def generator_document_importance(self) -> NDArray[np.float32]:
+        """Normalized document importance of the generator."""
+        doc_importance_generator  = self._get_gen_importance('context').sum(axis=1)
         doc_importance_generator /= np.abs(doc_importance_generator).sum()
         return doc_importance_generator
 
     @property
-    def mean_document_importance(self) -> NDArray[np.float64]:
-        '''Mean normalized document importance of the rag pipeline.'''
+    def mean_document_importance(self) -> NDArray[np.float32]:
+        """Mean normalized document importance of the rag pipeline."""
         return (self.retriever_document_importance + self.generator_document_importance) / 2.
 
     def warg(self, tau:float=1.5, *, _ret_scores=None) -> float:
-        '''Weighted Alignment between Retriever and Generator (WARG).
+        """Weighted Alignment between Retriever and Generator (WARG).
 
-        Measures how well the documents the generator attends to (high SHAP
-        attribution) align with the documents the retriever ranked highest.
+        Measures how well the documents the generator attends to (high
+        attribution under `self.generator_method`) align with the documents
+        the retriever ranked highest.
 
-        In this base class, retriever scores are derived from intGrad token
-        attributions summed over the token dimension, used as a proxy for
+        In this base class, retriever scores are derived from `self.retriever_method`
+        token attributions summed over the token dimension, used as a proxy for
         cosine similarity. ``ExplainableAutoModelForRAG`` overrides this method
         to use the exact cosine similarity from live retrieval.
 
@@ -149,14 +143,14 @@ class RAGExplanation:
                 +1  generator attends exactly to the retriever's top-h documents
                  0  no alignment between retriever and generator
                 -1  generator attends to the documents the retriever ranked lowest
-        '''
+        """
         # retriever scores: saliency summed over token dimension as proxy for similarity
         if _ret_scores is None:
             ret_scores = self._get_ret_importance('context').sum(axis=1)
         else: ret_scores = _ret_scores
 
         # generator scores: saliency summed over the token dimension
-        gen_scores = self._get_gen_importance('context')
+        gen_scores = self._get_gen_importance('context').sum(axis=1)
 
         n = len(gen_scores)
 
@@ -196,7 +190,7 @@ class RAGExplanation:
             gen_aggregations (List[str]):           List of generation aggregations to save.
                                                     If unspecified, saves all aggregations.
             filter_special_tokens (bool, optional): If `True` (default), set the importance of special tokens to 0.
-            num_steps (int, optional):              Number of approximation steps for the Rieman approximation
+            num_steps (int, optional):              Number of approximation steps for the Riemann approximation
                                                     of the integral in `intGrad` (default 100).
             batch_size (int, optional):             Batch size used for calculating the gradients in `intGrad` (default 64).
         """
@@ -222,13 +216,15 @@ class ExplainableAutoModelForRAG(RAGExplanation):
             offline:bool=False,
             dir:Optional[str]=None,
             index:Union[Callable[[str, int],List[str]],str,torch.FloatTensor,None]=None,
+            retriever_method:RetrieverMethods_t='intGrad',
             retriever_query_format:str='{query}',
             retriever_token_processor:Optional[Callable[[str],str]]=None,
             retriever_kwargs:Dict[str, Any]={},
+            generator_method:GeneratorMethods_t='shap',
             generator_token_processor:Optional[Callable[[str],str]]=None,
             generator_kwargs:Dict[str, Any]={}
         ) -> None:
-        '''Initialize the Interpretable RAG (Retrieval-Augmented Generation) model.
+        """Initialize the Interpretable RAG (Retrieval-Augmented Generation) model.
         This constructor sets up the generator and retriever components for the RAG system.
         It supports both online and offline retrieval modes, loading pre-trained models
         and configuring them with the provided parameters.
@@ -246,11 +242,17 @@ class ExplainableAutoModelForRAG(RAGExplanation):
                                                 Defaults to None.
             index ((str, int) -> List[str] | str | FloatTensor, optional): Pre-built index for retrieval.
                                                 Can be a callable, file path, or tensor. Defaults to None.
+            retriever_method (str, optional):   Attribution method used for retriever document/query
+                                                importance (`RAGExplanation._get_ret_importance()`).
+                                                Defaults to `'intGrad'`.
             retriever_query_format (str, optional): Format string for processing retriever queries (e.g., `'{query}'`).
                                                 Defaults to `'{query}'`.
             retriever_token_processor ((str) -> str, optional): Function to process tokens for the retriever.
                                                 Defaults to None.
             retriever_kwargs (Dict[str, Any], optional): Additional keyword arguments for the retriever model.
+            generator_method (str, optional):   Attribution method used for generator document/query
+                                                importance (`RAGExplanation._get_gen_importance()`).
+                                                Defaults to `'shap'`.
             generator_token_processor ((str) -> str, optional): Function to process tokens for the generator.
                                                 Defaults to None.
             generator_kwargs (Dict[str, Any], optional): Additional keyword arguments for the generator model.
@@ -262,8 +264,8 @@ class ExplainableAutoModelForRAG(RAGExplanation):
             - In offline mode, `context_encoder_name_or_path` is ignored.
             - In online mode, `dir` is ignored.
             - Models are automatically moved to GPU if available, otherwise CPU.
-        '''
-        super().__init__()
+        """
+        super().__init__(ret_method=retriever_method, gen_method=generator_method)
 
         # save general info:
         self.__is_offline = offline
@@ -309,7 +311,7 @@ class ExplainableAutoModelForRAG(RAGExplanation):
             generator_kwargs:Dict[str, Any] = {},
             retriever_kwargs:Dict[str, Any] = {}
         ) -> List[Dict[Literal['role','content'],str]]:
-        '''Callable method to perform retrieval-augmented generation (RAG) for a given query. This method
+        """Callable method to perform retrieval-augmented generation (RAG) for a given query. This method
         retrieves relevant documents based on the query, computes similarities, and generates an explained
         response using the retrieved documents.
 
@@ -337,8 +339,7 @@ class ExplainableAutoModelForRAG(RAGExplanation):
         Raises:
             ValueError: If `k` is None in offline mode, or if neither `contexts` nor `k` is specified in
             online mode.
-
-        '''
+        """
         # check parameters:
         contexts = retriever_kwargs.pop('contexts', contexts)
         k        = retriever_kwargs.pop('k', k)
@@ -371,12 +372,12 @@ class ExplainableAutoModelForRAG(RAGExplanation):
 
     @property
     def retriever_query_format(self) -> str:
-        '''Format string applied to queries.'''
+        """Format string applied to queries."""
         return self.__retriever_query_format
 
     @property
-    def retriever_document_importance(self) -> NDArray[np.float64]:
-        '''Normalized document importance estimated by the retriever via cosine similarity.'''
+    def retriever_document_importance(self) -> NDArray[np.float32]:
+        """Normalized document importance estimated by the retriever via cosine similarity."""
 
         if not hasattr(self, 'retrieved_sim'):
             raise AttributeError('`__call__(...)` needs to be called at least once before accessing `document_importance`!')
@@ -387,8 +388,8 @@ class ExplainableAutoModelForRAG(RAGExplanation):
         return doc_importance_retriever
 
     @property
-    def retriever_query_importance(self) -> NDArray[np.float64]:
-        '''Normalized word importance of the query for retrieving.'''
+    def retriever_query_importance(self) -> NDArray[np.float32]:
+        """Normalized word importance of the query for retrieving."""
 
         # get special tokens:
         special_tokens = set(self.retriever.tokenizer.special_tokens_map.values())
@@ -422,27 +423,28 @@ class ExplainableAutoModelForRAG(RAGExplanation):
         return qry_importance_retriever
 
     @property
-    def generator_query_importance(self) -> NDArray[np.float64]:
-        '''Normalized word importance of the query during generation.'''
-        qry_importance_generator  = self._get_gen_importance('query')
+    def generator_query_importance(self) -> NDArray[np.float32]:
+        """Normalized word importance of the query during generation."""
+        qry_importance_generator  = self._get_gen_importance('query').sum(axis=1)
         qry_importance_generator /= np.abs(qry_importance_generator).sum()
         return qry_importance_generator
 
     @property
-    def mean_query_importance(self) -> NDArray[np.float64]:
-        '''Mean word importance of the query for the rag pipeline.'''
+    def mean_query_importance(self) -> NDArray[np.float32]:
+        """Mean word importance of the query for the rag pipeline."""
         return (self.retriever_query_importance + self.generator_query_importance) / 2.
 
     def warg(self, tau: float = 1.5, *, _ret_scores=None) -> float:
-        '''Weighted Alignment between Retriever and Generator (WARG).
+        """Weighted Alignment between Retriever and Generator (WARG).
 
-        Measures how well the documents the generator attends to (high SHAP
-        attribution) align with the documents the retriever ranked highest.
+        Measures how well the documents the generator attends to (high
+        attribution under `self.generator_method`) align with the documents
+        the retriever ranked highest.
 
         Retriever scores are taken directly from the cosine similarity computed
         during retrieval (``retrieved_sim``). The base class ``RAGExplanation``
-        uses intGrad token attributions instead, since the raw similarity is not
-        stored in the pickle files.
+        uses `self.retriever_method` token attributions instead, since the raw
+        similarity is not stored in the pickle files.
 
         Args:
             tau (float): Threshold multiplier relative to the uniform baseline
@@ -455,7 +457,7 @@ class ExplainableAutoModelForRAG(RAGExplanation):
                 +1  generator attends exactly to the retriever's top-h documents
                  0  no alignment between retriever and generator
                 -1  generator attends to the documents the retriever ranked lowest
-        '''
+        """
         # if  _ret_scores is provided, ``retrieved_sim`` is not used.
         if _ret_scores is None:
             if not hasattr(self, 'retrieved_sim'):
@@ -481,41 +483,34 @@ class WARGScorer(ExplainableAutoModelForRAG):
             generator_kwargs:Dict[str, Any]={},
             **kwargs
         ) -> None:
-        '''Initialize a WARG (Weighted Attribution-Relevance Gap) scorer.
+        """Initialize a WARG (Weighted Alignment between Retriever and Generator) scorer.
 
         This class specializes ExplainableAutoModelForRAG for computing WARG scores,
         which quantify the disagreement between retriever-based and generator-based
         document importance rankings.
 
         Args:
-            index_path (str):
-                Path to the retrieval index used by the retriever.
-            generator_name_or_path (str):
-                Name or path of the generator model.
-            query_encoder_name_or_path (str):
-                Name or path of the query encoder model.
-            context_encoder_name_or_path (str, optional):
-                Name or path of the context encoder model.
-            negative_sampling (None | 'top' | 'rnd', optional):
-                Strategy for selecting the ceil(k/2) negative documents included
-                alongside the top-k in the WARG computation.
-                - None : no negative documents; WARG is computed on the top-k only.
-                - 'top': the next ceil(k/2) most relevant documents (hard negatives).
-                         This is the default and matches the original implementation.
-                - 'rnd': ceil(k/2) documents sampled uniformly at random from the
-                         entire corpus, excluding the top-k documents.
-                Defaults to 'top'.
-            retriever_kwargs (Dict[str, Any], optional):
-                Additional keyword arguments passed to the retriever.
-            generator_kwargs (Dict[str, Any], optional):
-                Additional keyword arguments passed to the generator.
-            **kwargs:
-                Additional keyword arguments forwarded to the parent RAG initializer.
+            index_path (str):                 Path to the retrieval index used by the retriever.
+            generator_name_or_path (str):      Name or path of the generator model.
+            query_encoder_name_or_path (str):  Name or path of the query encoder model.
+            context_encoder_name_or_path (str, optional): Name or path of the context encoder model.
+            negative_sampling (None | 'top' | 'rnd', optional): Strategy for selecting the
+                                               ceil(k/2) negative documents included alongside
+                                               the top-k in the WARG computation.
+                                               - None : no negative documents; WARG is computed on the top-k only.
+                                               - 'top': the next ceil(k/2) most relevant documents (hard negatives).
+                                                        This is the default and matches the original implementation.
+                                               - 'rnd': ceil(k/2) documents sampled uniformly at random from the
+                                                        entire corpus, excluding the top-k documents.
+                                               Defaults to 'top'.
+            retriever_kwargs (Dict[str, Any], optional): Additional keyword arguments passed to the retriever.
+            generator_kwargs (Dict[str, Any], optional): Additional keyword arguments passed to the generator.
+            **kwargs:                          Additional keyword arguments forwarded to the parent RAG initializer.
 
         Notes:
             - The scorer is fixed to online retrieval mode and uses a pre-built index.
             - Retrieved query results are cached internally to avoid recomputation.
-        '''
+        """
 
         # validate negative sampling mode:
         if negative_sampling not in (None, 'top', 'rnd'):
@@ -537,8 +532,8 @@ class WARGScorer(ExplainableAutoModelForRAG):
     def __generate(self, query:str, k_pos:int, k_neg:int, *,
             generator_kwargs:Dict[str, Any] = {},
             retriever_kwargs:Dict[str, Any] = {}
-        ) -> Tuple[NDArray[np.float64], NDArray[np.float64], List[str], List[str]]:
-        '''Run retrieval-augmented generation for a single query and cache results.
+        ) -> Tuple[NDArray[np.float32], NDArray[np.float32], List[str], List[str]]:
+        """Run retrieval-augmented generation for a single query and cache results.
 
         For 'top' and None modes, retrieves k_pos + k_neg documents directly and
         generates. For 'rnd' mode, first retrieves the top-k_pos documents, then
@@ -546,17 +541,12 @@ class WARGScorer(ExplainableAutoModelForRAG):
         (excluding the top-k_pos), and generates using that combined selection.
 
         Args:
-            query (str):
-                Input query string.
-            k_pos (int):
-                Number of top (positive) documents.
-            k_neg (int):
-                Number of negative documents to include alongside the top-k.
-                0 when negative_sampling is None.
-            generator_kwargs (Dict[str, Any], optional):
-                Keyword arguments passed to the generator.
-            retriever_kwargs (Dict[str, Any], optional):
-                Keyword arguments passed to the retriever.
+            query (str):                      Input query string.
+            k_pos (int):                      Number of top (positive) documents.
+            k_neg (int):                      Number of negative documents to include alongside
+                                              the top-k. 0 when negative_sampling is None.
+            generator_kwargs (Dict[str, Any], optional): Keyword arguments passed to the generator.
+            retriever_kwargs (Dict[str, Any], optional): Keyword arguments passed to the retriever.
 
         Returns:
             Tuple containing:
@@ -564,7 +554,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
                 - generator document importance scores
                 - top-k_pos retrieved documents
                 - negative (remaining) retrieved documents
-        '''
+        """
 
         if self._negative_sampling in (None, 'top'):
             # Retrieve k_pos + k_neg docs and generate directly.
@@ -618,41 +608,32 @@ class WARGScorer(ExplainableAutoModelForRAG):
             checkpoint_path:Optional[str]=None,
             generator_kwargs:Dict[str, Any]={},
             retriever_kwargs:Dict[str, Any]={}
-        ) -> NDArray[np.float64]:
-        '''Compute WARG scores for one or more queries.
+        ) -> NDArray[np.float32]:
+        """Compute WARG scores for one or more queries.
 
         For each query, this method compares retriever and generator document
         rankings using the WARG metric and returns an alignment score.
 
         Args:
-            queries (Union[List[str], str]):
-                One or more query strings.
-            k (int):
-                Number of top documents retrieved per query.
-            tau (float, optional):
-                Threshold multiplier for the WARG computation. Documents with
-                normalised generator score > tau/n are assigned to the high set.
-                Defaults to 1.5.
-            batch_size (int, optional):
-                Batch size used in generation and retrieval. Defaults to 64.
-            max_gen_len (int, optional):
-                Maximum number of generated tokens. Defaults to 200.
-            checkpoint_path (str, optional):
-                Path to a JSON checkpoint file for resuming computation.
-            generator_kwargs (Dict[str, Any], optional):
-                Generator-specific keyword arguments.
-            retriever_kwargs (Dict[str, Any], optional):
-                Retriever-specific keyword arguments.
+            queries (Union[List[str], str]):  One or more query strings.
+            k (int):                          Number of top documents retrieved per query.
+            tau (float, optional):            Threshold multiplier for the WARG computation.
+                                              Documents with normalised generator score > tau/n
+                                              are assigned to the high set. Defaults to 1.5.
+            batch_size (int, optional):       Batch size used in generation and retrieval. Defaults to 64.
+            max_gen_len (int, optional):      Maximum number of generated tokens. Defaults to 200.
+            checkpoint_path (str, optional):  Path to a JSON checkpoint file for resuming computation.
+            generator_kwargs (Dict[str, Any], optional): Generator-specific keyword arguments.
+            retriever_kwargs (Dict[str, Any], optional): Retriever-specific keyword arguments.
 
         Returns:
-            numpy.ndarray:
-                Array of WARG scores in [-1, 1] (one per query).
-                +1 means the generator attends exactly to the retriever's top documents;
-                -1 means perfect inverse alignment.
+            numpy.ndarray: Array of WARG scores in [-1, 1] (one per query).
+                          +1 means the generator attends exactly to the retriever's top documents;
+                          -1 means perfect inverse alignment.
 
         Notes:
             - Results are cached per query.
-        '''
+        """
 
         # Recover from checkpoint:
         if checkpoint_path is not None:
@@ -712,28 +693,33 @@ class WARGScorer(ExplainableAutoModelForRAG):
         return np.array(scores)
 
     def dump(self, path:str) -> None:
-        '''Save the scorer state and cached query results to disk.
+        """Save the scorer state and cached query results to disk.
 
         The dump includes model identifiers, index path, retriever configuration,
         and cached query importance scores.
 
         Args:
-            path (str):
-                Path to the output JSON file.
-        '''
+            path (str): Path to the output JSON file.
+        """
 
         # Initialize dictionary that will be serialized to disk
         dump_dict = {}
 
         # Store retriever metadata needed for reconstruction
         dump_dict['retriever']  = {'query_encoder': self.retriever.query_encoder_name_or_path,
-                                   'query_format': self.retriever_query_format}
+                                   'query_format': self.retriever_query_format,
+                                   'method': self.retriever_method}
 
-        # Store generator model identifier
-        dump_dict['generator']  = self.generator.model_name_or_path
+        # Store generator metadata needed for reconstruction
+        dump_dict['generator']  = {'model_name_or_path': self.generator.model_name_or_path,
+                                   'method': self.generator_method}
 
         # Store index path used by the retriever
         dump_dict['index_path'] = self._index_path
+
+        # Store the negative-sampling strategy the cached scores below were computed
+        # with, so `load()` can detect and drop stale scores on a mismatched override
+        dump_dict['negative_sampling'] = self._negative_sampling
 
         # Store cached query results:
         #   k : query string
@@ -759,18 +745,19 @@ class WARGScorer(ExplainableAutoModelForRAG):
 
     @classmethod
     def load(cls, path:str, **kwargs) -> 'WARGScorer':
-        '''Load a WARGScorer from a previously saved checkpoint.
+        """Load a WARGScorer from a previously saved checkpoint.
 
         Args:
-            path (str):
-                Path to the checkpoint JSON file.
-            **kwargs:
-                Optional overrides for model paths or configuration.
+            path (str): Path to the checkpoint JSON file.
+            **kwargs:   Optional overrides for model paths or configuration. Overriding
+                        `retriever_method`, `generator_method`, or `negative_sampling` to
+                        a value different from the one stored in the checkpoint means the
+                        cached query scores (computed under the old configuration) are no
+                        longer valid, so they are dropped instead of silently reused.
 
         Returns:
-            WARGScorer:
-                A fully initialized scorer with restored cached queries.
-        '''
+            WARGScorer: A fully initialized scorer with restored cached queries.
+        """
         # Load checkpoint JSON from disk
         with open(path, 'r') as fp:
            load_dict = json.load(fp)
@@ -778,23 +765,38 @@ class WARGScorer(ExplainableAutoModelForRAG):
         # Recover model and index configuration from the checkpoint,
         # allowing keyword arguments to override saved values
         index_path                   = kwargs.pop('index_path', load_dict['index_path'])
-        generator_name_or_path       = kwargs.pop('generator_name_or_path', load_dict['generator'])
+        generator_name_or_path       = kwargs.pop('generator_name_or_path', load_dict['generator']['model_name_or_path'])
+        generator_method             = kwargs.pop('generator_method', load_dict['generator']['method'])
         query_encoder_name_or_path   = kwargs.pop('query_encoder_name_or_path', load_dict['retriever']['query_encoder'])
         context_encoder_name_or_path = kwargs.pop('context_encoder_name_or_path', load_dict['retriever'].get('context_encoder', None))
         retriever_query_format       = kwargs.pop('query_format', load_dict['retriever']['query_format'])
+        retriever_method             = kwargs.pop('retriever_method', load_dict['retriever']['method'])
+        negative_sampling            = kwargs.pop('negative_sampling', load_dict['negative_sampling'])
 
         # Reconstruct the WARGScorer instance with the recovered configuration
         scorer =  cls(index_path                   = index_path,
                       generator_name_or_path       = generator_name_or_path,
+                      generator_method             = generator_method,
                       query_encoder_name_or_path   = query_encoder_name_or_path,
                       context_encoder_name_or_path = context_encoder_name_or_path,
                       retriever_query_format       = retriever_query_format,
+                      retriever_method             = retriever_method,
+                      negative_sampling            = negative_sampling,
                       **kwargs)
 
         # Restore cached query results:
         # Convert list representations back into NumPy arrays
         for k, r, g, p, n in load_dict['queries']:
             scorer._queries[k] = (np.array(r), np.array(g), p, n)
+
+        # If the caller overrode the checkpoint's original configuration above, the
+        # cached scores just restored were computed under a different configuration
+        # and are no longer valid -- drop them so `__call__` regenerates consistent
+        # scores instead of silently mixing scores from different configurations.
+        if (generator_method  != load_dict['generator']['method'] or
+            retriever_method  != load_dict['retriever']['method'] or
+            negative_sampling != load_dict['negative_sampling']):
+            scorer._queries.clear()
 
         # Return fully reconstructed scorer
         return scorer

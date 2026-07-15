@@ -47,8 +47,8 @@ output = generator.explain_generate(
     top_p=1,
     num_beams=1,
     batch_size=64,
-    max_samples_query=24,
-    max_samples_context=24,
+    max_samples_query=32,
+    max_samples_context=32,
     conditional=True
 )
 output
@@ -57,10 +57,10 @@ output
 visualize_attribution_generator(generator, aggregation='token', token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'))
 
 #%%
-visualize_attribution_generator(generator, aggregation='bow')
+visualize_attribution_generator(generator, aggregation='bow', token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'))
 
 #%%
-visualize_attribution_generator(generator, aggregation='nucleus')
+visualize_attribution_generator(generator, aggregation='nucleus', token_processor=lambda s: s.replace('Ġ', ' ').strip('Ċ'))
 
 #%%
 visualize_attribution_generator(generator, aggregation='sequence')
