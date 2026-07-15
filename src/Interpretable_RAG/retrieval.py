@@ -6,7 +6,7 @@ import numpy as np
 from transformers import PreTrainedTokenizer, AutoTokenizer
 from torch import Tensor, FloatTensor
 from numpy.typing import NDArray
-from typing import Union, List, Dict, Literal, Optional, TypeAlias, Any
+from typing import Union, List, Dict, Literal, Optional, TypeAlias, Any, cast
 
 from abc import ABCMeta, abstractmethod
 
@@ -24,7 +24,7 @@ RetrieverMethods_t:TypeAlias = Literal['grad', 'aGrad', 'repAGrad', 'gradIn', 'i
 List_t:TypeAlias   = Dict[Literal['query', 'context'], List]
 Array_t:TypeAlias  = Dict[Literal['query', 'context'], NDArray]
 Tensor_t:TypeAlias = Dict[Literal['query', 'context'], Tensor]
-Out_t:TypeAlias    = Dict[Literal['query', 'context'], List[Union[NDArray[np.float64], FloatTensor]]]
+Out_t:TypeAlias    = Dict[Literal['query', 'context'], List[Union[NDArray[np.float32], FloatTensor]]]
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -84,6 +84,33 @@ Args:
 Returns:
     Similarity matrices of shape ``(batch, m, n)``.
 """
+
+def get_retriever_scores(explanation:'RetrieverExplanationBase', method:RetrieverMethods_t, **kwargs) -> Out_t:
+    """Dispatch to a retriever explanation's attribution method by name.
+
+    Handles the `'grad'`/`'aGrad'` methods specially, since their raw per-hidden-state
+    output needs an extra mean-reduction to become a per-token saliency score; all other
+    methods (e.g. `'intGrad'`, `'shap'`, `'lime'`) are called directly by name.
+
+    Args:
+        explanation: The retriever explanation object (any object exposing `grad()`,
+                     `aGrad()`, and/or a callable method named `method`).
+        method:      Name of the attribution method to use.
+        **kwargs:    Additional keyword arguments forwarded to the underlying method.
+
+    Returns:
+        A dict with `'query'` and `'context'` keys, each a list of per-document/per-query
+        attribution arrays.
+
+    Raises:
+        ValueError: If `method` does not name a callable method on `explanation`.
+    """
+    if   method == 'grad':  return {key: [doc.mean(axis=-1) for doc in docs] for key, docs in explanation.grad(**kwargs).items()}
+    elif method == 'aGrad': return {key: [doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
+
+    method_fn = getattr(explanation, method, None)
+    if callable(method_fn): return cast(Out_t, method_fn(**kwargs))
+    raise ValueError(f"`{type(explanation).__name__}` has no callable method named '{method}'")
 
 #=======================================================================#
 # Retriever Explanation:                                                #
