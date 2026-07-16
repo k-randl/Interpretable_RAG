@@ -35,16 +35,14 @@ from .retrieval import RetrieverExplanation, RetrieverExplanationBase
 from .retrieval_online import ExplainableAutoModelForRetrieval
 
 # Utilities
-from .tools import (
+from .utils import (
     create_faiss_index_flat,
-    create_flat_index,
-    load_trained_index,
-    save_index,
-    embed_passages,
+    load_faiss_index,
+    save_faiss_index,
 )
 from .search_tools import (
     search,
-    load_faiss_index,
+    embed_passages,
     generate_query_embeddings,
     calculate_results,
 )
@@ -73,12 +71,10 @@ __all__ = [
     "ExplainableAutoModelForRetrieval",
     # Tools
     "create_faiss_index_flat",
-    "create_flat_index",
-    "load_trained_index",
-    "save_index",
+    "load_faiss_index",
+    "save_faiss_index",
     "embed_passages",
     "search",
-    "load_faiss_index",
     "generate_query_embeddings",
     "calculate_results",
     # Methods
