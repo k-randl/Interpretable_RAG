@@ -55,11 +55,11 @@ for item in tqdm(sample):
         # Focus a random 5-token sequence:
         with Focus(generator, (start, start + 5)) as focus:
             # Get the normalized mean attribution values for tokens:
-            attribution_token = focus.get_shapley_values('context', 'token').sum(axis=-1)
+            attribution_token = focus.shap('context', 'token').sum(axis=-1)
             attribution_token /= np.abs(attribution_token).sum()
 
             # Get the normalized the attribution values for the sequence:
-            attribution_sequence = focus.get_shapley_values('context', 'sequence').squeeze()
+            attribution_sequence = focus.shap('context', 'sequence').squeeze()
             attribution_sequence /= np.abs(attribution_sequence).sum()
 
             # Calculate absolute error:

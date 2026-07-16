@@ -106,13 +106,13 @@ for query, contexts in tqdm(sample_texts[len(shap_std):]):
 
             # Get kernel shapley values:
             approx_kernel.append(
-                generator.get_shapley_values('context', 'token', num_samples=1, sample_size=max_samples)
+                generator.shap('context', 'token', num_samples=1, sample_size=max_samples)
             )
 
             # Get Monte Carlo approximated shapley values:
             for num_mc_samples in approx_monte_carlo:
                 approx_monte_carlo[num_mc_samples].append(
-                    generator.get_shapley_values('context', 'token', num_samples=num_mc_samples)
+                    generator.shap('context', 'token', num_samples=num_mc_samples)
                 )
 
         # Calculate standard deviation:

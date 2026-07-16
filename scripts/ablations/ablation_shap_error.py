@@ -59,7 +59,7 @@ for query, contexts in tqdm(sample_texts[len(val):]):
     )
 
     # Get shapley values for the generated tokens:
-    precise_val = generator.get_shapley_values('context', 'token')
+    precise_val = generator.shap('context', 'token')
 
     # Generate approximated explanations:
     assert output == generator.explain_generate(
@@ -108,14 +108,14 @@ for query, contexts in tqdm(sample_texts[len(val):]):
         generator._shap_cache['context']['sets']    = sets[sample_indices]
 
         # Get kernel shapley values:
-        approx_val = generator.get_shapley_values('context', 'token', num_samples=1, sample_size=max_samples)
+        approx_val = generator.shap('context', 'token', num_samples=1, sample_size=max_samples)
         val[-1][max_samples]['kernel'] = approx_val.tolist()
 
         # Get Monte Carlo approximated shapley values:
         val[-1][max_samples]['monte carlo'] = {}
         for num_mc_samples in range(20, 201, 20):
             # Get shapley values for the generated tokens:
-            approx_val = generator.get_shapley_values('context', 'token', num_samples=num_mc_samples)
+            approx_val = generator.shap('context', 'token', num_samples=num_mc_samples)
             val[-1][max_samples]['monte carlo'][num_mc_samples] = approx_val.tolist()
 
     # save:

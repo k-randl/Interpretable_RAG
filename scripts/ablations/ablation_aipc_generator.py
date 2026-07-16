@@ -86,7 +86,7 @@ from src.faithfullness.generation import AIPCForGeneration
 generator = ExplainableAutoModelForGeneration.from_pretrained(
     pretrained_model_name_or_path='meta-llama/Llama-3.1-8B-Instruct',
     device_map='auto',
-    torch_dtype=torch.bfloat16
+    dtype=torch.bfloat16
 )
 
 # %%
@@ -105,27 +105,38 @@ import matplotlib.pyplot as plt
 plots = {
     'comparison_n15': [
         ('Random', 'Random'),
+        ('LIME (n = 15)', 'LIME'),
         ('Kernel (n = 15)', 'Kernel'),
         ('Monte Carlo (n = 15)', 'Monte Carlo'),
         ('Precise', 'Precise'),
     ],
     'comparison_n20': [
         ('Random', 'Random'),
+        ('LIME (n = 20)', 'LIME'),
         ('Kernel (n = 20)', 'Kernel'),
         ('Monte Carlo (n = 20)', 'Monte Carlo'),
         ('Precise', 'Precise'),
     ],
     'comparison_n25': [
         ('Random', 'Random'),
+        ('LIME (n = 25)', 'LIME'),
         ('Kernel (n = 25)', 'Kernel'),
         ('Monte Carlo (n = 25)', 'Monte Carlo'),
         ('Precise', 'Precise'),
     ],
     'comparison_n30': [
         ('Random', 'Random'),
+        ('LIME (n = 30)', 'LIME'),
         ('Kernel (n = 30)', 'Kernel'),
         ('Monte Carlo (n = 30)', 'Monte Carlo'),
         ('Precise', 'Precise'),
+    ],
+    'lime': [
+        ('LIME (n = 10)', 'n=10'),
+        ('LIME (n = 15)', 'n=15'),
+        ('LIME (n = 20)', 'n=20'),
+        ('LIME (n = 25)', 'n=25'),
+        ('LIME (n = 30)', 'n=30'),
     ],
     'kernel': [
         ('Kernel (n = 10)', 'n=10'),

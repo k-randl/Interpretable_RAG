@@ -21,6 +21,8 @@ METHODS      = [('intGrad', {'num_steps':100, 'batch_size':16, 'verbose':False, 
                 ('gradIn',  {}),
                 ('aGrad',   {}),
                 ('grad',    {}),
+                ('lime',    {}),
+                ('shap',    {}),
                 ('random',  {})]
 STEP_SIZE    = 1
 NUM_DOCS     = 5
@@ -38,14 +40,18 @@ import pickle
 import matplotlib.pyplot as plt
 
 def test(aipc, name, target):
+    # get suffix:
+    if LONG_QUERIES: suffix = '_rephrased'
+    else: suffix = ''
+
     # Load curves file if it exists:
-    curves_path, curves = os.path.join(RESULTS_PATH, f'curves_{name}_{target}_rephrased.pkl'), {}
+    curves_path, curves = os.path.join(RESULTS_PATH, f'curves_{name}_{target}{suffix}.pkl'), {}
     if os.path.exists(curves_path):
         with open(curves_path, 'rb') as file:
             curves = pickle.load(file)
 
     # Load scores file if it exists:
-    scores_path, scores = os.path.join(RESULTS_PATH, f'scores_{name}_{target}_rephrased.json'), {}
+    scores_path, scores = os.path.join(RESULTS_PATH, f'scores_{name}_{target}{suffix}.json'), {}
     if os.path.exists(scores_path):
         with open(scores_path, 'r') as file:
             scores = json.load(file)
@@ -93,7 +99,7 @@ def test(aipc, name, target):
 
             file_name = file_name + f'_n{kwargs["num_steps"]:d}'
 
-        plt.savefig(os.path.join(RESULTS_PATH, file_name + f'_rephrased.pdf'))
+        plt.savefig(os.path.join(RESULTS_PATH, file_name + f'{suffix}.pdf'))
 
         with open(scores_path, 'w') as file:
             json.dump(scores, file)
@@ -160,6 +166,8 @@ plots = {
         ('grad', 'Grad'),
         ('gradIn', 'GradIn'),
         ('aGrad', 'AGrad'),
+        ('lime', 'LIME'),
+        ('shap', 'SHAP'),
         ('intGrad (n = 100, [unk])', 'IntGrad'),
     ],
 }
