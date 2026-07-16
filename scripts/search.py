@@ -14,7 +14,7 @@ from transformers import AutoTokenizer, AutoModel
 try:
     # Adds the parent directory of the script's parent (project root) to sys.path
     sys.path.append(str(Path(__file__).resolve().parent.parent))
-    from src.Interpretable_RAG.search_tools import *
+    from src.experiments.search import *
     from src.Interpretable_RAG.utils import load_faiss_index
 except ImportError:
     print("Warning: Could not import from src.Interpretable_RAG.")
@@ -29,7 +29,7 @@ except ImportError:
 except NameError:
     # __file__ is not defined (e.g., in a notebook environment)
     print("Warning: __file__ not defined. Assuming 'src' is in sys.path")
-    from src.Interpretable_RAG.search_tools import *
+    from src.experiments.search import *
 
 # Set default CUDA devices
 os.environ["CUDA_VISIBLE_DEVICES"] = "1,3,4,5,6,7"

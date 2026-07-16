@@ -5,7 +5,7 @@ try:
     import faiss
 except ImportError:
     faiss = None
-    print("WARNING: Could not import faiss in search_tools. Some functionality may be unavailable.")
+    print("WARNING: Could not import faiss in src.experiments.search. Some functionality may be unavailable.")
 import numpy as np
 import pandas as pd
 try:
@@ -14,7 +14,7 @@ except ImportError:
     ir_measures = None
 from time import time
 from transformers import AutoModel, AutoTokenizer
-from .utils import load_faiss_index
+from src.Interpretable_RAG.utils import load_faiss_index
 
 #%%
 def embed_passages(passages, model, tokenizer, device="cuda", max_length=512):

@@ -40,12 +40,6 @@ from .utils import (
     load_faiss_index,
     save_faiss_index,
 )
-from .search_tools import (
-    search,
-    embed_passages,
-    generate_query_embeddings,
-    calculate_results,
-)
 
 # Methods
 from .methods import get_shapley_values
@@ -73,10 +67,6 @@ __all__ = [
     "create_faiss_index_flat",
     "load_faiss_index",
     "save_faiss_index",
-    "embed_passages",
-    "search",
-    "generate_query_embeddings",
-    "calculate_results",
     # Methods
     "get_shapley_values",
     # Types
