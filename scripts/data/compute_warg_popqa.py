@@ -65,8 +65,6 @@ GEN_FOLDERS = {
     'gemma3_12B': 'gemma-3-12b-it',
 }
 
-P_VALUES = [round(p * 0.1, 1) for p in range(1, 10)]
-
 #================================================================================#
 # Main function:                                                                 #
 #================================================================================#
@@ -82,16 +80,14 @@ def main(generator: str, retriever: str, devices: str | None = None):
 
     warg = pd.read_csv('../../data/popqa/topics.tsv', sep='\t', index_col=None)
 
-    for p in P_VALUES:
-        warg[f'p={p:.2f}'] = scorer(
-            warg['query'].tolist(),
-            k=10,
-            p=p,
-            batch_size=24,
-            retriever_kwargs=RET_CALL_ARGS[retriever],
-            generator_kwargs=GEN_CALL_ARGS[generator],
-            checkpoint_path=scorer_path,
-        )
+    warg['warg'] = scorer(
+        warg['query'].tolist(),
+        k=10,
+        batch_size=8,
+        retriever_kwargs=RET_CALL_ARGS[retriever],
+        generator_kwargs=GEN_CALL_ARGS[generator],
+        checkpoint_path=scorer_path,
+    )
 
     warg['passages'] = [scorer._queries[q][2] for q in warg['query'].tolist()]
     warg.to_csv(results_path, index=False)

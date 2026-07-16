@@ -17,16 +17,30 @@ DEVICE_ARGS=()
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-# python3 compute_warg_popqa.py --retriever dragon    --generator llama8B    "${DEVICE_ARGS[@]}"  # already computed
-# python3 compute_warg_popqa.py --retriever snowflake --generator llama8B    "${DEVICE_ARGS[@]}"  # already computed
-# python3 compute_warg_popqa.py --retriever dragon    --generator qwen7B     "${DEVICE_ARGS[@]}"  # already computed
-# python3 compute_warg_popqa.py --retriever dragon    --generator gemma3_12B "${DEVICE_ARGS[@]}"
-# python3 compute_warg_popqa.py --retriever snowflake --generator qwen7B     "${DEVICE_ARGS[@]}"  # already computed
-# python3 compute_warg_popqa.py --retriever snowflake --generator gemma3_12B "${DEVICE_ARGS[@]}"
+python3 compute_warg_popqa.py --retriever dragon    --generator llama8B    "${DEVICE_ARGS[@]}"
+python3 compute_warg_popqa.py --retriever snowflake --generator llama8B    "${DEVICE_ARGS[@]}"
+python3 compute_warg_popqa.py --retriever dragon    --generator qwen7B     "${DEVICE_ARGS[@]}"
+python3 compute_warg_popqa.py --retriever dragon    --generator gemma3_12B "${DEVICE_ARGS[@]}"
+python3 compute_warg_popqa.py --retriever snowflake --generator qwen7B     "${DEVICE_ARGS[@]}"
+python3 compute_warg_popqa.py --retriever snowflake --generator gemma3_12B "${DEVICE_ARGS[@]}"
 
-# python3 explain_popqa.py --retriever dragon    --generator llama8B    "${DEVICE_ARGS[@]}"  # already computed
-# python3 explain_popqa.py --retriever snowflake --generator llama8B    "${DEVICE_ARGS[@]}"  # already computed
+python3 explain_popqa.py --retriever dragon    --generator llama8B    "${DEVICE_ARGS[@]}"
+python3 explain_popqa.py --retriever snowflake --generator llama8B    "${DEVICE_ARGS[@]}"
 python3 explain_popqa.py --retriever dragon    --generator qwen7B     "${DEVICE_ARGS[@]}"
-# python3 explain_popqa.py --retriever dragon    --generator gemma3_12B "${DEVICE_ARGS[@]}"
+python3 explain_popqa.py --retriever dragon    --generator gemma3_12B "${DEVICE_ARGS[@]}"
 python3 explain_popqa.py --retriever snowflake --generator qwen7B     "${DEVICE_ARGS[@]}"
-# python3 explain_popqa.py --retriever snowflake --generator gemma3_12B "${DEVICE_ARGS[@]}"
+python3 explain_popqa.py --retriever snowflake --generator gemma3_12B "${DEVICE_ARGS[@]}"
+
+python3 perturb_popqa.py --retriever dragon    --generator llama8B    "${DEVICE_ARGS[@]}"
+python3 perturb_popqa.py --retriever snowflake --generator llama8B    "${DEVICE_ARGS[@]}"
+python3 perturb_popqa.py --retriever dragon    --generator qwen7B     "${DEVICE_ARGS[@]}"
+python3 perturb_popqa.py --retriever dragon    --generator gemma3_12B "${DEVICE_ARGS[@]}"
+python3 perturb_popqa.py --retriever snowflake --generator qwen7B     "${DEVICE_ARGS[@]}"
+python3 perturb_popqa.py --retriever snowflake --generator gemma3_12B "${DEVICE_ARGS[@]}"
+
+python3 explain_msmarco.py --retriever dragon    --generator llama8B    "${DEVICE_ARGS[@]}"
+python3 explain_msmarco.py --retriever snowflake --generator llama8B    "${DEVICE_ARGS[@]}"
+python3 explain_msmarco.py --retriever dragon    --generator qwen7B     "${DEVICE_ARGS[@]}"
+python3 explain_msmarco.py --retriever snowflake --generator qwen7B     "${DEVICE_ARGS[@]}"
+python3 explain_msmarco.py --retriever dragon    --generator gemma3_12B "${DEVICE_ARGS[@]}"
+python3 explain_msmarco.py --retriever snowflake --generator gemma3_12B "${DEVICE_ARGS[@]}"

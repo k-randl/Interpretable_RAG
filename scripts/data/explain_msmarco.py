@@ -140,10 +140,10 @@ GEN_FOLDERS = {
 # Main function:                                                                 #
 #================================================================================#
 def main(generator: str, retriever: str, devices: str | None = None):
+    topics_path = f'../../data/msmarco/topics.tsv'
     results_dir = f'../../results/{RET_FOLDERS[retriever]}/{GEN_FOLDERS[generator]}'
-    results_path = f'{results_dir}/results_popqa.csv'
-    warg_path = f'{results_dir}/warg_popqa.csv'
-    explanations_dir = f'{results_dir}/explanations_popqa/'
+    results_path = f'{results_dir}/results_msmarco.csv'
+    explanations_dir = f'{results_dir}/explanations_msmarco/'
 
     if devices is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = devices
@@ -153,7 +153,7 @@ def main(generator: str, retriever: str, devices: str | None = None):
     if os.path.exists(results_path):
         results = pd.read_csv(results_path, index_col=None)
     else:
-        results = pd.read_csv(warg_path, index_col=None)
+        results = pd.read_csv(topics_path, sep='\t', index_col=None)
         results['generation'] = [None for _ in range(len(results))]
 
     for i, (qry, ctx) in enumerate(results[['query', 'passages']].values):
@@ -170,7 +170,7 @@ def main(generator: str, retriever: str, devices: str | None = None):
         )[-1]['content']
         model.save_values(
             explanations_dir, f'{i:d}.pkl',
-            ret_methods=['intGrad'], gen_aggregations=['token'], batch_size=16,
+            ret_methods=['intGrad'], gen_aggregations=['token'], batch_size=24,
         )
         results.to_csv(results_path, index=False)
 
