@@ -23,7 +23,7 @@ Configuration:
     >>> config.generation.MAX_GEN_LEN = 500
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "Korbinian Randl & Guido Rocchietti"
 
 # Core classes
@@ -41,16 +41,23 @@ from .utils import (
     save_faiss_index,
 )
 
-# Methods
-from .methods import get_shapley_values
-
 # Type definitions
 from .types import (
     Embedding,
     EmbeddingBatch,
 )
-from .retrieval import RetrieverMethods_t
-from .generation import GeneratorMethods_t, GeneratorAggregations_t
+from .retrieval import (
+    RetrieverMethods_t,
+    RetrieverListDict_t,
+    RetrieverTensorDict_t,
+    RetrieverAttribution_t,
+    RetrieverAttributionOutput_t,
+)
+from .generation import (
+    GeneratorMethods_t,
+    GeneratorAggregations_t,
+    GeneratorAttribution_t,
+)
 
 __all__ = [
     # Version
@@ -66,12 +73,15 @@ __all__ = [
     "create_faiss_index_flat",
     "load_faiss_index",
     "save_faiss_index",
-    # Methods
-    "get_shapley_values",
     # Types
     "RetrieverMethods_t",
+    "RetrieverListDict_t",
+    "RetrieverTensorDict_t",
+    "RetrieverAttribution_t",
+    "RetrieverAttributionOutput_t",
     "GeneratorMethods_t",
     "GeneratorAggregations_t",
+    "GeneratorAttribution_t",
     "Embedding",
     "EmbeddingBatch",
 ]
