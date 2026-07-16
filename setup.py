@@ -10,7 +10,7 @@ except: long_description = ''
 from setuptools import setup
 setup(
     name='rag-exp',
-    version='0.1',
+    version='0.2',
     description='A Python package for explaining RAG pipelines.',
     long_description=long_description,
     long_description_content_type='text/markdown',
