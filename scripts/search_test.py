@@ -25,8 +25,8 @@ if PROJECT_ROOT not in sys.path:
 #%%
 # --- 2. Import Your Custom Modules ---
 try:
-    from src.Interpretable_RAG.tools import *
     from src.Interpretable_RAG.search_tools import *
+    from src.Interpretable_RAG.utils import load_faiss_index
     print("Successfully imported custom 'src' modules.")
 except ImportError as e:
     print(f"ImportError: {e}")

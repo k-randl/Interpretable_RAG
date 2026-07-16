@@ -83,11 +83,12 @@ import os
 if os.path.exists(snowflake_embeddings_path):
     snowflake_embeddings = np.load(snowflake_embeddings_path)
     
-from src.Interpretable_RAG.tools import *
+from src.Interpretable_RAG.utils import create_faiss_index_flat
 
 create_faiss_index_flat(snowflake_embeddings, '/home/anonymized_user_1/raid/anonymized_user_2/data/conversational/CAST2019/passage_embeddings/snowflake-arctic-embed-l-v2.0/flat_index/snowflake_index_flat.index')
 # %%
 from src.Interpretable_RAG.search_tools import *
+from src.Interpretable_RAG.utils import load_faiss_index
 from argparse import Namespace
 year = 2019
 model = 'snowflake'

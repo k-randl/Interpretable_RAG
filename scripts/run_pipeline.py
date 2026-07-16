@@ -14,8 +14,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
-from src.Interpretable_RAG.tools import *
-from src.Interpretable_RAG.utils import sniff_file_dialect
+from src.experiments.utils import sniff_file_dialect
 from src.experiments.perturbations import PromptPerturbationModule
 
 
