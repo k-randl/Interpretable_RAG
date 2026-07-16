@@ -3,15 +3,16 @@ import argparse
 import numpy as np
 import sys
 from pathlib import Path
+from typing import Literal
 
 # Assicuriamoci che lo script possa trovare il modulo 'resources'
 # Aggiunge la cartella genitore al percorso di ricerca di Python
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 # Importiamo solo le funzioni necessarie dai nostri moduli di utilità
-from src.Interpretable_RAG.index_res import create_flat_index, save_index
+from src.Interpretable_RAG.utils import create_faiss_index_flat
 
-def build_faiss_index(embeddings_path: Path, save_path: Path, metric: str = 'IP'):
+def build_faiss_index(embeddings_path: Path, save_path: Path, metric: Literal['IP', 'L2'] = 'IP'):
     """
     Carica gli embedding, costruisce un indice FAISS e lo salva su disco.
 
@@ -28,20 +29,12 @@ def build_faiss_index(embeddings_path: Path, save_path: Path, metric: str = 'IP'
     embeddings = np.load(embeddings_path).astype(np.float32)
     print(f"INFO: Caricati {embeddings.shape[0]} vettori di dimensione {embeddings.shape[1]}.")
 
-    # Crea l'indice FAISS
-    dimension = embeddings.shape[1]
-    index = create_flat_index(dimension, measure=metric)
-
-    # Popola l'indice
-    print("INFO: Aggiunta dei vettori all'indice...")
-    index.add(embeddings)
-    print(f"INFO: L'indice ora contiene {index.ntotal} vettori.")
-
     # Assicura che la cartella di output esista
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Salva l'indice
-    save_index(index, str(save_path))
+
+    # Crea, popola e salva l'indice FAISS
+    index = create_faiss_index_flat(embeddings, save_path=str(save_path), type_index=metric)
+    print(f"INFO: L'indice ora contiene {index.ntotal} vettori.")
 
 def main():
     """
