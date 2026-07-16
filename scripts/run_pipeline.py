@@ -15,7 +15,8 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 from src.Interpretable_RAG.tools import *
-from src.Interpretable_RAG.perturbations import PromptPerturbationModule
+from src.Interpretable_RAG.utils import sniff_file_dialect
+from src.experiments.perturbations import PromptPerturbationModule
 
 
 def parse_max_samples(value: str):

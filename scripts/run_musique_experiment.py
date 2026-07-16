@@ -11,10 +11,10 @@ import sys
 # Add the parent directory to the path so we can import src
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from src.Interpretable_RAG.eval_datasets import DatasetLoader
+from src.experiments.eval_datasets import DatasetLoader
 from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
-from src.Interpretable_RAG.perturbations import PromptPerturbationModule
+from src.experiments.perturbations import PromptPerturbationModule
 from analysis.correlation_analysis import calculate_warg, calculate_failure_modes
 
 def setup_models(retriever_id: str, generator_id: str):

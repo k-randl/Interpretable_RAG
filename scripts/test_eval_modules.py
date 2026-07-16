@@ -7,9 +7,9 @@ from pathlib import Path
 # Add the parent directory to the path so we can import src
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from src.Interpretable_RAG.eval_datasets import DatasetLoader
-from src.Interpretable_RAG.perturbations import PromptPerturbationModule
-from src.Interpretable_RAG.metrics import calculate_metrics
+from src.experiments.eval_datasets import DatasetLoader
+from src.experiments.perturbations import PromptPerturbationModule
+from src.experiments.metrics import calculate_metrics
 from analysis.correlation_analysis import calculate_warg, calculate_failure_modes
 
 def run_tests():

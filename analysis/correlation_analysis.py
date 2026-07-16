@@ -7,10 +7,9 @@ from scipy.stats import pearsonr, spearmanr
 from pathlib import Path
 from typing import List, Dict
 
-# Assuming metrics.py is in src/Interpretable_RAG
 import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from src.Interpretable_RAG.metrics import calculate_metrics
+from src.experiments.metrics import calculate_metrics
 
 def rbo(list1: List[int], list2: List[int], p: float) -> float:
     """

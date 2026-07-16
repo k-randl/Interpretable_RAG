@@ -12,12 +12,20 @@ import pickle
 # Add the parent directory to the path so we can import src
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from src.Interpretable_RAG.eval_datasets import DatasetLoader
+from src.experiments.eval_datasets import DatasetLoader
 from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
-from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration, QAMPARI_SYSTEM_PROMPT
-from src.Interpretable_RAG.perturbations import PromptPerturbationModule
-from src.Interpretable_RAG.metrics import calculate_metrics
+from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
+from src.experiments.perturbations import PromptPerturbationModule
+from src.experiments.metrics import calculate_metrics
 from analysis.correlation_analysis import calculate_warg
+
+QAMPARI_SYSTEM_PROMPT = (
+    "Use the following retrieved documents to answer the user's query. "
+    "The answer requires listing MULTIPLE entities. "
+    "Respond with a comma-separated list of answers only. "
+    "Do not explain, do not cite documents, do not use bullet points. "
+    "Example format: Answer 1, Answer 2, Answer 3"
+)
 
 def setup_models(retriever_id: str, generator_id: str):
     print(f"INFO: Loading Generator {generator_id} with device_map='auto'...")
