@@ -3,9 +3,16 @@ import pickle
 import torch
 from tqdm.autonotebook import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
-from typing import Optional, List, Union, Dict, Tuple
+from typing import Optional, List, Union, Dict, Tuple, Literal, Mapping, TypeAlias, cast
 
-from .retrieval import RetrieverExplanationBase, List_t, Tensor_t
+from .retrieval import RetrieverExplanationBase, RetrieverListDict_t
+from .types import FloatTensorOrArray
+
+#=======================================================================#
+# Types:                                                                #
+#=======================================================================#
+
+RetrieverAttributionOffline_t:TypeAlias = Mapping[Literal['query', 'context'], List[FloatTensorOrArray]]
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -201,6 +208,8 @@ class ExplainableAutoModelForContextEncoding(torch.nn.Module):
             torch.save(torch.concatenate(embeddings, dim=0), file)
 
 class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase):
+    _in_tokens:RetrieverListDict_t
+
     @classmethod
     def from_pretrained(cls, query_encoder_name_or_path:str, *,
             tokenizer_name_or_path:Optional[str]=None,
@@ -246,7 +255,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         else: return None
 
     @property
-    def in_tokens(self) -> Optional[List_t]:
+    def in_tokens(self) -> Union[RetrieverListDict_t, None]:
         """A dicionary containing the following two keys:
         - `'query'`: a list containing the tokenized query
         - `'context'`: a list containing the tokenized contexts"""
@@ -268,7 +277,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         """The huggingface string identifier of the query encoder model."""
         return self._query_encoder.config.name_or_path
 
-    def grad(self, filter_special_tokens:bool=True) -> List_t:
+    def grad(self, filter_special_tokens:bool=True) -> RetrieverAttributionOffline_t:
         '''Gradients towards the inputs of the last batch.
 
         Args:
@@ -284,9 +293,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
     
         if not filter_special_tokens: print('WARNING: `filter_special_tokens` is not used in offline retrieval.')
 
-        return grad
+        return cast(RetrieverAttributionOffline_t, grad)
 
-    def aGrad(self, filter_special_tokens:bool=True) -> List_t:
+    def aGrad(self, filter_special_tokens:bool=True) -> RetrieverAttributionOffline_t:
         '''AGrad (`da ⊙ a`) scores of the last batch.
 
         Args:
@@ -303,9 +312,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         if not filter_special_tokens: print('WARNING: `filter_special_tokens` is not used in offline retrieval.')
 
-        return aGrad
+        return cast(RetrieverAttributionOffline_t, aGrad)
 
-    def repAGrad(self, filter_special_tokens:bool=True) -> List_t:
+    def repAGrad(self, filter_special_tokens:bool=True) -> RetrieverAttributionOffline_t:
         '''RepAGrad scores of the last batch.
 
         Args:
@@ -315,7 +324,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         raise NotImplementedError()
 
-    def gradIn(self, filter_special_tokens:bool=True) -> List_t:
+    def gradIn(self, filter_special_tokens:bool=True) -> RetrieverAttributionOffline_t:
         '''GradIn (`dx ⊙ x`) scores of the last batch.
 
         Args:
@@ -336,7 +345,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
         if not filter_special_tokens: print('WARNING: `filter_special_tokens` is not used in offline retrieval.')
 
-        return gradIn
+        return cast(RetrieverAttributionOffline_t, gradIn)
 
     def forward(self, query:str, k:int, *,
             reorder:bool=False,

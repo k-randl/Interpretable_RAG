@@ -46,7 +46,6 @@ from .methods import get_shapley_values
 
 # Type definitions
 from .types import (
-    ShapleyValues,
     Embedding,
     EmbeddingBatch,
 )
@@ -70,7 +69,6 @@ __all__ = [
     # Methods
     "get_shapley_values",
     # Types
-    "ShapleyValues",
     "RetrieverMethods_t",
     "GeneratorMethods_t",
     "GeneratorAggregations_t",

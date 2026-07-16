@@ -13,6 +13,7 @@ from .utils import decode_chat_template, get_model_type, generate_permutations, 
 
 from numpy.typing import NDArray
 from typing import Union, List, Dict, Tuple, Optional, Literal, Iterable, Callable, TypeAlias, Any, cast
+from .types import FloatArray, BoolArray, IntArray, TokenList
 
 from abc import ABCMeta, abstractmethod
 
@@ -30,7 +31,7 @@ GeneratorMethods_t:TypeAlias = Literal['lime', 'shap']
 
 # Return type of `shap()`/`lime()`: a per-key value is `None` whenever that key
 # (e.g. `'query'`) was not perturbed/computed (e.g. `max_samples_query=0`).
-GeneratorAttribution_t:TypeAlias = Union[Dict[Literal['query', 'context'], Union[NDArray[np.float32], None]], NDArray[np.float32], None]
+GeneratorAttribution_t:TypeAlias = Union[Dict[Literal['query', 'context'], Union[FloatArray, None]], FloatArray, None]
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -208,13 +209,13 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def qry_tokens(self) -> List[str]:
+    def qry_tokens(self) -> TokenList:
         """The list of query tokens."""
         raise NotImplementedError()
 
     @property
     @abstractmethod
-    def gen_tokens(self) -> List[str]:
+    def gen_tokens(self) -> TokenList:
         """The list of generated tokens."""
         raise NotImplementedError()
 
@@ -337,12 +338,12 @@ class GeneratorExplanationBase(metaclass=ABCMeta):
 
 
 class GeneratorExplanation(GeneratorExplanationBase):
-    _qry_tokens:List[str]
-    _gen_tokens:List[str]
+    _qry_tokens:TokenList
+    _gen_tokens:TokenList
     _qry_precise:bool
     _ctx_precise:bool
-    _shapley_attributions:Dict[str, Optional[Dict[Literal['query', 'context'], NDArray[np.float32]]]]
-    _lime_attributions:Dict[str, Optional[Dict[Literal['query', 'context'], NDArray[np.float32]]]]
+    _shapley_attributions:Dict[str, Optional[Dict[Literal['query', 'context'], FloatArray]]]
+    _lime_attributions:Dict[str, Optional[Dict[Literal['query', 'context'], FloatArray]]]
     _model_name_or_path:str
     _tokenizer:transformers.PreTrainedTokenizer
 
@@ -428,12 +429,12 @@ class GeneratorExplanation(GeneratorExplanationBase):
         return result
 
     @property
-    def qry_tokens(self) -> List[str]:
+    def qry_tokens(self) -> TokenList:
         """The list of query tokens."""
         return self._qry_tokens
 
     @property
-    def gen_tokens(self) -> List[str]:
+    def gen_tokens(self) -> TokenList:
         """The list of generated tokens."""
         return self._gen_tokens[self.focus]
 
@@ -603,7 +604,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             # GeneratorExplanationBase properties:
             #---------------------------------------------------------------#
             @property
-            def qry_tokens(self) -> List[str]:
+            def qry_tokens(self) -> TokenList:
                 """The list of query tokens."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
@@ -613,7 +614,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 return self._qry_tokens
 
             @property
-            def gen_tokens(self) -> List[str]:
+            def gen_tokens(self) -> TokenList:
                 """The list of generated tokens."""
                 # generate(...) needs to be called first:
                 if self._gen_output is None:
@@ -674,7 +675,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             # Explanation properties:
             #---------------------------------------------------------------#
             @property
-            def gen_token_probs(self) -> NDArray[np.float32]:
+            def gen_token_probs(self) -> FloatArray:
                 """Probability of each token in the original generation."""
                 # generate(...) needs to be called first:
                 if self._gen_output is None:
@@ -696,7 +697,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 ])
 
             @property
-            def cmp_token_probs(self) -> List[NDArray[np.float32]]:
+            def cmp_token_probs(self) -> List[FloatArray]:
                 """Probability of each token in the original generation given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0 or self._gen_output is None:
@@ -722,7 +723,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
 
             @property
-            def gen_sequence_prob(self) -> NDArray[np.float32]:
+            def gen_sequence_prob(self) -> FloatArray:
                 """Total probability of generating the original sequence."""
                 # generate(...) needs to be called first:
                 if self._gen_output is None:
@@ -745,7 +746,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 ], axis=-1)
 
             @property
-            def cmp_sequence_probs(self) -> List[NDArray[np.float32]]:
+            def cmp_sequence_probs(self) -> List[FloatArray]:
                 """Total probability of generating the original sequence given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0 or self._gen_output is None:
@@ -772,7 +773,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
 
             @property
-            def gen_bow_probs(self) -> NDArray[np.float32]:
+            def gen_bow_probs(self) -> FloatArray:
                 """Average probability of each token in the vocabulary of being generated given the original input."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
@@ -788,7 +789,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 return probs.mean(dim=1).float().numpy()
             
             @property
-            def cmp_bow_probs(self) -> List[NDArray[np.float32]]:
+            def cmp_bow_probs(self) -> List[FloatArray]:
                 """Average probability of each token in the vocabulary of being generated given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
@@ -807,7 +808,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 return [t.mean(dim=1).float().numpy() for t in probs]
             
 
-            def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float32]:
+            def gen_nucleus_probs(self, p:float=0.9) -> FloatArray:
                 """Average probability of each token in the vocabulary of being generated given the original input."""
                 # generate(...) needs to be called first:
                 if len(self._gen_logits) == 0:
@@ -822,7 +823,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # return accumulated probability of each token in the vocabulary:
                 return _nucleus_sampling(probs.float(),p=p).mean(dim=1).numpy()
 
-            def cmp_nucleus_probs(self, p:float=0.9) -> List[NDArray[np.float32]]:
+            def cmp_nucleus_probs(self, p:float=0.9) -> List[FloatArray]:
                 """Average probability of each token in the vocabulary of being generated given the compared input."""
                 # compare(...) needs to be called first:
                 if len(self._exp_logits) == 0:
@@ -1279,7 +1280,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 # Call actual method:
                 assert self._shap_cache is not None, '`explain_generate(...)` must be called before `shap(...)`!'
-                result:Dict[Literal['query', 'context'], Optional[NDArray[np.float32]]] = {'query': None, 'context': None} if key is None else {key: None}
+                result:Dict[Literal['query', 'context'], Optional[FloatArray]] = {'query': None, 'context': None} if key is None else {key: None}
                 for k in result:
                     if self._shap_cache[k] is None: result[k] = None
                     elif self._shap_cache[k]['precise']: result[k] = self._get_shapley_attributions_precise(probs, **self._shap_cache[k])
@@ -1287,7 +1288,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 return result if key is None else result[key]
 
-            def _get_shapley_attributions_precise(self, probs:List[NDArray[np.float32]], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool) -> NDArray[np.float32]:
+            def _get_shapley_attributions_precise(self, probs:List[FloatArray], indices:IntArray, new_docs:IntArray, precise:bool) -> FloatArray:
                 assert precise is True, 'Precise SHAP values can only be calculated for precise values!'
 
                 # Get the shape of the permutations matrix: (num_permutations, num_sets)
@@ -1318,7 +1319,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # Return SHAP values for all but the baseline (first one)
                 return p_shap
 
-            def _get_shapley_attributions_monte_carlo(self, probs:List[NDArray[np.float32]], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, num_samples:int=100, sample_size:int=10) -> NDArray[np.float32]:
+            def _get_shapley_attributions_monte_carlo(self, probs:List[FloatArray], indices:IntArray, sets:BoolArray, precise:bool, complementary:bool, num_samples:int=100, sample_size:int=10) -> FloatArray:
                 assert precise is False, 'Monte Carlo SHAP values can only be calculated for approximate values!'
 
                 index_size = len(indices)
@@ -1356,7 +1357,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # Return the mean of the attributions across all samples:
                 return np.mean(attributions, axis=0)
             
-            def _get_shapley_attributions_kernel(self, probs:List[NDArray[np.float32]], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, **kwargs) -> NDArray[np.float32]:
+            def _get_shapley_attributions_kernel(self, probs:List[FloatArray], indices:IntArray, sets:BoolArray, precise:bool, **kwargs) -> FloatArray:
                 assert precise is False, 'Kernel SHAP values can only be calculated for approximate values!'
 
                 # fit a ridge regressor using the SHAP kernel:
@@ -1430,7 +1431,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 # Call actual method:
                 assert self._shap_cache is not None, '`explain_generate(...)` must be called before `lime(...)`!'
-                result:Dict[Literal['query', 'context'], Optional[NDArray[np.float32]]] = {'query': None, 'context': None} if key is None else {key: None}
+                result:Dict[Literal['query', 'context'], Optional[FloatArray]] = {'query': None, 'context': None} if key is None else {key: None}
                 for k in result:
                     if self._shap_cache[k] is None:
                         result[k] = None
@@ -1456,7 +1457,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
 
                 return result if key is None else result[key]
 
-            def _get_lime_attributions_precise(self, probs:List[NDArray[np.float32]], indices:NDArray[np.int_], new_docs:NDArray[np.int_], precise:bool, kernel_fn:Callable, **kwargs) -> NDArray[np.float32]:
+            def _get_lime_attributions_precise(self, probs:List[FloatArray], indices:IntArray, new_docs:IntArray, precise:bool, kernel_fn:Callable, **kwargs) -> FloatArray:
                 assert precise is True
 
                 n_permutations, n_steps = indices.shape
@@ -1493,7 +1494,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # dimensions of `x`/`y` to guarantee a (num_docs, num_targets) result.
                 return np.asarray(lr.coef_).reshape(y.shape[1], x.shape[1]).T
 
-            def _get_lime_attributions_approx(self, probs:List[NDArray[np.float32]], indices:NDArray[np.int_], sets:NDArray[np.bool_], precise:bool, complementary:bool, kernel_fn:Callable, **kwargs) -> NDArray[np.float32]:
+            def _get_lime_attributions_approx(self, probs:List[FloatArray], indices:IntArray, sets:BoolArray, precise:bool, complementary:bool, kernel_fn:Callable, **kwargs) -> FloatArray:
                 assert precise is False
 
                 n_features = sets.shape[1]
@@ -1551,50 +1552,50 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
     #---------------------------------------------------------------#
     @property
     @abstractmethod
-    def gen_token_probs(self) -> NDArray[np.float32]:
+    def gen_token_probs(self) -> FloatArray:
         """Probability of each token in the original generation."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
     @property
     @abstractmethod
-    def cmp_token_probs(self) -> List[NDArray[np.float32]]:
+    def cmp_token_probs(self) -> List[FloatArray]:
         """Probability of each token in the original generation given the compared input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
 
     @property
     @abstractmethod
-    def gen_sequence_prob(self) -> NDArray[np.float32]:
+    def gen_sequence_prob(self) -> FloatArray:
         """Total probability of generating the original sequence."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
     @property
     @abstractmethod
-    def cmp_sequence_probs(self) -> List[NDArray[np.float32]]:
+    def cmp_sequence_probs(self) -> List[FloatArray]:
         """Total probability of generating the original sequence given the compared input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
 
     @property
     @abstractmethod
-    def gen_bow_probs(self) -> NDArray[np.float32]:
+    def gen_bow_probs(self) -> FloatArray:
         """Average probability of each token in the vocabulary of being generated given the original input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
     
     @property
     @abstractmethod
-    def cmp_bow_probs(self) -> List[NDArray[np.float32]]:
+    def cmp_bow_probs(self) -> List[FloatArray]:
         """Average probability of each token in the vocabulary of being generated given the compared input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
     
 
     @abstractmethod
-    def gen_nucleus_probs(self, p:float=0.9) -> NDArray[np.float32]:
+    def gen_nucleus_probs(self, p:float=0.9) -> FloatArray:
         """Average probability of each token in the vocabulary of being generated given the original input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 
     @abstractmethod
-    def cmp_nucleus_probs(self, p:float=0.9) -> List[NDArray[np.float32]]:
+    def cmp_nucleus_probs(self, p:float=0.9) -> List[FloatArray]:
         """Average probability of each token in the vocabulary of being generated given the compared input."""
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
 

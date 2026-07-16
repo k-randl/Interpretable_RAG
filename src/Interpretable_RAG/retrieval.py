@@ -1,12 +1,12 @@
 import os
 import pickle
 import torch
-import numpy as np
 
 from transformers import PreTrainedTokenizer, AutoTokenizer
-from torch import Tensor, FloatTensor
+from torch import Tensor
 from numpy.typing import NDArray
-from typing import Union, List, Dict, Literal, Optional, TypeAlias, Any, cast
+from typing import Union, List, Dict, Mapping, Literal, Optional, TypeAlias, Any, Tuple, cast
+from .types import FloatTensorOrArray
 
 from abc import ABCMeta, abstractmethod
 
@@ -21,21 +21,28 @@ RetrieverMethods_t:TypeAlias = Literal['grad', 'aGrad', 'repAGrad', 'gradIn', 'i
 # Types:                                                                #
 #=======================================================================#
 
-List_t:TypeAlias   = Dict[Literal['query', 'context'], List]
-Array_t:TypeAlias  = Dict[Literal['query', 'context'], NDArray]
-Tensor_t:TypeAlias = Dict[Literal['query', 'context'], Tensor]
-Out_t:TypeAlias    = Dict[Literal['query', 'context'], List[Union[NDArray[np.float32], FloatTensor]]]
+RetrieverListDict_t:TypeAlias    = Mapping[Literal['query', 'context'], List[List[str]]]
+RetrieverTensorDict_t:TypeAlias  = Mapping[Literal['query', 'context'], Tensor]
+RetrieverAttribution_t:TypeAlias = Mapping[Literal['query', 'context'], Union[FloatTensorOrArray, List[FloatTensorOrArray]]]
+
+# some methods (e.g. `intGrad`, `lime`, `shap`) can optionally return extra metadata
+# (e.g. baseline predictions, additivity coverage) alongside the attribution itself:
+RetrieverAttributionOutput_t:TypeAlias = Union[
+    RetrieverAttribution_t,
+    Tuple[RetrieverAttribution_t, Dict[str, Any]],
+    Tuple[RetrieverAttribution_t, Dict[str, Any], Any],
+]
 
 #=======================================================================#
 # Helper Functions:                                                     #
 #=======================================================================#
 
-def append_tensor_t(obj:Optional[Tensor_t], append:bool, qry:torch.Tensor, ctx:torch.Tensor,
-        pad_val:Any, is_grad:bool=False) -> Tensor_t:
-    """Build or extend a Tensor_t dict with query and context tensors.
+def append_tensor_t(obj:Optional[RetrieverTensorDict_t], append:bool, qry:torch.Tensor, ctx:torch.Tensor,
+        pad_val:Any, is_grad:bool=False) -> RetrieverTensorDict_t:
+    """Build or extend a RetrieverTensorDict_t dict with query and context tensors.
 
     Args:
-        obj:        Existing Tensor_t to extend, or None to create a fresh one.
+        obj:        Existing RetrieverTensorDict_t to extend, or None to create a fresh one.
         append:     If True, extend `obj`; if False, ignore `obj` and return a new dict.
         qry:        Query tensor.
         ctx:        Context tensor to append as new rows.
@@ -43,7 +50,7 @@ def append_tensor_t(obj:Optional[Tensor_t], append:bool, qry:torch.Tensor, ctx:t
         is_grad:    If True, accumulate query gradients instead of asserting equality.
 
     Returns:
-        A Tensor_t dict with keys ``'query'`` and ``'context'``.
+        A RetrieverTensorDict_t dict with keys ``'query'`` and ``'context'``.
     """
     if obj is not None and append:
         if is_grad: qry += obj['query']
@@ -85,7 +92,7 @@ Returns:
     Similarity matrices of shape ``(batch, m, n)``.
 """
 
-def get_retriever_scores(explanation:'RetrieverExplanationBase', method:RetrieverMethods_t, **kwargs) -> Out_t:
+def get_retriever_scores(explanation:'RetrieverExplanationBase', method:RetrieverMethods_t, **kwargs) -> RetrieverAttribution_t:
     """Dispatch to a retriever explanation's attribution method by name.
 
     Handles the `'grad'`/`'aGrad'` methods specially, since their raw per-hidden-state
@@ -109,7 +116,7 @@ def get_retriever_scores(explanation:'RetrieverExplanationBase', method:Retrieve
     elif method == 'aGrad': return {key: [doc.mean(axis=0) for doc in docs] for key, docs in explanation.aGrad(**kwargs).items()}
 
     method_fn = getattr(explanation, method, None)
-    if callable(method_fn): return cast(Out_t, method_fn(**kwargs))
+    if callable(method_fn): return cast(RetrieverAttribution_t, method_fn(**kwargs))
     raise ValueError(f"`{type(explanation).__name__}` has no callable method named '{method}'")
 
 #=======================================================================#
@@ -123,10 +130,12 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def in_tokens(self) -> Dict[Literal['query', 'context'], List[List[str]]]:
+    def in_tokens(self) -> Union[RetrieverListDict_t, None]:
         """A dicionary containing the following two keys:
         - `'query'`: a list containing the tokenized query
-        - `'context'`: a list containing the tokenized contexts."""
+        - `'context'`: a list containing the tokenized contexts.
+
+        `None` if no input has been processed yet."""
         raise NotImplementedError()
 
     @property
@@ -150,7 +159,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
     # Methods:                                                          #
     #===================================================================#
 
-    def grad(self, filter_special_tokens:bool=True) -> Out_t:
+    def grad(self, filter_special_tokens:bool=True) -> RetrieverAttribution_t:
         '''Gradients towards the inputs of the last batch.
 
         Args:
@@ -159,7 +168,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_inputs, n_tokens)'''
         raise NotImplementedError()
 
-    def aGrad(self, filter_special_tokens:bool=True) -> Out_t:
+    def aGrad(self, filter_special_tokens:bool=True) -> RetrieverAttribution_t:
         '''AGrad (`-da ⊙ a`) scores of the last batch.
 
         Args:
@@ -168,7 +177,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_heads, n_inputs)'''
         raise NotImplementedError()
 
-    def repAGrad(self, filter_special_tokens:bool=True) -> Out_t:
+    def repAGrad(self, filter_special_tokens:bool=True) -> RetrieverAttribution_t:
         '''RepAGrad scores of the last batch.
 
         Args:
@@ -177,7 +186,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_heads, n_classes, n_inputs)'''
         raise NotImplementedError()
 
-    def gradIn(self, filter_special_tokens:bool=True) -> Out_t:
+    def gradIn(self, filter_special_tokens:bool=True) -> RetrieverAttribution_t:
         '''GradIn (`dx ⊙ x`) scores of the last batch.
 
         Args:
@@ -186,7 +195,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         raise NotImplementedError()
 
-    def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
+    def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> RetrieverAttributionOutput_t:
         '''Integrated gradient scores of the last batch.
 
         Args:
@@ -195,7 +204,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         raise NotImplementedError()
 
-    def lime(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
+    def lime(self, filter_special_tokens:bool=True, **kwargs) -> RetrieverAttributionOutput_t:
         '''Lime scores of the last batch.
 
         Args:
@@ -204,7 +213,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
         Returns:                    Importance scores with shape = (bs, n_inputs)'''
         raise NotImplementedError()
 
-    def shap(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
+    def shap(self, filter_special_tokens:bool=True, **kwargs) -> RetrieverAttributionOutput_t:
         '''KernelSHAP scores of the last batch.
 
         Args:
@@ -218,7 +227,7 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
             filter_special_tokens:bool=True,
             num_steps:int=100,
             batch_size:int=64
-        ) -> Union[str, None]:
+        ) -> Union[Dict[str, Any], None]:
         """Saves the explanation data to a file.
 
         Args:
@@ -276,6 +285,18 @@ class RetrieverExplanationBase(metaclass=ABCMeta):
 
 
 class RetrieverExplanation(RetrieverExplanationBase):
+    _in_tokens:RetrieverListDict_t
+    _grad:Union[RetrieverAttribution_t, None]
+    _aGrad:Union[RetrieverAttribution_t, None]
+    _repAGrad:Union[RetrieverAttribution_t, None]
+    _gradIn:Union[RetrieverAttribution_t, None]
+    _intGrad:Union[RetrieverAttribution_t, None]
+    _lime:Union[RetrieverAttribution_t, None]
+    _shap:Union[RetrieverAttribution_t, None]
+    _query_encoder_name_or_path:str
+    _context_encoder_name_or_path:Union[str, None]
+    _tokenizer:PreTrainedTokenizer
+
     @classmethod
     def load(cls, saved_data:Union[str, dict, list], *,
         query_encoder_name_or_path:Optional[str]=None,
@@ -360,7 +381,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         return result
 
     @property
-    def in_tokens(self) -> Dict[Literal['query', 'context'], List[List[str]]]:
+    def in_tokens(self) -> RetrieverListDict_t:
         """A dicionary containing the following two keys:
         - `'query'`: a list containing the tokenized query
         - `'context'`: a list containing the tokenized contexts."""
@@ -381,7 +402,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         """The huggingface string identifier of the context encoder model."""
         return self._context_encoder_name_or_path
 
-    def grad(self, filter_special_tokens:bool=True) -> Out_t:
+    def grad(self, filter_special_tokens:bool=True) -> RetrieverAttribution_t:
         '''Gradients towards the inputs of the last batch.
 
         Returns:
@@ -389,7 +410,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if self._grad is None: raise NotImplementedError("No `grad` values were saved.")
         return self._grad
 
-    def aGrad(self, filter_special_tokens:bool=True) -> Out_t:
+    def aGrad(self, filter_special_tokens:bool=True) -> RetrieverAttribution_t:
         '''AGrad (`-da ⊙ a`) scores of the last batch.
 
         Returns:
@@ -397,7 +418,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if self._aGrad is None: raise NotImplementedError("No `aGrad` values were saved.")
         return self._aGrad
 
-    def repAGrad(self, filter_special_tokens:bool=True) -> Out_t:
+    def repAGrad(self, filter_special_tokens:bool=True) -> RetrieverAttribution_t:
         '''RepAGrad scores of the last batch.
 
         Returns:
@@ -405,7 +426,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if self._repAGrad is None: raise NotImplementedError("No `repAGrad` values were saved.")
         return self._repAGrad
 
-    def gradIn(self, filter_special_tokens:bool=True) -> Out_t:
+    def gradIn(self, filter_special_tokens:bool=True) -> RetrieverAttribution_t:
         '''GradIn (`dx ⊙ x`) scores of the last batch.
 
         Returns:
@@ -413,7 +434,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if self._gradIn is None: raise NotImplementedError("No `gradIn` values were saved.")
         return self._gradIn
     
-    def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
+    def intGrad(self, filter_special_tokens:bool=True, **kwargs) -> RetrieverAttribution_t:
         '''Integrated gradient scores of the last batch.
 
         Returns:
@@ -421,7 +442,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if self._intGrad is None: raise NotImplementedError("No `intGrad` values were saved.")
         return self._intGrad
 
-    def lime(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
+    def lime(self, filter_special_tokens:bool=True, **kwargs) -> RetrieverAttribution_t:
         '''Lime scores of the last batch.
             
         Returns:
@@ -429,7 +450,7 @@ class RetrieverExplanation(RetrieverExplanationBase):
         if self._lime is None: raise NotImplementedError("No `lime` values were saved.")
         return self._lime
 
-    def shap(self, filter_special_tokens:bool=True, **kwargs) -> Out_t:
+    def shap(self, filter_special_tokens:bool=True, **kwargs) -> RetrieverAttribution_t:
         '''KernelSHAP scores of the last batch.
             
         Returns:

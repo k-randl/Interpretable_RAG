@@ -9,7 +9,7 @@ from .generation import ExplainableAutoModelForGeneration, GeneratorExplanation,
 from .utils import tokens2words
 
 from typing import Optional, Union, Callable, Literal, Dict, List, Tuple, Any
-from numpy.typing import NDArray
+from .types import FloatArray
 
 
 #=======================================================================#
@@ -88,7 +88,7 @@ class RAGExplanation:
 
         return _make(ret_exps, gen_exps)
 
-    def _get_ret_importance(self, key:Literal['query', 'context'], **kwargs) -> NDArray[np.float32]:
+    def _get_ret_importance(self, key:Literal['query', 'context'], **kwargs) -> FloatArray:
         """Raw, per-token retriever attribution scores for `key`, computed via `self.retriever_method`."""
         ret_raw = get_retriever_scores(self.retriever, self.retriever_method, **kwargs)[key]
 
@@ -97,26 +97,26 @@ class RAGExplanation:
 
         return np.asarray(ret_raw)
 
-    def _get_gen_importance(self, key:Literal['query', 'context'], **kwargs) -> NDArray[np.float32]:
+    def _get_gen_importance(self, key:Literal['query', 'context'], **kwargs) -> FloatArray:
         """Per-document/word generator attribution scores for `key`, computed via `self.generator_method`."""
         return get_generator_scores(self.generator, self.generator_method, key=key, **kwargs)
 
     @property
-    def retriever_document_importance(self) -> NDArray[np.float32]:
+    def retriever_document_importance(self) -> FloatArray:
         """Normalized document importance estimated by the retriever."""
         doc_importance  = self._get_ret_importance('context').sum(axis=1)
         doc_importance /= np.abs(doc_importance).sum()
         return doc_importance
 
     @property
-    def generator_document_importance(self) -> NDArray[np.float32]:
+    def generator_document_importance(self) -> FloatArray:
         """Normalized document importance of the generator."""
         doc_importance_generator  = self._get_gen_importance('context').sum(axis=1)
         doc_importance_generator /= np.abs(doc_importance_generator).sum()
         return doc_importance_generator
 
     @property
-    def mean_document_importance(self) -> NDArray[np.float32]:
+    def mean_document_importance(self) -> FloatArray:
         """Mean normalized document importance of the rag pipeline."""
         return (self.retriever_document_importance + self.generator_document_importance) / 2.
 
@@ -376,7 +376,7 @@ class ExplainableAutoModelForRAG(RAGExplanation):
         return self.__retriever_query_format
 
     @property
-    def retriever_document_importance(self) -> NDArray[np.float32]:
+    def retriever_document_importance(self) -> FloatArray:
         """Normalized document importance estimated by the retriever via cosine similarity."""
 
         if not hasattr(self, 'retrieved_sim'):
@@ -388,7 +388,7 @@ class ExplainableAutoModelForRAG(RAGExplanation):
         return doc_importance_retriever
 
     @property
-    def retriever_query_importance(self) -> NDArray[np.float32]:
+    def retriever_query_importance(self) -> FloatArray:
         """Normalized word importance of the query for retrieving."""
 
         # get special tokens:
@@ -423,14 +423,14 @@ class ExplainableAutoModelForRAG(RAGExplanation):
         return qry_importance_retriever
 
     @property
-    def generator_query_importance(self) -> NDArray[np.float32]:
+    def generator_query_importance(self) -> FloatArray:
         """Normalized word importance of the query during generation."""
         qry_importance_generator  = self._get_gen_importance('query').sum(axis=1)
         qry_importance_generator /= np.abs(qry_importance_generator).sum()
         return qry_importance_generator
 
     @property
-    def mean_query_importance(self) -> NDArray[np.float32]:
+    def mean_query_importance(self) -> FloatArray:
         """Mean word importance of the query for the rag pipeline."""
         return (self.retriever_query_importance + self.generator_query_importance) / 2.
 
@@ -532,7 +532,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
     def __generate(self, query:str, k_pos:int, k_neg:int, *,
             generator_kwargs:Dict[str, Any] = {},
             retriever_kwargs:Dict[str, Any] = {}
-        ) -> Tuple[NDArray[np.float32], NDArray[np.float32], List[str], List[str]]:
+        ) -> Tuple[FloatArray, FloatArray, List[str], List[str]]:
         """Run retrieval-augmented generation for a single query and cache results.
 
         For 'top' and None modes, retrieves k_pos + k_neg documents directly and
@@ -608,7 +608,7 @@ class WARGScorer(ExplainableAutoModelForRAG):
             checkpoint_path:Optional[str]=None,
             generator_kwargs:Dict[str, Any]={},
             retriever_kwargs:Dict[str, Any]={}
-        ) -> NDArray[np.float32]:
+        ) -> FloatArray:
         """Compute WARG scores for one or more queries.
 
         For each query, this method compares retriever and generator document

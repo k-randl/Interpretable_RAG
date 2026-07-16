@@ -7,6 +7,7 @@ from importlib import import_module
 from typing import Optional, Callable, Dict, List, Literal, Union, Tuple, Any
 
 from numpy.typing import NDArray
+from .types import BoolArray, EmbeddingBatch, IntArray, TensorOrArray, TokenList
 
 __RESOURCE_DIR__ = os.path.dirname(os.path.abspath(__file__))
 
@@ -32,11 +33,11 @@ def find_subseq(seq:List, subseq:List, start:int=0) -> int:
             return i
     raise ValueError(f'{subseq} not in {seq}.')
 
-def nucleus_sample_tokens(scores:Union[NDArray, torch.Tensor], tokens:List[str], threshold:float=.9) -> Tuple[NDArray, List[str]]:
+def nucleus_sample_tokens(scores:TensorOrArray, tokens:TokenList, threshold:float=.9) -> Tuple[NDArray, TokenList]:
     """Nucleus samples the tokens for which the acumulated absolute scores are higher than `threshold`.
 
     Args:
-        scores (NDArray | Tensor):  The scores.
+        scores (TensorOrArray):     The scores.
         tokens (List):              The tokens.
         threshold (float):          The threshold that must be exceeded (default: `.9`).
 
@@ -81,14 +82,14 @@ def nucleus_sample_tokens(scores:Union[NDArray, torch.Tensor], tokens:List[str],
         [tokens[i] for i in s_ind[s_sel]] + [f'+{np.sum(~s_sel):d} other']
     )
 
-def tokens2words(tokens:List[str], *, token_processor:Optional[Callable[[str],str]]=None, separator:str=' ', filter_tokens:List[str]=[]):
+def tokens2words(tokens:TokenList, *, token_processor:Optional[Callable[[str],str]]=None, separator:str=' ', filter_tokens:TokenList=[]):
     """Combines tokens to words by splitting at `separator`.
 
     Args:
-        tokens (List[str]):             The list of token strings.
+        tokens (TokenList):              The list of token strings.
         token_processor ((str) -> str): An optional function applied to each token.
         separator (str):                The separtaor to split on (default: `' '`).
-        filter_tokens (List[str]):      A list of tokens to be ignored.
+        filter_tokens (TokenList):       A list of tokens to be ignored.
     """
 
     words = []
@@ -109,7 +110,7 @@ def tokens2words(tokens:List[str], *, token_processor:Optional[Callable[[str],st
 
     return words
 
-def flatten_token_attributions(attribution:List[float], tokens:List[str], *, token_processor:Optional[Callable[[str],str]]=None):
+def flatten_token_attributions(attribution:List[float], tokens:TokenList, *, token_processor:Optional[Callable[[str],str]]=None):
     """Flatten token-level attributions to a character-level attribution array.
     Each element of `attribution` is assumed to correspond to the token at the
     same position in `tokens`.
@@ -117,7 +118,7 @@ def flatten_token_attributions(attribution:List[float], tokens:List[str], *, tok
     Args:
         attribution (List[float]):
             A sequence of scalar attribution scores, one per token.
-        tokens (List[str]):
+        tokens (TokenList):
             A sequence of token strings corresponding to `attribution`.
         token_processor ((str) -> str, optional):
             If provided, a function applied to each token string before counting its
@@ -152,8 +153,8 @@ def flatten_token_attributions(attribution:List[float], tokens:List[str], *, tok
     return np.array(attribution_out), txt_out
 
 def match_token_attributions(
-        ret_attribution:List[float], ret_tokens:List[str],
-        gen_attribution:List[float], gen_tokens:List[str],
+        ret_attribution:List[float], ret_tokens:TokenList,
+        gen_attribution:List[float], gen_tokens:TokenList,
         *,
         ret_token_processor:Optional[Callable[[str],str]]=None,
         gen_token_processor:Optional[Callable[[str],str]]=None
@@ -174,9 +175,9 @@ def match_token_attributions(
 
     Args:
         ret_attribution (List[float]):                Attribution values for retriever tokens.
-        ret_tokens (List[str]):                       Retriever token strings corresponding to ret_attribution.
+        ret_tokens (TokenList):                       Retriever token strings corresponding to ret_attribution.
         gen_attribution (List[float]):                Attribution values for generator tokens.
-        gen_tokens (List[str]):                       Generator token strings corresponding to gen_attribution.
+        gen_tokens (TokenList):                       Generator token strings corresponding to gen_attribution.
         ret_token_processor ((str) -> str, optional): Optional function applied to each retriever token before flattening.
         gen_token_processor ((str) -> str, optional): Optional function applied to each generator token before flattening.
 
@@ -226,7 +227,7 @@ def match_token_attributions(
             ret_attr = ret_attr[offset:offset+len(gen_txt)]
 
         # if still not found raise ValueError:
-        else: raise ValueError()
+        else: raise ValueError(f'No overlapping substring found between retriever text ("{ret_txt}") and generator text ("{gen_txt}").')
 
     assert gen_txt.lower() == ret_txt.lower()
 
@@ -325,7 +326,7 @@ def generate_permutations_recursive(items:List[Any], func:Callable[[List[Any]], 
 
     return permutations, new_items
 
-def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> Tuple[NDArray[np.int_], NDArray[np.int_], List[Any]]:
+def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> Tuple[IntArray, IntArray, List[Any]]:
     """Generates all possible bitmask-tagged permutations of subsets of a list,
     and computes a perturbation for each subset using a user-defined function.
 
@@ -334,7 +335,7 @@ def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> T
 
     Args:
         items (List[Any]):        The list of items to permute.
-        func (List[Any]) -> Any): A function to compute a "perturbation" for any subset of items.
+        func ((List[Any]) -> Any): A function to compute a "perturbation" for any subset of items.
 
     Returns:
         Tuple:
@@ -362,7 +363,7 @@ def generate_permutations(items:List[Any], func:Callable[[List[Any]], Any]) -> T
     # return tuple of permuations and perturbations: 
     return np.array(permutations), np.array(new_items), perturbations
 
-def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_samples:int, complementary:bool=False) -> Tuple[NDArray[np.bool_], List[Any]]:
+def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_samples:int, complementary:bool=False) -> Tuple[BoolArray, List[Any]]:
     """Randomly samples a specified number of unique subsets of a given list,
     and returns their binary indicator features along with the result of applying a function
     to each sampled subset.
@@ -374,7 +375,7 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
 
     Args:
         items (List[Any]):        The list of items to draw subsets from.
-        func (List[Any]) -> Any): A function that computes a perturbation or
+        func ((List[Any]) -> Any): A function that computes a perturbation or
                                   feature from a subset of `items`.
         num_samples (int):        The number of unique subset samples to generate, including
                                   the empty set and full set.
@@ -458,7 +459,7 @@ def load_faiss_index(index_path:str, gpu:bool=False) -> Any:
     """Loads a FAISS index from a file.
 
     Args:
-        index_path (str):   Path to the index file.
+        index_path (str):     Path to the index file.
         gpu (bool, optional): If `True`, moves the loaded index to the (first) GPU. Defaults to `False`.
 
     Returns:
@@ -490,11 +491,11 @@ def save_faiss_index(index:Any, output_path:str) -> None:
     faiss.write_index(index, output_path)
     print('Index saved successfully.')
 
-def create_faiss_index_flat(embeddings:NDArray, save_path:Optional[str]=None, type_index:Literal['IP','L2']='IP') -> Any:
+def create_faiss_index_flat(embeddings:EmbeddingBatch, save_path:Optional[str]=None, type_index:Literal['IP','L2']='IP') -> Any:
     """Creates a flat FAISS index from a set of embeddings.
 
     Args:
-        embeddings (NDArray):       The embeddings to add to the index, with shape `(num_vectors, dim)`.
+        embeddings (EmbeddingBatch): The embeddings to add to the index, with shape `(num_vectors, dim)`.
         save_path (str, optional):  If provided, saves the resulting index to this path.
         type_index (str, optional): The similarity measure to use, either `'IP'` (inner product,
                                     for cosine similarity) or `'L2'` (Euclidean distance). Defaults to `'IP'`.
@@ -537,25 +538,22 @@ def create_faiss_index_flat(embeddings:NDArray, save_path:Optional[str]=None, ty
 #====================================================================================================#
 
 def get_model_type(model_name_or_path:str):
+    """Returns the `transformers` model class for a given model, caching lookups in `model_types.json`."""
     # load dictionary of known types:
     try:
         with open(os.path.join(__RESOURCE_DIR__, 'model_types.json'), 'r') as file:
             model_types = json.load(file)
-    except: model_types = {}
+    except Exception: model_types = {}
 
     # select matching type:
     try: model_type = model_types[model_name_or_path]
     except KeyError:
-        # load tokenizer:
-        from transformers import AutoModelForCausalLM
-        model_type = type(AutoModelForCausalLM.from_pretrained(
-            model_name_or_path,
-            device_map='auto',
-            torch_dtype=torch.bfloat16  # save some space
-        ))
+        # read the config only, no need to download full model weights just for its class name:
+        from transformers import AutoConfig
+        model_type = AutoConfig.from_pretrained(model_name_or_path).architectures[0]
 
         # save new template:
-        model_types[model_name_or_path] = model_type.__name__
+        model_types[model_name_or_path] = model_type
         with open(os.path.join(__RESOURCE_DIR__, 'model_types.json'), 'w') as file:
             json.dump(model_types, file)
 
@@ -567,6 +565,7 @@ def get_model_type(model_name_or_path:str):
 
 chat_templates = None
 def get_chat_template(model_name_or_path:str):
+    """Returns the chat template (per-role start/end-of-turn markers) for a given model, caching lookups in `chat_templates.json`."""
     global chat_templates
 
     # load dictionary of known templates:
@@ -574,7 +573,7 @@ def get_chat_template(model_name_or_path:str):
         try:
             with open(os.path.join(__RESOURCE_DIR__, 'chat_templates.json'), 'r') as file:
                 chat_templates = json.load(file)
-        except: chat_templates = {}
+        except Exception: chat_templates = {}
 
     # select matching template:
     try: template = chat_templates[model_name_or_path]
@@ -592,7 +591,7 @@ def get_chat_template(model_name_or_path:str):
                 sot = pattern[0]
                 eot = pattern[1] if len(pattern) > 1 else None
 
-            except:
+            except Exception:
                 if 'user' in template:
                     print(f'WARNING: Error when deocding pattern for role "{role}". Inferring from role "user".')
                     sot = template['user']['sot']['text'].replace('user', role)
@@ -642,7 +641,7 @@ def get_chat_template(model_name_or_path:str):
 
     return template
 
-def decode_chat_template(inputs:Union[List[int], List[str], str], model_name_or_path:str, *, return_indices:bool=False) -> List[Dict[str, Union[List[int], List[str], str]]]:
+def decode_chat_template(inputs:Union[List[int], TokenList, str], model_name_or_path:str, *, return_indices:bool=False) -> List[Dict[str, Union[List[int], TokenList, str, slice]]]:
     """Decodes a chat format string into a list of roles.
 
     Args:
@@ -746,4 +745,4 @@ def decode_chat_template(inputs:Union[List[int], List[str], str], model_name_or_
 
         return result
 
-    else: raise TypeError()
+    else: raise TypeError(f'`inputs` must be a `str` or a sequence, but is {type(inputs)!r}.')

@@ -8,11 +8,25 @@ from tqdm.autonotebook import trange
 from scipy.special import comb
 from sklearn.linear_model import Ridge
 from transformers import PreTrainedModel, PreTrainedTokenizer, AutoModel, AutoTokenizer
-from typing import Optional, List, Literal, Union, Callable, Any, Tuple
+from typing import Optional, List, Literal, Mapping, Union, Callable, Any, Tuple, Dict, TypeAlias, cast
 from numpy.typing import NDArray
+from .types import IntArray, FloatTensorOrArray
 
-from .retrieval import RetrieverExplanationBase, List_t, Tensor_t, append_tensor_t, compute_cosine_similarity_batched
+from .retrieval import RetrieverExplanationBase, RetrieverListDict_t, RetrieverTensorDict_t, append_tensor_t, compute_cosine_similarity_batched
 from .utils import sample_perturbations
+
+#=======================================================================#
+# Types:                                                                #
+#=======================================================================#
+
+RetrieverAttributionOnline_t:TypeAlias = Mapping[Literal['query', 'context'], FloatTensorOrArray]
+
+# narrowed, online-specific counterpart to `RetrieverAttributionOutput_t`:
+RetrieverAttributionOutputOnline_t:TypeAlias = Union[
+    RetrieverAttributionOnline_t,
+    Tuple[RetrieverAttributionOnline_t, Dict[str, Any]],
+    Tuple[RetrieverAttributionOnline_t, Dict[str, Any], Any],
+]
 
 #=======================================================================#
 # Helper Functions:                                                     #
@@ -42,14 +56,14 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self._x:Optional[Tensor_t]   = None # Tensor of shape (bs x n_inputs)
-        self._y:Optional[Tensor_t]   = None # Tensor of shape (bs x n_outputs)
-        self._phi:Optional[Tensor_t] = None # Tensor of shape (bs x n_inputs x encoding_size)
-        self._dPhi:Optional[Tensor_t]= None # Tensor of shape (bs x n_inputs x encoding_size)
-        self._a:Optional[Tensor_t]   = None # Tensor of shape (bs x n_layers x n_heads x n_outputs x n_inputs)
-        self._da:Optional[Tensor_t]  = None # Tensor of shape (bs x n_layers x n_heads x n_outputs x n_inputs)
+        self._x:Optional[RetrieverTensorDict_t]   = None # Tensor of shape (bs x n_inputs)
+        self._y:Optional[RetrieverTensorDict_t]   = None # Tensor of shape (bs x n_outputs)
+        self._phi:Optional[RetrieverTensorDict_t] = None # Tensor of shape (bs x n_inputs x encoding_size)
+        self._dPhi:Optional[RetrieverTensorDict_t]= None # Tensor of shape (bs x n_inputs x encoding_size)
+        self._a:Optional[RetrieverTensorDict_t]   = None # Tensor of shape (bs x n_layers x n_heads x n_outputs x n_inputs)
+        self._da:Optional[RetrieverTensorDict_t]  = None # Tensor of shape (bs x n_layers x n_heads x n_outputs x n_inputs)
 
-        self._special_tokens_mask:Optional[Tensor_t]=None
+        self._special_tokens_mask:Optional[RetrieverTensorDict_t]=None
 
     @classmethod
     def from_pretrained(cls, query_encoder_name_or_path:str, context_encoder_name_or_path:Optional[str]=None, *,
@@ -148,7 +162,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         else: return None
 
     @property
-    def in_tokens(self) -> Optional[List_t]:
+    def in_tokens(self) -> Union[RetrieverListDict_t, None]:
         """A dicionary containing the following two keys:
         - `'query'`: a list containing the tokenized query
         - `'context'`: a list containing the tokenized contexts"""
@@ -184,14 +198,14 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
         return self._context_encoder.config.name_or_path
     
     @property
-    def special_tokens_mask(self) -> Optional[Tensor_t]:
+    def special_tokens_mask(self) -> Optional[RetrieverTensorDict_t]:
         if self._special_tokens_mask is not None: return {key:
             ~value.detach().to(device='cpu', dtype=torch.bool, copy=True)
             for key, value in self._special_tokens_mask.items()
         }
         else: return None
 
-    def grad(self, filter_special_tokens:bool=True) -> Tensor_t:
+    def grad(self, filter_special_tokens:bool=True) -> RetrieverAttributionOnline_t:
         '''Gradients towards the inputs of the last batch.
 
         Args:
@@ -213,9 +227,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             # set the importance of special tokens to 0.
             grad = {key: grad[key] * self._special_tokens_mask[key][:,:,None] for key in grad}
 
-        return grad
+        return cast(RetrieverAttributionOnline_t, grad)
 
-    def aGrad(self, filter_special_tokens:bool=True) -> Tensor_t:
+    def aGrad(self, filter_special_tokens:bool=True) -> RetrieverAttributionOnline_t:
         '''AGrad (`da ⊙ a`) scores of the last batch.
 
         Args:
@@ -239,9 +253,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             # set the importance of special tokens to 0.
             aGrad = {key: aGrad[key] * self._special_tokens_mask[key][:,None,:] for key in aGrad}
 
-        return aGrad
+        return cast(RetrieverAttributionOnline_t, aGrad)
 
-    def gradIn(self, filter_special_tokens:bool=True) -> Tensor_t:
+    def gradIn(self, filter_special_tokens:bool=True) -> RetrieverAttributionOnline_t:
         '''GradIn (`dx ⊙ x`) scores of the last batch.
 
         Args:
@@ -268,13 +282,13 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             # set the importance of special tokens to 0.
             gradIn = {key: gradIn[key] * self._special_tokens_mask[key] for key in gradIn}
 
-        return gradIn
+        return cast(RetrieverAttributionOnline_t, gradIn)
 
     def intGrad(self, filter_special_tokens:bool=True, num_steps:int=100, batch_size:int=64, *,
             base:Optional[Literal['pos', 'mask', 'pad', 'unk']]='unk',
             output_offset:bool=False,
             output_coverage:bool=False,
-            verbose:bool=True) -> Tensor_t:
+            verbose:bool=True) -> RetrieverAttributionOutputOnline_t:
         '''Integrated gradient scores of the last batch.
 
         Args:
@@ -470,12 +484,12 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             intGrad = {key: intGrad[key] * self._special_tokens_mask[key] for key in intGrad}
 
         if not (output_offset or output_coverage):
-            return intGrad
+            return cast(RetrieverAttributionOutputOnline_t, intGrad)
 
         result = (intGrad, )
         if output_offset:   result = result + ({'query': bl_qry_similarity.sum(), 'context': bl_ctx_similarity.squeeze()},)
         if output_coverage: result = result + ({'query': coverage_qry, 'context': coverage_ctx},)
-        return result
+        return cast(RetrieverAttributionOutputOnline_t, result)
 
     def lime(self, filter_special_tokens:bool=True, batch_size:int=64, *,
             max_samples_query:Union[int, Literal['inf', 'auto']]='auto',
@@ -485,7 +499,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             kernel_fn:Optional[Callable[[Any], Any]]=None,
             output_offset:bool=False,
             output_coverage:bool=False,
-            verbose:bool=True) -> Union[Tensor_t, Tuple[Tensor_t, dict[str, Any]], Tuple[Tensor_t, dict[str, Any], Any]]:
+            verbose:bool=True) -> RetrieverAttributionOutputOnline_t:
         '''Lime scores of the last batch.
 
         Args:
@@ -589,12 +603,12 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             lime = {key: lime[key] * self._special_tokens_mask[key] for key in lime}
 
         if not (output_offset or output_coverage):
-            return lime
+            return cast(RetrieverAttributionOutputOnline_t, lime)
 
         result = (lime, )
         if output_offset:   result = result + (intercepts,)
         if output_coverage: result = result + (prediction_score,)
-        return result
+        return cast(RetrieverAttributionOutputOnline_t, result)
 
     def shap(self, filter_special_tokens:bool=True, batch_size:int=64, *,
             max_samples_query:Union[int, Literal['inf', 'auto']]='auto',
@@ -602,7 +616,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             base:Literal['mask', 'pad', 'unk']='unk',
             complementary:bool=True,
             output_offset:bool=False,
-            verbose:bool=True) -> Union[Tensor_t, Tuple[Tensor_t, dict[str, Any]]]:
+            verbose:bool=True) -> RetrieverAttributionOutputOnline_t:
         '''KernelSHAP scores of the last batch.
 
         Args:
@@ -732,9 +746,9 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             shap = {key: shap[key] * self._special_tokens_mask[key] for key in shap}
 
         if not output_offset:
-            return shap
+            return cast(RetrieverAttributionOutputOnline_t, shap)
 
-        return shap, null_outputs
+        return cast(RetrieverAttributionOutputOnline_t, (shap, null_outputs))
 
     def __sample_perturbations(self,
             base: Literal['mask', 'pad', 'unk'],
@@ -875,7 +889,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             batch_size:Optional[int]=None,
             max_length:Optional[int]=None,
             **kwargs
-        ) -> Tuple[Union[List[str],NDArray[np.int_]],torch.FloatTensor]:
+        ) -> Tuple[Union[List[str],IntArray],torch.FloatTensor]:
         
         # control gradient computation:
         if compute_grad:
