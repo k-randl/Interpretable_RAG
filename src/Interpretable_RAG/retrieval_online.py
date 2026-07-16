@@ -102,7 +102,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             kwargs:                 Additional keyword arguments passed to the embedding model.
 
         '''
-        from .tools import create_faiss_index_flat
+        from .utils import create_faiss_index_flat
 
         # save documents:
         if save_folder is not None:
