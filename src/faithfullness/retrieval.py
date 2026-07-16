@@ -3,10 +3,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.autonotebook import tqdm
 
-from typing import Dict, List, Tuple, Literal
+from typing import Dict, List, Tuple, Literal, Any, cast
 from numpy.typing import NDArray
 
 from src.Interpretable_RAG.utils import bootstrap_ci
+from src.Interpretable_RAG.retrieval import get_retriever_scores, RetrieverMethods_t
 from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
 
 #=======================================================================#
@@ -34,7 +35,7 @@ class AIPCForRetrieval:
         self.query_format = query_format
         self.xs           = np.arange(0., 1.01, .01)
 
-    def __call__(self, data:Dict[str, List], k:int=5, target:Literal['query', 'context']='context', method:str='intGrad', *, step:int=1, normalize:bool=True, method_args:Dict[str, any]={}, **kwargs) -> float:
+    def __call__(self, data:Dict[str, List], k:int=5, target:Literal['query', 'context']='context', method:str='intGrad', *, step:int=1, normalize:bool=True, method_args:Dict[str, Any]={}, **kwargs) -> Tuple[float, float, float]:
         '''Compute a faithfulness score by comparing area-under-curve (AUC) values for two
         perturbation strategies: perturbing most-relevant features first (MoRF) and
         perturbing least-relevant features first (LeRF).
@@ -60,10 +61,11 @@ class AIPCForRetrieval:
             **kwargs:                     Additional keyword arguments forwarded to self.retriever.forward.
 
         Returns:
-            aipc (float):
-                Absolute difference between the area under the mean MoRF curve and the
-                area under the mean LeRF curve. A larger value indicates a greater
-                separation between the two perturbation strategies.
+            Tuple[float, float, float]:
+                - **aipc**: Absolute difference between the area under the mean MoRF curve and the
+                  area under the mean LeRF curve. A larger value indicates a greater
+                  separation between the two perturbation strategies.
+                - **lower_bound**, **upper_bound**: percentile-based bootstrap confidence interval for `aipc`.
         '''
 
         # perturbation curve most relevant first:
@@ -87,7 +89,7 @@ class AIPCForRetrieval:
         return self.get_aipc()
 
     def perturbe(self, data:Dict[str, List], descending:bool, k:int=5, target:Literal['query', 'context']='context', method:str='intGrad', *,
-                 step:int=1, method_args:Dict[str, any]={}, desc:str='Computing perturbations', **kwargs):
+                 step:int=1, method_args:Dict[str, Any]={}, desc:str='Computing perturbations', **kwargs):
         '''Compute perturbation-based fidelity curves by progressively masking context tokens
         and measuring the change in retrieval similarity.
         For each (query, context) pair in `data` this method:
@@ -142,21 +144,22 @@ class AIPCForRetrieval:
                 reorder=True,
                 **kwargs
             )
+            assert self.retriever._x is not None, 'retriever.forward(...) must populate `_x`'
 
             # calculate relevancy scores:
-            if   method == 'random': relevancy = torch.rand(self.retriever._x[target].shape)
-            elif method == 'grad':   relevancy = [doc.mean(axis=-1) for doc in self.retriever.grad(**method_args)[target]]
-            elif method == 'aGrad':  relevancy = [doc.mean(axis=0) for doc in self.retriever.aGrad(**method_args)[target]]
-            else:                    relevancy = getattr(self.retriever, method)(**method_args)[target]
+            if method == 'random': relevancy = torch.rand(self.retriever._x[target].shape)
+            else:                  relevancy = get_retriever_scores(self.retriever, cast(RetrieverMethods_t, method), **method_args)[target]
 
             with torch.no_grad():
                 # get original input:
-                qry_in:torch.Tensor = torch.tensor(self.retriever._x['query']).to(self.retriever.query_encoder.device)
-                ctx_in:torch.Tensor = torch.tensor(self.retriever._x['context']).to(self.retriever.context_encoder.device)
+                qry_in:torch.Tensor = self.retriever._x['query'].to(self.retriever.query_encoder.device)
+                ctx_in:torch.Tensor = self.retriever._x['context'].to(self.retriever.context_encoder.device)
 
                 # get attention masks:
-                qry_msk:torch.Tensor = qry_in != self.retriever.tokenizer.pad_token_id
-                ctx_msk:torch.Tensor = ctx_in != self.retriever.tokenizer.pad_token_id
+                pad_token_id = self.retriever.tokenizer.pad_token_id
+                assert pad_token_id is not None, 'tokenizer must define a pad_token_id'
+                qry_msk:torch.Tensor = cast(torch.Tensor, qry_in != pad_token_id)
+                ctx_msk:torch.Tensor = cast(torch.Tensor, ctx_in != pad_token_id)
 
                 if target == 'query':
                     ys.append(self._perturbe_qry(qry_in, ctx_in, qry_msk, ctx_msk, similarity, relevancy, descending, step))
@@ -176,12 +179,12 @@ class AIPCForRetrieval:
         rel = relevancy[0].argsort(descending=descending)
 
         pcs = [[(0., 0.)] for _ in similarity]
-        for i in range(0, len(rel), step):
+        for t in range(0, len(rel), step):
             # copy query:
             qry_ptb = qry_in.clone()
 
             # mask tokens:
-            qry_ptb[0, rel[:i+step]] = self.retriever.tokenizer.mask_token_id
+            qry_ptb[0, rel[:t+step]] = self.retriever.tokenizer.mask_token_id
 
             # apply embedding to query:
             qry_out = self.retriever.query_encoder(input_ids=qry_ptb, attention_mask=qry_msk)
@@ -190,7 +193,7 @@ class AIPCForRetrieval:
             sim_ptb = qry_out.last_hidden_state[0, 0, :] @ ctx_out.last_hidden_state[:, 0, :].T
 
             for i, sim in enumerate((sim_ptb.cpu() - similarity.cpu()).numpy()):
-                pcs[i].append(((i+step)/float(len(rel)), sim))
+                pcs[i].append(((t+step)/float(len(rel)), sim))
 
         # interpolate curve:
         ys = [np.interp(self.xs, *np.array(pc).T) for pc in pcs]
@@ -203,7 +206,7 @@ class AIPCForRetrieval:
         qry_out = self.retriever.query_encoder(input_ids=qry_in, attention_mask=qry_msk)
 
         ys = []
-        for id, (sim, rel) in enumerate(zip(similarity, relevancy)):
+        for ctx_id, (sim, rel) in enumerate(zip(similarity, relevancy)):
             rel = rel.argsort(descending=descending)
 
             pc = [(0., 0.)]
@@ -212,13 +215,13 @@ class AIPCForRetrieval:
                 ctx_ptb = ctx_in.clone()
 
                 # mask tokens:
-                ctx_ptb[id, rel[:i+step]] = self.retriever.tokenizer.mask_token_id
+                ctx_ptb[ctx_id, rel[:i+step]] = self.retriever.tokenizer.mask_token_id
 
                 # apply embedding to context:
                 ctx_out = self.retriever.context_encoder(input_ids=ctx_ptb, attention_mask=ctx_msk)
 
                 # compute similarity:
-                sim_ptb = qry_out.last_hidden_state[0, 0, :] @ ctx_out.last_hidden_state[id, 0, :]
+                sim_ptb = qry_out.last_hidden_state[0, 0, :] @ ctx_out.last_hidden_state[ctx_id, 0, :]
 
                 pc.append(((i+step)/float(len(rel)), (sim_ptb-sim).cpu().numpy()))
 
@@ -251,7 +254,7 @@ class AIPCForRetrieval:
         # return aipc:
         return (float(aipc.mean(axis=0)),) + bootstrap_ci(aipc, num_samples=num_samples, confidence_level=confidence_level)
 
-    def plot_lerf(self, ax:plt.Axes, *, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def plot_lerf(self, ax:plt.Axes, *, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float32], NDArray[np.float32]]:
         '''Plot the LeRF curve on a matplotlib axis.
 
         Compute the mean of the stored LeRF values across the first dimension and
@@ -264,7 +267,7 @@ class AIPCForRetrieval:
                                         (e.g., color, linestyle, linewidth).
         
         Returns:
-            `Tuple[numpy.ndarray, numpy.ndarray]` of x and y yalues of the plotted curve.
+            `Tuple[numpy.ndarray, numpy.ndarray]` of x and y values of the plotted curve.
         '''
 
         # calculate means and convert to percent:
@@ -276,7 +279,7 @@ class AIPCForRetrieval:
 
         return xs, ys
 
-    def plot_morf(self, ax:plt.Axes, *, label:str='MoRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def plot_morf(self, ax:plt.Axes, *, label:str='MoRF', **kwargs) -> Tuple[NDArray[np.float32], NDArray[np.float32]]:
         '''Plot the MoRF curve on a matplotlib axis.
 
         Compute the mean of the stored MoRF values across the first dimension and
@@ -289,7 +292,7 @@ class AIPCForRetrieval:
                                         (e.g., color, linestyle, linewidth).
         
         Returns:
-            `Tuple[numpy.ndarray, numpy.ndarray]` of x and y yalues of the plotted curve.
+            `Tuple[numpy.ndarray, numpy.ndarray]` of x and y values of the plotted curve.
         '''
 
         # calculate means and convert to percent:
@@ -319,4 +322,4 @@ class AIPCForRetrieval:
         ax.set_aspect(1)
         ax.legend()
         ax.set_xlabel('Masked Tokens [%]')
-        ax.set_ylabel('Normalized Similarity $\Delta$ [%]')
+        ax.set_ylabel(r'Normalized Similarity $\Delta$ [%]')

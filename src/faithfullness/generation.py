@@ -4,13 +4,11 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.autonotebook import tqdm
-from typing import Optional, Dict, List
-
 from typing import Optional, Dict, List, Tuple, Literal, Union
 from numpy.typing import NDArray
 
 from src.Interpretable_RAG.utils import bootstrap_ci
-from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration, generate_permutations, create_rag_prompt
+from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 
 #=======================================================================#
 # Generator Explanation Faithfullness:                                  #
@@ -97,33 +95,36 @@ class AIPCForGeneration:
             self.generator.explain_generate(
                 query=qry,
                 contexts=ctx[:5],
-                max_samples_query='auto',
+                max_samples_query=0,
                 max_samples_context='inf',
                 conditional=True,
                 **kwargs
             )
 
+            # Save token probabilities:
+            permutations      = self.generator._shap_cache['context']['indices'].copy()
+            new_items         = self.generator._shap_cache['context']['new_docs'].copy()
+            probs             = np.stack([p.flatten() for p in self.generator.cmp_token_probs] + [self.generator.gen_token_probs.flatten()])
+
             # Get shapley values for the generated tokens:
-            relevancy['Precise'] = self.generator.get_shapley_values('context', 'token')
+            relevancy['Precise'] = self.generator.shap('context', 'token')
 
             # Get random baseline:
             relevancy['Random'] = np.random.random(relevancy['Precise'].shape)
 
-            # Generate approximated explanations:
-            self.generator.explain_generate(
-                query=qry,
-                contexts=ctx[:5],
-                max_samples_query='auto',
-                max_samples_context=30,
-                batch_size=batch_size,
-                conditional=True,
-                complementary=complementary,
-                **kwargs
-            )
+            # Switch to approximation mode:
+            n_items   = new_items.shape[1]
+            n_subsets = 2 ** n_items
 
-            # Get the shap parameters:
-            indices = self.generator._shap_cache['context']['indices'].copy()
-            sets    = self.generator._shap_cache['context']['sets'].copy()
+            indices = np.arange(n_subsets)
+            sets    = ((np.arange(n_subsets)[:, None] >> np.arange(n_items)[None, :]) & 1).astype(bool)
+
+            self.generator._shap_cache['context'] = {
+                'precise': False,
+                'complementary': (complementary==True),
+                'indices': indices,
+                'sets': sets
+            }
 
             # Get shapley values for the generated tokens:
             for max_samples in range(mc_sample_size, 31, 5):
@@ -143,40 +144,19 @@ class AIPCForGeneration:
                 if complementary != False:
                     sample_indices = np.concatenate([sample_indices, (len(indices)-1)-sample_indices])
 
-                self.generator._shap_cache['context']['indices'] = np.concatenate([indices[:1], indices[sample_indices], indices[-1:]])
-                self.generator._shap_cache['context']['sets']    = np.concatenate([sets[:1], sets[sample_indices], sets[-1:]])
+                self.generator._shap_cache['context']['indices']  = np.concatenate([indices[:1], indices[sample_indices], indices[-1:]])
+                self.generator._shap_cache['context']['sets'] = np.concatenate([sets[:1], sets[sample_indices], sets[-1:]])
 
                 # Get kernel shapley values:
-                relevancy[f'Kernel (n = {max_samples:d})'] = self.generator.get_shapley_values('context', 'token', num_samples=1, sample_size=max_samples)
+                relevancy[f'Kernel (n = {max_samples:d})'] = self.generator.shap('context', 'token', num_samples=1, sample_size=max_samples)
 
                 # Get Monte Carlo approximated shapley values:
-                relevancy[f'Monte Carlo (n = {max_samples:d})'] = self.generator.get_shapley_values('context', 'token', num_samples=num_mc_samples, sample_size=mc_sample_size)
+                relevancy[f'Monte Carlo (n = {max_samples:d})'] = self.generator.shap('context', 'token', num_samples=num_mc_samples, sample_size=mc_sample_size)
+
+                # Get LIME values:
+                relevancy[f'LIME (n = {max_samples:d})'] = self.generator.lime('context', 'token')
 
             for key in relevancy:
-                # generate prompts for perturbed inputs:
-                permutations, new_items, perturbed_prompts = generate_permutations(
-                    ctx,                                                       # permute the contexts
-                    lambda items:create_rag_prompt(qry, items, system=system), # build a prompt for each permutation
-                )
-
-                # generate comparison output:
-                num_batches = int(np.ceil(len(perturbed_prompts) / batch_size))
-                for j in range(num_batches):
-                    # print batch number:
-                    if num_batches > 1: print(f'Batch {j+1:d} of {num_batches:d}:')
-
-                    # get prompts of this batch:
-                    prompts_batch = perturbed_prompts[j * batch_size:(j+1) * batch_size]
-
-                    # generate probabilities:
-                    self.generator.compare(
-                        [self.generator.tokenizer.apply_chat_template(prmpt, tokenize=False) for prmpt in prompts_batch],
-                        'last'
-                    )
-
-                # Flatten each token probability array from compared documents:
-                probs = np.stack([p.flatten() for p in self.generator.cmp_token_probs])[-permutations.max()-1:]
-
                 # perturbation curve most relevant first:
                 if key not in self.morf: self.morf[key] = np.full((num_queries, num_points), np.nan, dtype=float)
                 self.morf[key][i0+i] = self._make_pc(relevancy[key], True, permutations, new_items, probs, step=step).mean(axis=0)
@@ -190,8 +170,8 @@ class AIPCForGeneration:
                 pickle.dump((self.morf, self.lerf), f)
 
         # delete tmp file if successful:
-#        if os.path.exists(tmp_file):
-#            os.remove(tmp_file)
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
 
         for key in self.morf:
             # set first value to mean:
@@ -215,8 +195,27 @@ class AIPCForGeneration:
         # return area inside curves:
         return {key:self.get_aipc(key) for key in self.morf}
 
-    def _make_pc(self, relevancy:NDArray[np.float64], descending:bool, permutations:NDArray[np.int_], new_items:NDArray[np.int_], probs:NDArray[np.float64], *, step:int=1):
-        
+    def _make_pc(self, relevancy:NDArray[np.float32], descending:bool, permutations:NDArray[np.int_], new_items:NDArray[np.int_], probs:NDArray[np.float32], *, step:int=1):
+        '''Build a perturbation curve from cached SHAP permutation data.
+        Orders documents by `relevancy` (most- or least-relevant first, per `descending`),
+        looks up the cached generation probability at each permutation step from `probs`
+        via `permutations`/`new_items`, and interpolates the resulting curve onto `self.xs`.
+
+        Args:
+            relevancy (NDArray[np.float32]):    Per-document relevancy/importance scores.
+            descending (bool):                  If `True`, perturb most-relevant documents first (MoRF);
+                                                if `False`, least-relevant first (LeRF).
+            permutations (NDArray[np.int_]):    Cached permutation index matrix (from `self.generator._shap_cache`).
+            new_items (NDArray[np.int_]):       Cached per-step newly-added-document indices (from `self.generator._shap_cache`).
+            probs (NDArray[np.float32]):        Cached generation probabilities, one row per permutation.
+            step (int, optional):               Number of additional documents to reveal at each
+                                                perturbation step. Defaults to 1.
+
+        Returns:
+            NDArray[np.float32]: Array of shape (num_documents, len(self.xs)) with one
+                interpolated perturbation curve per document.
+        '''
+
         # calculate relevancy:
         rel = relevancy.argsort(axis=0)
         if descending: rel = rel[::-1]
@@ -258,7 +257,7 @@ class AIPCForGeneration:
         # return aipc:
         return (float(aipc.mean(axis=0)),) + bootstrap_ci(aipc, num_samples=num_samples, confidence_level=confidence_level)
  
-    def plot_lerf(self, ax:plt.Axes, key:str, *, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def plot_lerf(self, ax:plt.Axes, key:str, *, label:str='LeRF', **kwargs) -> Tuple[NDArray[np.float32], NDArray[np.float32]]:
         '''Plot the LeRF curve on a matplotlib axis.
 
         Compute the mean of the stored LeRF values across the first dimension for the first documents
@@ -271,7 +270,7 @@ class AIPCForGeneration:
                                         (e.g., color, linestyle, linewidth).
         
         Returns:
-            `Tuple[numpy.ndarray, numpy.ndarray]` of x and y yalues of the plotted curve.
+            `Tuple[numpy.ndarray, numpy.ndarray]` of x and y values of the plotted curve.
         '''
 
         # calculate means and convert to percent:
@@ -283,7 +282,7 @@ class AIPCForGeneration:
 
         return xs, ys
 
-    def plot_morf(self, ax:plt.Axes, key:str, *, label:str='MoRF', **kwargs) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def plot_morf(self, ax:plt.Axes, key:str, *, label:str='MoRF', **kwargs) -> Tuple[NDArray[np.float32], NDArray[np.float32]]:
         '''Plot the MoRF curve on a matplotlib axis.
 
         Compute the mean of the stored MoRF values across the first dimension for the documents
@@ -296,7 +295,7 @@ class AIPCForGeneration:
                                         (e.g., color, linestyle, linewidth).
         
         Returns:
-            `Tuple[numpy.ndarray, numpy.ndarray]` of x and y yalues of the plotted curve.
+            `Tuple[numpy.ndarray, numpy.ndarray]` of x and y values of the plotted curve.
         '''
 
         # calculate means and convert to percent:
@@ -326,4 +325,4 @@ class AIPCForGeneration:
         ax.set_aspect(1)
         ax.legend()
         ax.set_xlabel('Masked Documents [%]')
-        ax.set_ylabel('Normalized $\Delta$ Token Probability [%]')
+        ax.set_ylabel(r'Normalized $\Delta$ Token Probability [%]')
