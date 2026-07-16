@@ -1,4 +1,6 @@
 # Cache and system files
+.*
+**/.*
 .github/
 .idea/
 __pycache__/
