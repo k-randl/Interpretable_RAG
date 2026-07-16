@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Literal, List, Optional, Tuple
-from .types import FloatArray
+from src.Interpretable_RAG.types import FloatArray
 from sklearn.linear_model import LinearRegression
 from scipy.special import comb
 import torch
