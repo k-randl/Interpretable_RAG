@@ -23,7 +23,7 @@ Configuration:
     >>> config.generation.MAX_GEN_LEN = 500
 """
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 __author__ = "Korbinian Randl & Guido Rocchietti"
 
 # Core classes
