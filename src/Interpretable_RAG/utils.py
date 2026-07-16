@@ -4,7 +4,7 @@ import torch
 import random
 import numpy as np
 from importlib import import_module
-from typing import Optional, Callable, Dict, List, Union, Tuple, Any
+from typing import Optional, Callable, Dict, List, Literal, Union, Tuple, Any
 
 from numpy.typing import NDArray
 
@@ -449,6 +449,88 @@ def sample_perturbations(items:List[Any], func:Callable[[List[Any]], Any], num_s
         perturbations[i] = func(current_items)
 
     return subsets, perturbations
+
+#====================================================================================================#
+# Index utilities:                                                                                   #
+#====================================================================================================#
+
+def load_faiss_index(index_path:str, gpu:bool=False) -> Any:
+    """Loads a FAISS index from a file.
+
+    Args:
+        index_path (str):   Path to the index file.
+        gpu (bool, optional): If `True`, moves the loaded index to the (first) GPU. Defaults to `False`.
+
+    Returns:
+        faiss.Index: The loaded FAISS index.
+    """
+    import faiss
+
+    print(f'Loading FAISS index from: {index_path}')
+    index = faiss.read_index(index_path)
+
+    if gpu:
+        print('Moving index to GPU...')
+        res = faiss.StandardGpuResources()
+        index = faiss.index_cpu_to_gpu(res, 0, index)
+
+    print(f'Index loaded successfully with {index.ntotal} vectors.')
+    return index
+
+def save_faiss_index(index:Any, output_path:str) -> None:
+    """Saves a FAISS index to a file.
+
+    Args:
+        index (faiss.Index): The FAISS index to save.
+        output_path (str):   Path to save the index file to.
+    """
+    import faiss
+
+    print(f'Saving index to {output_path}...')
+    faiss.write_index(index, output_path)
+    print('Index saved successfully.')
+
+def create_faiss_index_flat(embeddings:NDArray, save_path:Optional[str]=None, type_index:Literal['IP','L2']='IP') -> Any:
+    """Creates a flat FAISS index from a set of embeddings.
+
+    Args:
+        embeddings (NDArray):       The embeddings to add to the index, with shape `(num_vectors, dim)`.
+        save_path (str, optional):  If provided, saves the resulting index to this path.
+        type_index (str, optional): The similarity measure to use, either `'IP'` (inner product,
+                                    for cosine similarity) or `'L2'` (Euclidean distance). Defaults to `'IP'`.
+
+    Returns:
+        faiss.Index: The FAISS index containing the given embeddings.
+
+    Raises:
+        ValueError: If `type_index` is not one of `'IP'`, `'L2'`.
+    """
+    if type_index not in ('IP', 'L2'):
+        raise ValueError(f"Parameter `type_index` must be one of 'IP', 'L2', but is {type_index!r}.")
+
+    import faiss
+
+    num_vectors, dim = len(embeddings), len(embeddings[0])
+
+    if type_index == 'IP':
+        # inner product for cosine similarity:
+        faiss_index = faiss.IndexFlatIP(dim)
+
+    else:
+        from sklearn.preprocessing import normalize
+        faiss_index = faiss.IndexFlatL2(dim)
+        embeddings  = normalize(embeddings)
+
+    print(f'Index created with {num_vectors} vectors of dimension {dim}')
+
+    # add vectors to the FAISS index:
+    faiss_index.add(np.array(embeddings, dtype=np.float32))
+
+    if save_path is not None:
+        print(f'Saving index to {save_path}')
+        faiss.write_index(faiss_index, save_path)
+
+    return faiss_index
 
 #====================================================================================================#
 # Messy transformers convenience functions:                                                          #

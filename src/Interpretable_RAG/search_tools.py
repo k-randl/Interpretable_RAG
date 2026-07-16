@@ -1,6 +1,6 @@
 #%%
 import os
-import argparse
+import torch
 try:
     import faiss
 except ImportError:
@@ -9,17 +9,23 @@ except ImportError:
 import numpy as np
 import pandas as pd
 try:
-    import pytrec_eval
     import ir_measures
 except ImportError:
-    pytrec_eval = None
     ir_measures = None
 from time import time
 from transformers import AutoModel, AutoTokenizer
-from .tools import embed_passages
-from argparse import Namespace
+from .utils import load_faiss_index
 
 #%%
+def embed_passages(passages, model, tokenizer, device="cuda", max_length=512):
+    """Embed a list of passages using a model and a tokenizer."""
+    inputs = tokenizer(passages, padding=True, truncation=True, return_tensors="pt", max_length=max_length)
+    inputs = {key: val.to(device) for key, val in inputs.items()}
+    with torch.no_grad():
+        outputs = model(**inputs)
+        embeddings = outputs.last_hidden_state[:, 0, :]  # Mean pooling
+    return embeddings.cpu().numpy()
+
 def generate_query_embeddings(queries, model_name, max_length=512, device='cuda'):
     """Generate embeddings for queries using a specified transformer model."""
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -29,28 +35,6 @@ def generate_query_embeddings(queries, model_name, max_length=512, device='cuda'
     embeddings = embed_passages(queries, model, tokenizer, device=device, max_length=max_length)
     print(f"Generated embeddings for {len(queries)} queries.")
     return embeddings
-
-def load_faiss_index(index_path):
-    """Load a FAISS index from a file."""
-    print(f"Loading FAISS index from: {index_path}")
-    index = faiss.read_index(index_path)
-    print(f"Index loaded successfully with {index.ntotal} vectors.")
-    return index
-
-def load_faiss_index_gpu(index_path):
-    """Load a FAISS index from a file and move to GPU."""
-    print(f"Loading FAISS index from: {index_path}")
-    index = faiss.read_index(index_path)
-    print("Moving index to GPU...")
-    res = faiss.StandardGpuResources()
-    index = faiss.index_cpu_to_gpu(res, 0, index)
-    print(f"Index loaded successfully with {index.ntotal} vectors.")
-    return index
-
-def search_index(index, query_embeddings, top_k):
-    """Perform FAISS search."""
-    distances, indices = index.search(query_embeddings, top_k)
-    return distances, indices
 
 def load_data(file_path, column_names=None, sep=None):
     """Generic function to load a dataset from a given file path."""
@@ -67,18 +51,28 @@ def map_results(indices, distances, qids, id_mapping, top_k):
     results = {'qid': [], 'docno': [], 'rank': [], 'score': []}
     
     for i in range(len(distances)):
-        topic_id = [qids[i]] * top_k
-        doc_indices = [x for x in indices[i]]
-        dist = distances[i].tolist()
+        # FAISS pads under-filled result sets (fewer than top_k matches found)
+        # with -1; drop those entries instead of looking them up, since -1 is
+        # not a valid id_mapping row.
+        valid = indices[i] != -1
+        if not valid.all():
+            print(f"WARNING: Query {qids[i]!r} returned only {int(valid.sum())} of {top_k} requested results.")
+
+        topic_id = [qids[i]] * int(valid.sum())
+        doc_indices = indices[i][valid].tolist()
+        dist = distances[i][valid].tolist()
         doc_ids = id_mapping.loc[doc_indices]['id'].tolist()
-        rank = [j+1 for j in range(top_k)]
-        
+        rank = [j+1 for j in range(len(doc_indices))]
+
         if len(topic_id) == len(doc_ids) == len(rank) == len(dist):
             results['qid'] += topic_id
             results['docno'] += doc_ids
             results['rank'] += rank
             results['score'] += dist
-            
+        else:
+            print(f"WARNING: Skipping query {qids[i]!r} due to a result-length mismatch "
+                  f"(qid={len(topic_id)}, docno={len(doc_ids)}, rank={len(rank)}, score={len(dist)}).")
+
     return pd.DataFrame(results)
 
 
@@ -127,7 +121,10 @@ def search(args):
         print("Using provided ID mapping...")
         id_mapping = args.id_mapping
         print(id_mapping.head())
-    
+    else:
+        print("No valid id_mapping provided. `args.id_mapping` must be a path (str) or a pandas DataFrame.")
+        return
+
     # Generate or load embeddings
     if hasattr(args, 'query_embeddings_path') and args.query_embeddings_path:
         print(f"Loading query embeddings from: {args.query_embeddings_path}")
@@ -179,7 +176,10 @@ def search(args):
     elif metric_type == faiss.METRIC_INNER_PRODUCT:
         print("The index is using Inner Product (Dot Product).")
     else:
-        print(f"The index is using an unknown metric type: {metric_type}")
+        raise ValueError(
+            f"Unsupported FAISS metric type: {metric_type}. "
+            "Only faiss.METRIC_L2 and faiss.METRIC_INNER_PRODUCT are supported."
+        )
     
     # Process results
     results_df = map_results(indices, distances, qids, id_mapping, args.top_k)
@@ -237,12 +237,16 @@ def generate_args(year, model, conversational_path, index_type='flat',
         2020: "CAST2020",
         2022: "CAST2022"
     }
-    model_paths = {
-        "dragon": "dragon-plus-context-encoder",
-        "snowflake": "snowflake-arctic-embed-l-v2.0"
+    # HuggingFace Hub identifiers for the context/query encoders of each model family.
+    # `model_paths` (the local directory-path segment) is derived from `context_encoder`
+    # below rather than duplicated, so the two can never drift out of sync.
+    model_encoders = {
+        "dragon":    {"context_encoder": "facebook/dragon-plus-context-encoder",  "query_encoder": "facebook/dragon-plus-query-encoder"},
+        "snowflake": {"context_encoder": "Snowflake/snowflake-arctic-embed-l-v2.0", "query_encoder": "Snowflake/snowflake-arctic-embed-l-v2.0"},
     }
-    
-    model_name = model_paths[model] if model == 'snowflake' else 'facebook/dragon-plus-query-encoder'
+    model_paths = {name: encoders["context_encoder"].split('/')[-1] for name, encoders in model_encoders.items()}
+
+    model_name = model_encoders[model]["query_encoder"]
     base_path = os.path.join(conversational_path, base_paths[year])
     model_path = os.path.join(base_path, f"passage_embeddings/{model_paths[model]}")
     index_path = os.path.join(model_path, f"{indexes[index_type]}/{index_name}")
