@@ -78,8 +78,15 @@ def _wrap_latex_tabular(rows:str, prefix:str) -> str:
             cmap[k] = f'{prefix}{i:d}'
 
         else:
-            for old, new in reversed(cmap.items()):
-                row = row.replace(old, new)
+            if cmap:
+                # Single atomic pass over all keys currently known, longest first with a
+                # trailing `(?!\d)`: prevents e.g. "cl1" from matching inside "cl10"/"cl11",
+                # and (unlike sequential str.replace calls) can't have one key's replacement
+                # text get clobbered by a later key's substitution.
+                sub_re = re.compile(
+                    '(?:' + '|'.join(re.escape(k) for k in sorted(cmap, key=len, reverse=True)) + r')(?!\d)'
+                )
+                row = sub_re.sub(lambda m: cmap[m.group(0)], row)
             clean_rows.append(row)
 
     color_defs = [
@@ -205,9 +212,9 @@ def html_legend_discrete(names:List[str], cmap:Colormap, vals:Optional[List[floa
     
     # format texts:
     if vals is None:
-        texts = [f'<i>{n}</i>' for n in names]
+        texts = [f'<i>{escape(n)}</i>' for n in names]
     else:
-        texts = [f'<i>{n}</i><br><small>({v * 100.:.0f}%)</small>' for n, v in zip(names, vals, strict=True)]
+        texts = [f'<i>{escape(n)}</i><br><small>({v * 100.:.0f}%)</small>' for n, v in zip(names, vals, strict=True)]
 
     # return legend:
     return (
@@ -236,9 +243,9 @@ def html_legend_continuous(names:List[str], cmap:Colormap, vals:Optional[List[fl
 
     # format texts:
     if vals is None:
-        texts = [f'<i>{n}</i>' for n in names]
+        texts = [f'<i>{escape(n)}</i>' for n in names]
     else:
-        texts = [f'<div><i>{n}</i><br><small>({v * 100.:.0f}%)</small></div>' for n, v in zip(names, vals, strict=True)]
+        texts = [f'<div><i>{escape(n)}</i><br><small>({v * 100.:.0f}%)</small></div>' for n, v in zip(names, vals, strict=True)]
 
     # return a simple horizontal colorbar:
     return (
@@ -416,7 +423,7 @@ def highlight_dominant_passages(scores:FloatArray, tokens:Iterable[str], title:s
     html_text = (
         '<tr style="border-top: 1px solid">\n' +
         '   <td style="text-align:right; vertical-align:top">\n' +
-        '       <b style="line-height:2">' + title + ':</b>\n' +
+        '       <b style="line-height:2">' + escape(title) + ':</b>\n' +
         '   </td>\n' +
         '   <td style="text-align:left; vertical-align:top">\n' +
         '       <div style="line-height:2">' + ''.join(html_tokens) + '</div>\n' + html_legend +
@@ -654,7 +661,7 @@ def higlight_importance_retriever(explanation:RetrieverExplanationBase, document
 
     # fallback for document names:
     if document_names is None:
-        sep = '~' if output_format == 'latex' else '&nbsp;'
+        sep = '~' if output_format == 'latex' else ' '
         document_names = [f'Document{sep}{i+1:d}' for i in range(len(scores['context']))]
     elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
@@ -959,7 +966,7 @@ def higlight_attribution_generator(explanation:GeneratorExplanationBase, documen
 
     # fallback for document names:
     if document_names is None:
-        sep = '~' if output_format == 'latex' else '&nbsp;'
+        sep = '~' if output_format == 'latex' else ' '
         document_names = [f'Document{sep}{i+1:d}' for i in range(len(scores['context']))]
     elif len(document_names) != len(scores['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 
@@ -1296,7 +1303,7 @@ def higlight_importance_rag(explanation:ExplainableAutoModelForRAG, document_nam
 
     # fallback for document names:
     if document_names is None:
-        sep = '~' if output_format == 'latex' else '&nbsp;'
+        sep = '~' if output_format == 'latex' else ' '
         document_names = [f'Document{sep}{i+1:d}' for i in range(len(retriever_attr['context']))]
     elif len(document_names) != len(retriever_attr['context']): raise ValueError('`len(document_names)` does not match the number of documents!')
 

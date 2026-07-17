@@ -340,6 +340,9 @@ class ExplainableAutoModelForRAG(RAGExplanation):
             ValueError: If `k` is None in offline mode, or if neither `contexts` nor `k` is specified in
             online mode.
         """
+        assert isinstance(self.retriever, (ExplainableAutoModelForOnlineRetrieval, ExplainableAutoModelForOfflineRetrieval))
+        assert isinstance(self.generator, ExplainableAutoModelForGeneration)
+
         # check parameters:
         contexts = retriever_kwargs.pop('contexts', contexts)
         k        = retriever_kwargs.pop('k', k)
@@ -382,7 +385,7 @@ class ExplainableAutoModelForRAG(RAGExplanation):
         if not hasattr(self, 'retrieved_sim'):
             raise AttributeError('`__call__(...)` needs to be called at least once before accessing `document_importance`!')
 
-        doc_importance_retriever = self.retrieved_sim.numpy()
+        doc_importance_retriever = self.retrieved_sim.float().numpy()
         doc_importance_retriever /= np.abs(doc_importance_retriever).sum()
 
         return doc_importance_retriever
@@ -415,7 +418,7 @@ class ExplainableAutoModelForRAG(RAGExplanation):
         qry_importance_retriever = np.abs(self._get_ret_importance('query')[0])
 
         # aggregate to word importance:
-        qry_importance_retriever = [np.mean([qry_importance_retriever[i] for i in w]) for w in indices]
+        qry_importance_retriever = [np.sum([qry_importance_retriever[i] for i in w]) for w in indices]
 
         # normalize:
         qry_importance_retriever /= np.abs(qry_importance_retriever).sum()
@@ -739,7 +742,8 @@ class WARGScorer(ExplainableAutoModelForRAG):
             dump_dict['retriever']['context_encoder'] = self.retriever.context_encoder_name_or_path
 
         # Write the full configuration and cached results to a JSON file
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        dir = os.path.dirname(path)
+        if dir: os.makedirs(dir, exist_ok=True)
         with open(path, 'w') as fp:
             json.dump(dump_dict, fp, indent=2)
 

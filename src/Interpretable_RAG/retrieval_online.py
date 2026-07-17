@@ -140,7 +140,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                 batch = self.context_encoder(**batch.to(self.context_encoder.device), **kwargs)
 
                 # append to list:
-                embeddings.append(batch.last_hidden_state[:, 0, :].detach().cpu().numpy())
+                embeddings.append(batch.last_hidden_state[:, 0, :].detach().to(device='cpu', dtype=torch.float32).numpy())
 
             # concatenate batches:
             embeddings = np.concat(embeddings, axis=0)
@@ -434,12 +434,12 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
 
             # save first and last output:
             if 0 in batch:
-                bl_qry_similarity = batch_qry_similarity[batch == 0].detach().cpu().numpy()
-                bl_ctx_similarity = batch_ctx_similarity[batch == 0].detach().cpu().numpy()
+                bl_qry_similarity = batch_qry_similarity[batch == 0].detach().to(device='cpu', dtype=torch.float32).numpy()
+                bl_ctx_similarity = batch_ctx_similarity[batch == 0].detach().to(device='cpu', dtype=torch.float32).numpy()
 
             if 1 in batch:
-                in_qry_similarity = batch_qry_similarity[batch == 1].detach().cpu().numpy()
-                in_ctx_similarity = batch_ctx_similarity[batch == 1].detach().cpu().numpy()
+                in_qry_similarity = batch_qry_similarity[batch == 1].detach().to(device='cpu', dtype=torch.float32).numpy()
+                in_ctx_similarity = batch_ctx_similarity[batch == 1].detach().to(device='cpu', dtype=torch.float32).numpy()
 
             # register input embeddings for gradient computation:
             batch_qry_embeds.retain_grad()
@@ -474,8 +474,8 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
             del batch_ctx_grads
 
         # check additivity:
-        coverage_qry = intGrad['query'].sum(axis=-1) / (in_qry_similarity - bl_qry_similarity).sum()
-        coverage_ctx = intGrad['context'].sum(axis=-1) / (in_ctx_similarity - bl_ctx_similarity).squeeze()
+        coverage_qry = intGrad['query'].sum(axis=-1).to(device='cpu', dtype=torch.float32).numpy() / (in_qry_similarity - bl_qry_similarity).sum()
+        coverage_ctx = intGrad['context'].sum(axis=-1).to(device='cpu', dtype=torch.float32).numpy() / (in_ctx_similarity - bl_ctx_similarity).squeeze()
         if (coverage_qry < .95).any(): print(f'WARNING: query attributions add up to only {coverage_qry.min()*100.:.1f}% of the score. Please increase number of steps!')
         if (coverage_ctx < .95).any(): print(f'WARNING: context attributions add up to only {coverage_ctx.min()*100.:.1f}% of the score. Please increase number of steps!')
 
@@ -858,7 +858,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                 ).last_hidden_state[:, 0, :]
                 batch_output_sim[batch_ctx_mask] = compute_cosine_similarity_batched(in_qry_output.repeat(num_batch_ctxs, 1, 1), batch_ctx_output).detach().cpu()
 
-            output_sim[i*chunk_size:(i+1)*chunk_size] = batch_output_sim.numpy()
+            output_sim[i*chunk_size:(i+1)*chunk_size] = batch_output_sim.to(dtype=torch.float32).numpy()
 
         # pack inputs as binary presence indicators (1 = feature present, 0 = masked):
         x = []
@@ -927,7 +927,7 @@ class ExplainableAutoModelForRetrieval(torch.nn.Module, RetrieverExplanationBase
                 f'If `index` is not specified when creating an object of class `{type(self).__name__}`, ' \
                 f'`contexts` must be set in the call to `{type(self).__name__}.forward(...)`.'
             )
-            _, context_ids = self.index.search(qry_output.last_hidden_state[:, 0, :].detach().cpu().numpy(), k=k)
+            _, context_ids = self.index.search(qry_output.last_hidden_state[:, 0, :].detach().to(device='cpu', dtype=torch.float32).numpy(), k=k)
             context_ids = context_ids[0]
             contexts = self.documents[context_ids].tolist()
 
