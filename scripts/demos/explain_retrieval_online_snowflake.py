@@ -2,9 +2,6 @@
 import sys
 sys.path.insert(0, "../..")
 
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '7'
-
 import torch
 from src.Interpretable_RAG.plotting import plot_importance_retriever, higlight_importance_retriever
 from src.Interpretable_RAG.retrieval_online import ExplainableAutoModelForRetrieval
