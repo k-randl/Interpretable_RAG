@@ -1,13 +1,25 @@
 import os
-from huggingface_hub import login
 from getpass import getpass
 def huggingface_login(token_path:str):
     if os.path.exists(token_path):
         with open(token_path, 'r') as file:
-            login(token=file.read())
+            token = file.read().strip()
+    else:
+        token = getpass(prompt='Huggingface login  token: ')
 
-    else: login(token=getpass(prompt='Huggingface login  token: '))
-    
+    try:
+        from huggingface_hub import login
+        login(token=token)
+    except ImportError:
+        # some huggingface_hub versions ship a broken (circular-import) `login()`;
+        # fall back to writing the token directly to the standard HF cache location,
+        # which `from_pretrained(...)` etc. pick up automatically.
+        os.environ['HF_TOKEN'] = token
+        cache_path = os.path.join(os.path.expanduser('~'), '.cache', 'huggingface', 'token')
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, 'w') as file:
+            file.write(token)
+
 
 import json
 from datasets import load_dataset

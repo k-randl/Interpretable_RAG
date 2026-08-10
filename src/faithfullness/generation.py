@@ -3,8 +3,9 @@ import pickle
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from transformers import PreTrainedTokenizer, PreTrainedModel
 from tqdm.autonotebook import tqdm
-from typing import Optional, Dict, List, Tuple, Literal, Union
+from typing import Optional, Callable, Dict, List, Tuple, Literal, Union
 from numpy.typing import NDArray
 
 from src.Interpretable_RAG.utils import bootstrap_ci
@@ -15,28 +16,37 @@ from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
 #=======================================================================#
 
 class AIPCForGeneration:
-    def __init__(self, generator:ExplainableAutoModelForGeneration) -> None:
+    def __init__(self, generate:Callable[[str, List[str]], str], compare:Callable[[str, List[str], str], float], **explainers:Callable[[str, List[str]], NDArray[np.float32]]) -> None:
         '''Initialize the AIPCForGeneration evaluator. This class computes
         area-inside-perturbation-curves (AIPC) for generation explanations by iteratively
-        masking tokens in generated contexts according to relevancy scores and measuring
-        the change in similarity. The object stores the generator and a fixed perturbation
-        grid `xs` created after init.
+        removing documents from the context according to relevancy scores and measuring
+        the resulting change in the probability of reproducing the (unperturbed) generation.
+        The object stores the generator callables and a fixed perturbation grid `xs`
+        created after init.
 
         Args:
-            generator (GeneratorExplanation):
-                Explainable generation model that provides .explain_generate(...) and exposes tokenizers/encoders required for
-                perturbation experiments.
+            generate (Callable[[str, List[str]], str]):
+                Black-box generation callable, e.g. an LLM pipeline. Called once per example
+                (with the full, unperturbed context) to obtain the reference generation.
+            compare (Callable[[str, List[str], str], float]):
+                Callable that scores the probability of a fixed `output` string being produced
+                for a given query and context (i.e. forced/teacher-forced decoding). Used to
+                measure how the probability of reproducing the reference generation changes as
+                context documents are perturbed.
+            **explainers (Callable[[str, List[str]], NDArray[np.float32]]):
+                Named explanation methods, each mapping a query and its context documents to a
+                relevancy score per context document.
         '''
-        self.generator      = generator
+        self.generate       = generate
+        self.compare        = compare
+        self.explainers     = explainers
         self.xs             = np.arange(0., 1.01, .01)
 
     def __call__(self, data:Dict[str, List], batch_size:int=64, *,
             system        :Optional[str]=None,
-            num_mc_samples:int=100,
-            mc_sample_size:int=10,
             step          :int=1,
             normalize     :bool=True,
-            complementary :Union[bool,Literal['no_mc']]=True,
+            fast          :bool=True,
             tmp_file      :str='aipc_generator_tmp.pkl',
             **kwargs
         ) -> float:
@@ -55,22 +65,20 @@ class AIPCForGeneration:
                                             input fields to lists/arrays of instances and any required metadata).
             batch_size (int, optional):     Batch size for LLM calls (default: 64).
             system (str, optional):         An optional system prompt.
-            num_mc_samples (int, optional): Number of samples for Monte-Carlo approximation.
-                                            Ignored in case of precise calculation (default: `100`).
-            mc_sample_size (int, optional): Size of samples for Monte-Carlo approximation.
-                                            Ignored in case of precise calculation (default: `10`).
             step (int, optional):           Perturbation granularity / number of features to remove per perturbation
                                             step (forwarded to self.perturbe). Defaults to 1.
             normalize (bool, optional):     If `True`, y axis is normalized.
-            **kwargs:                       Additional keyword arguments forwarded to self.generator.forward.
+            fast (bool, optional):          Decoding strategy forwarded to `self.compare` (see e.g.
+                                            `ExternalAutoModel.compare` in scripts/ablations/utils/external.py):
+                                            if `True` (default), a single forward pass; if `False`, iterative
+                                            decoding with a KV cache. Defaults to `True`.
+            **kwargs:                       Additional keyword arguments forwarded to self.generate/self.compare.
 
         Returns:
-            aipc (float):
-                Absolute difference between the area under the mean MoRF curve and the
-                area under the mean LeRF curve. A larger value indicates a greater
-                separation between the two perturbation strategies.
+            Dict[str, Tuple[float, float, float]]:
+                Per-explainer `(aipc, lower_bound, upper_bound)`, in the same format returned
+                by `AIPCForGenerationFast.__call__`.
         '''
-
         # get data size:
         data = list(zip(data['query'], data['context'], strict=True))
         num_queries = len(data)
@@ -82,88 +90,33 @@ class AIPCForGeneration:
         if os.path.exists(tmp_file):
             with open(tmp_file, 'rb') as f:
                 self.morf, self.lerf = pickle.load(f)
-            
-            i0 = sum(~np.isnan(self.morf['Precise']).all(axis=-1))
+
+            i0 = sum(~np.isnan(next(iter(self.morf.values()))).all(axis=-1))
 
         # calculate explanations:
         for i, (qry, ctx) in enumerate(tqdm(data[i0:], desc='Computing perturbations')):
+            ctx = list(ctx[:5])
 
-            # calculate relevancy scores:
-            relevancy = {}
+            # generate the reference (unperturbed) output:
+            baseline = self.generate(qry, ctx, **kwargs)
 
-            # Generate precise explanations:
-            self.generator.explain_generate(
-                query=qry,
-                contexts=ctx[:5],
-                max_samples_query=0,
-                max_samples_context='inf',
-                conditional=True,
-                **kwargs
-            )
+            for key, f in self.explainers.items():
+                # Generate explanations:
+                relevancy = f(qry, ctx, **kwargs)
 
-            # Save token probabilities:
-            permutations      = self.generator._shap_cache['context']['indices'].copy()
-            new_items         = self.generator._shap_cache['context']['new_docs'].copy()
-            probs             = np.stack([p.flatten() for p in self.generator.cmp_token_probs] + [self.generator.gen_token_probs.flatten()])
-
-            # Get shapley values for the generated tokens:
-            relevancy['Precise'] = self.generator.shap('context', 'token')
-
-            # Get random baseline:
-            relevancy['Random'] = np.random.random(relevancy['Precise'].shape)
-
-            # Switch to approximation mode:
-            n_items   = new_items.shape[1]
-            n_subsets = 2 ** n_items
-
-            indices = np.arange(n_subsets)
-            sets    = ((np.arange(n_subsets)[:, None] >> np.arange(n_items)[None, :]) & 1).astype(bool)
-
-            self.generator._shap_cache['context'] = {
-                'precise': False,
-                'complementary': (complementary==True),
-                'indices': indices,
-                'sets': sets
-            }
-
-            # Get shapley values for the generated tokens:
-            for max_samples in range(mc_sample_size, 31, 5):
-                # calculate sample size and population:
-                if complementary != False:
-                    size = (max_samples // 2) - 1
-                    population = (len(indices) // 2) - 1    # skip the first and last indices
-
-                else:
-                    size = max_samples - 2
-                    population = len(indices) - 2
-
-                # Set the number of samples:
-                sample_indices = np.random.choice(population, size=size, replace=False) + 1
-                
-                # Add complementary examples if necessary:
-                if complementary != False:
-                    sample_indices = np.concatenate([sample_indices, (len(indices)-1)-sample_indices])
-
-                self.generator._shap_cache['context']['indices']  = np.concatenate([indices[:1], indices[sample_indices], indices[-1:]])
-                self.generator._shap_cache['context']['sets'] = np.concatenate([sets[:1], sets[sample_indices], sets[-1:]])
-
-                # Get kernel shapley values:
-                relevancy[f'Kernel (n = {max_samples:d})'] = self.generator.shap('context', 'token', num_samples=1, sample_size=max_samples)
-
-                # Get Monte Carlo approximated shapley values:
-                relevancy[f'Monte Carlo (n = {max_samples:d})'] = self.generator.shap('context', 'token', num_samples=num_mc_samples, sample_size=mc_sample_size)
-
-                # Get LIME values:
-                relevancy[f'LIME (n = {max_samples:d})'] = self.generator.lime('context', 'token')
-
-            for key in relevancy:
-                # perturbation curve most relevant first:
+                # perturbation curve most relevant first (MoRF): _perturbe_ctx returns a curve in
+                # the "removed" convention (x=0 full, x=1 empty) -- the opposite of the x=0
+                # empty/x=1 full convention used everywhere else (AIPCForGenerationFast._make_pc,
+                # this method's own normalization below). Mirroring it (reversing, since self.xs
+                # is a symmetric uniform grid) also swaps what "most-relevant-removed-first" means
+                # (it mirrors into "least-relevant-added-first"), so `descending` must be swapped
+                # too to end up with the correct MoRF/LeRF curves in the x=0-empty/x=1-full frame:
                 if key not in self.morf: self.morf[key] = np.full((num_queries, num_points), np.nan, dtype=float)
-                self.morf[key][i0+i] = self._make_pc(relevancy[key], True, permutations, new_items, probs, step=step).mean(axis=0)
+                self.morf[key][i0+i] = self._perturbe_ctx(qry, ctx, baseline, relevancy, False, step, fast=fast, **kwargs)[::-1]
 
-                # perturbation curve least relevant first:
+                # perturbation curve least relevant first (LeRF), same swap-and-mirror logic:
                 if key not in self.lerf: self.lerf[key] = np.full((num_queries, num_points), np.nan, dtype=float)
-                self.lerf[key][i0+i] = self._make_pc(relevancy[key], False, permutations, new_items, probs, step=step).mean(axis=0)
+                self.lerf[key][i0+i] = self._perturbe_ctx(qry, ctx, baseline, relevancy, True, step, fast=fast, **kwargs)[::-1]
 
             # Save to tmp file in case of OOM:
             with open(tmp_file, 'wb') as f:
@@ -195,40 +148,56 @@ class AIPCForGeneration:
         # return area inside curves:
         return {key:self.get_aipc(key) for key in self.morf}
 
-    def _make_pc(self, relevancy:NDArray[np.float32], descending:bool, permutations:NDArray[np.int_], new_items:NDArray[np.int_], probs:NDArray[np.float32], *, step:int=1):
-        '''Build a perturbation curve from cached SHAP permutation data.
-        Orders documents by `relevancy` (most- or least-relevant first, per `descending`),
-        looks up the cached generation probability at each permutation step from `probs`
-        via `permutations`/`new_items`, and interpolates the resulting curve onto `self.xs`.
+    def _perturbe_ctx(self, qry:str, ctx:List[str], baseline:str, relevancy:NDArray[np.float32], descending:bool, step:int, *, fast:bool=True, **kwargs) -> NDArray[np.float32]:
+        '''Build a perturbation curve by progressively removing whole documents from `ctx`
+        (most- or least-relevant first, per `descending`) and tracking how the probability of
+        reproducing `baseline` (via `self.compare`) changes as the removed documents accumulate.
+        `x=0` corresponds to the full, unperturbed context (where the probability of reproducing
+        `baseline` is 1 by definition) and `x=1` to the fully-removed (empty) context -- the
+        OPPOSITE of the convention `AIPCForGenerationFast._make_pc` uses (`x=0` empty, `x=1`
+        full). Callers that need to match `_make_pc`'s convention (e.g. to store curves in
+        `self.morf`/`self.lerf`, or to plot the two side by side) must mirror the returned curve
+        (equivalent to reversing it, since `self.xs` is a symmetric, uniform grid) AND swap which
+        `descending` value they treat as MoRF vs LeRF -- see `__call__` for how this is done;
+        naively mirroring the curve without swapping `descending` silently swaps what MoRF/LeRF
+        mean, since "most-relevant-removed-first" mirrors into "least-relevant-added-first".
 
         Args:
-            relevancy (NDArray[np.float32]):    Per-document relevancy/importance scores.
-            descending (bool):                  If `True`, perturb most-relevant documents first (MoRF);
-                                                if `False`, least-relevant first (LeRF).
-            permutations (NDArray[np.int_]):    Cached permutation index matrix (from `self.generator._shap_cache`).
-            new_items (NDArray[np.int_]):       Cached per-step newly-added-document indices (from `self.generator._shap_cache`).
-            probs (NDArray[np.float32]):        Cached generation probabilities, one row per permutation.
-            step (int, optional):               Number of additional documents to reveal at each
-                                                perturbation step. Defaults to 1.
+            qry (str):                        The query.
+            ctx (List[str]):                  The (unperturbed) context documents.
+            baseline (str):                   The reference generation obtained from the full,
+                                              unperturbed context.
+            relevancy (NDArray[np.float32]):  Per-document relevancy scores, aligned with `ctx`.
+            descending (bool):                If `True`, remove most-relevant documents first;
+                                              if `False`, remove least-relevant documents first.
+            step (int):                       Number of additional documents to remove at each
+                                              perturbation step.
+            fast (bool, optional):           Decoding strategy forwarded to `self.compare` (see e.g.
+                                              `ExternalAutoModel.compare` in scripts/ablations/utils/external.py).
 
         Returns:
-            NDArray[np.float32]: Array of shape (num_documents, len(self.xs)) with one
-                interpolated perturbation curve per document.
+            NDArray[np.float32]: Interpolated perturbation curve of shape `(len(self.xs),)`,
+                in the "removed" (x=0 full, x=1 empty) convention described above.
         '''
 
-        # calculate relevancy:
-        rel = relevancy.argsort(axis=0)
-        if descending: rel = rel[::-1]
+        # rank documents by relevancy:
+        order = np.argsort(relevancy)
+        if descending: order = order[::-1]
 
-        # get perturbation paths:
-        idx = np.concatenate([np.nonzero((new_items==token).all(axis=1))[0] for token in rel.T])
-        idx = permutations[idx]
+        # probability of reproducing `baseline` given the full, unperturbed context:
+        pc = [(0., self.compare(qry, ctx, baseline, fast=fast))]
 
-        # select curve values:
-        xs = np.linspace(0., 1., idx.shape[1])
-        ys = np.stack([np.interp(self.xs, xs, [probs[j,i] for j in row]) for i, row in enumerate(idx)])
+        for i in range(0, len(order), step):
+            # keep only the documents that have not yet been removed (in their original order):
+            ctx_ptb = [ctx[j] for j in sorted(order[i+step:])]
 
-        return ys
+            # probability of the reference generation given the perturbed context:
+            sim_ptb = self.compare(qry, ctx_ptb, baseline, fast=fast)
+            removed = (i+step)/float(len(order))
+            pc.append((removed, sim_ptb))
+
+        # interpolate curve (points are already in increasing x order):
+        return np.interp(self.xs, *np.array(pc).T)
 
     def get_aipc(self, key:str, *, num_samples=1000, confidence_level=0.95) -> Tuple[float, float, float]:
         '''Compute the area inside the pertubation curves (AIPC) between the mean MORF
@@ -326,3 +295,225 @@ class AIPCForGeneration:
         ax.legend()
         ax.set_xlabel('Masked Documents [%]')
         ax.set_ylabel(r'Normalized $\Delta$ Token Probability [%]')
+
+class AIPCForGenerationFast(AIPCForGeneration):
+    def __init__(self, generator:ExplainableAutoModelForGeneration) -> None:
+        '''Initialize the AIPCForGenerationBaselines evaluator. This class computes
+        area-inside-perturbation-curves (AIPC) for generation explanations by iteratively
+        masking tokens in generated contexts according to relevancy scores and measuring
+        the change in similarity. The object stores the generator and a fixed perturbation
+        grid `xs` created after init.
+
+        Args:
+            generator (GeneratorExplanation):
+                Explainable generation model that provides .explain_generate(...) and exposes tokenizers/encoders required for
+                perturbation experiments.
+        '''
+        self.generator      = generator
+        self.xs             = np.arange(0., 1.01, .01)
+    
+    def __call__(self, data:Dict[str, List], batch_size:int=64, *,
+            system        :Optional[str]=None,
+            num_mc_samples:int=100,
+            mc_sample_size:int=10,
+            step          :int=1,
+            normalize     :bool=True,
+            complementary :Union[bool,Literal['no_mc']]=True,
+            fast          :bool=True,
+            tmp_file      :str='aipc_generator_tmp.pkl',
+            **kwargs
+        ) -> float:
+        '''Compute a faithfulness score by comparing area-under-curve (AUC) values for two
+        perturbation strategies: perturbing most-relevant features first (MoRF) and
+        perturbing least-relevant features first (LeRF).
+        This method:
+        - Generates the MoRF perturbation curve and stores the result in self.morf.
+        - Generates the LeRF perturbation curve and stores the result in self.lerf.
+        - Computes the mean curve across examples for each strategy and computes the
+            area under each mean curve.
+        - Returns the absolute difference between the two AUC values.
+
+        Args:
+            data (Dict[str, List]):         Input data structure expected by self.perturbe (typically a mapping of
+                                            input fields to lists/arrays of instances and any required metadata).
+            batch_size (int, optional):     Batch size for LLM calls (default: 64).
+            system (str, optional):         An optional system prompt.
+            num_mc_samples (int, optional): Number of samples for Monte-Carlo approximation.
+                                            Ignored in case of precise calculation (default: `100`).
+            mc_sample_size (int, optional): Size of samples for Monte-Carlo approximation.
+                                            Ignored in case of precise calculation (default: `10`).
+            step (int, optional):           Perturbation granularity / number of features to remove per perturbation
+                                            step (forwarded to self.perturbe). Defaults to 1.
+            normalize (bool, optional):     If `True`, y axis is normalized.
+            fast (bool, optional):          Decoding strategy forwarded to `self.generator.explain_generate(...)`/
+                                            `self.generator.compare(...)`: if `True` (default), a single forward pass
+                                            per batch; if `False`, iterative decoding with a KV cache (the generator's
+                                            tokenizer must already be left-padded for `fast=True`).
+            **kwargs:                       Additional keyword arguments forwarded to self.generator.forward.
+
+        Returns:
+            aipc (float):
+                Absolute difference between the area under the mean MoRF curve and the
+                area under the mean LeRF curve. A larger value indicates a greater
+                separation between the two perturbation strategies.
+        '''
+
+        # get data size:
+        data = list(zip(data['query'], data['context'], strict=True))
+        num_queries = len(data)
+        num_points  = len(self.xs)
+
+        # continue from tmp file in case of OOM:
+        i0 = 0
+        self.morf, self.lerf = {}, {}
+        if os.path.exists(tmp_file):
+            with open(tmp_file, 'rb') as f:
+                self.morf, self.lerf = pickle.load(f)
+            
+            i0 = sum(~np.isnan(self.morf['Precise']).all(axis=-1))
+
+        # calculate explanations:
+        for i, (qry, ctx) in enumerate(tqdm(data[i0:], desc='Computing perturbations')):
+
+            # calculate relevancy scores:
+            relevancy = {}
+
+            # Generate precise explanations:
+            self.generator.explain_generate(
+                query=qry,
+                contexts=ctx[:5],
+                max_samples_query=0,
+                max_samples_context='inf',
+                conditional=True,
+                fast=fast,
+                **kwargs
+            )
+
+            # Save token probabilities:
+            permutations      = self.generator._shap_cache['context']['indices'].copy()
+            new_items         = self.generator._shap_cache['context']['new_docs'].copy()
+            probs             = np.stack([p.flatten() for p in self.generator.cmp_token_probs] + [self.generator.gen_token_probs.flatten()])
+
+            # Get shapley values for the generated tokens:
+            relevancy['Precise'] = self.generator.shap('context', 'token')
+
+            # Get random baseline:
+            relevancy['Random'] = np.random.random(relevancy['Precise'].shape)
+
+            # Switch to approximation mode:
+            n_items   = new_items.shape[1]
+            n_subsets = 2 ** n_items
+
+            indices = np.arange(n_subsets)
+            sets    = ((np.arange(n_subsets)[:, None] >> np.arange(n_items)[None, :]) & 1).astype(bool)
+
+            self.generator._shap_cache['context'] = {
+                'precise': False,
+                'complementary': (complementary==True),
+                'indices': indices,
+                'sets': sets
+            }
+
+            # Get shapley values for the generated tokens:
+            for max_samples in range(mc_sample_size, 31, 5):
+                # calculate sample size and population:
+                if complementary != False:
+                    size = (max_samples // 2) - 1
+                    population = (len(indices) // 2) - 1    # skip the first and last indices
+
+                else:
+                    size = max_samples - 2
+                    population = len(indices) - 2
+
+                # Set the number of samples:
+                sample_indices = np.random.choice(population, size=size, replace=False) + 1
+                
+                # Add complementary examples if necessary:
+                if complementary != False:
+                    sample_indices = np.concatenate([sample_indices, (len(indices)-1)-sample_indices])
+
+                self.generator._shap_cache['context']['indices']  = np.concatenate([indices[:1], indices[sample_indices], indices[-1:]])
+                self.generator._shap_cache['context']['sets'] = np.concatenate([sets[:1], sets[sample_indices], sets[-1:]])
+
+                # Get kernel shapley values:
+                relevancy[f'Kernel (n = {max_samples:d})'] = self.generator.shap('context', 'token', num_samples=1, sample_size=max_samples)
+
+                # Get Monte Carlo approximated shapley values:
+                relevancy[f'Monte Carlo (n = {max_samples:d})'] = self.generator.shap('context', 'token', num_samples=num_mc_samples, sample_size=mc_sample_size)
+
+                # Get LIME values:
+                relevancy[f'LIME (n = {max_samples:d})'] = self.generator.lime('context', 'token')
+
+            for key in relevancy:
+                # perturbation curve most relevant first:
+                if key not in self.morf: self.morf[key] = np.full((num_queries, num_points), np.nan, dtype=float)
+                self.morf[key][i0+i] = self._make_pc(relevancy[key], True, permutations, new_items, probs, step=step).mean(axis=0)
+
+                # perturbation curve least relevant first:
+                if key not in self.lerf: self.lerf[key] = np.full((num_queries, num_points), np.nan, dtype=float)
+                self.lerf[key][i0+i] = self._make_pc(relevancy[key], False, permutations, new_items, probs, step=step).mean(axis=0)
+
+            # Save to tmp file in case of OOM:
+            with open(tmp_file, 'wb') as f:
+                pickle.dump((self.morf, self.lerf), f)
+
+        # delete tmp file if successful:
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
+
+        for key in self.morf:
+            # set first value to mean:
+            y_min = 0.5 * (self.morf[key][:,0] + self.lerf[key][:,0])
+            self.morf[key][:,0] = y_min
+            self.lerf[key][:,0] = y_min
+
+            # set last value to mean:
+            y_max = 0.5 * (self.morf[key][:,-1] + self.lerf[key][:,-1])
+            self.morf[key][:,-1] = y_max
+            self.lerf[key][:,-1] = y_max
+
+            # normalize:
+            if normalize:
+                self.morf[key] -= y_min[:,None]
+                self.morf[key] /= (y_max-y_min)[:,None]
+
+                self.lerf[key] -= y_min[:,None]
+                self.lerf[key] /= (y_max-y_min)[:,None]
+
+        # return area inside curves:
+        return {key:self.get_aipc(key) for key in self.morf}
+    
+    def _make_pc(self, relevancy:NDArray[np.float32], descending:bool, permutations:NDArray[np.int_], new_items:NDArray[np.int_], probs:NDArray[np.float32], *, step:int=1):
+        '''Build a perturbation curve from cached SHAP permutation data.
+        Orders documents by `relevancy` (most- or least-relevant first, per `descending`),
+        looks up the cached generation probability at each permutation step from `probs`
+        via `permutations`/`new_items`, and interpolates the resulting curve onto `self.xs`.
+
+        Args:
+            relevancy (NDArray[np.float32]):    Per-document relevancy/importance scores.
+            descending (bool):                  If `True`, perturb most-relevant documents first (MoRF);
+                                                if `False`, least-relevant first (LeRF).
+            permutations (NDArray[np.int_]):    Cached permutation index matrix (from `self.generator._shap_cache`).
+            new_items (NDArray[np.int_]):       Cached per-step newly-added-document indices (from `self.generator._shap_cache`).
+            probs (NDArray[np.float32]):        Cached generation probabilities, one row per permutation.
+            step (int, optional):               Number of additional documents to reveal at each
+                                                perturbation step. Defaults to 1.
+
+        Returns:
+            NDArray[np.float32]: Array of shape (num_documents, len(self.xs)) with one
+                interpolated perturbation curve per document.
+        '''
+
+        # calculate relevancy:
+        rel = relevancy.argsort(axis=0)
+        if descending: rel = rel[::-1]
+
+        # get perturbation paths:
+        idx = np.concatenate([np.nonzero((new_items==token).all(axis=1))[0] for token in rel.T])
+        idx = permutations[idx]
+
+        # select curve values:
+        xs = np.linspace(0., 1., idx.shape[1])
+        ys = np.stack([np.interp(self.xs, xs, [probs[j,i] for j in row]) for i, row in enumerate(idx)])
+
+        return ys

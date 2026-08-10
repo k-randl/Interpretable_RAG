@@ -27,32 +27,53 @@ import json
 import pickle
 import matplotlib.pyplot as plt
 
-def test(aipc, name, target):
+def test(aipc, name, target, is_external=False):
     # get suffix:
-    if   COMPLEMENTARY == True:    suffix = 'complementary'
+    if is_external:                suffix = 'external'
+    elif COMPLEMENTARY == True:    suffix = 'complementary'
     elif COMPLEMENTARY == 'no_mc': suffix = 'comp_no_mc'
     elif COMPLEMENTARY == False:   suffix = 'uniform'
 
     # Load curves file if it exists:
     curves_path, curves = os.path.join(RESULTS_PATH, f'curves_{name}_{target}_{suffix}.pkl'), {}
-    if os.path.exists(curves_path): return
+    if os.path.exists(curves_path):
+        with open(curves_path, 'rb') as file:
+            curves = pickle.load(file)
 
     # Load scores file if it exists:
     scores_path, scores = os.path.join(RESULTS_PATH, f'scores_{name}_{target}_{suffix}.json'), {}
-    if os.path.exists(scores_path): return
+    if os.path.exists(scores_path):
+        with open(scores_path, 'r') as file:
+            scores = json.load(file)
+
+    if is_external:
+        # ContextCite/MIRAGE share this bucket, so only skip once it contains every
+        # method aipc actually provides (AIPCForGeneration exposes `.explainers`):
+        if all(method in curves and method in scores for method in aipc.explainers):
+            print(f'SKIP: {curves_path} / {scores_path} already contain {list(aipc.explainers)}.')
+            return
+    else:
+        # AIPCForGenerationFast discovers its methods dynamically inside __call__ and
+        # exposes no `.explainers` up front, so fall back to a plain existence check
+        # (matching the original, pre-merge behavior for this non-shared bucket):
+        if curves and scores:
+            print(f'SKIP: {curves_path} / {scores_path} already exist.')
+            return
 
     # run faithfullness test:
-    aipc(sample,
-        step=STEP_SIZE,
-        do_sample=False,
-        top_p=1,
-        num_beams=1,
-        max_new_tokens=256,
-        complementary=COMPLEMENTARY,
-        tmp_file=f'aipc_generator_{suffix}_tmp.pkl'
-    )
+    gen_args = {
+        'step':STEP_SIZE,
+        'do_sample':False,
+        'top_p':1,
+        'num_beams':1,
+        'max_new_tokens':256,
+        'tmp_file':f'aipc_generator_{suffix}_tmp.pkl'
+    }
+    if not is_external:
+        gen_args['complementary'] = COMPLEMENTARY
+    aipc(sample, **gen_args)
 
-    # Test methods:
+    # merge newly computed methods into the (possibly pre-existing) curves/scores:
     for method in aipc.morf:
 
         # save curves:
@@ -76,23 +97,58 @@ def test(aipc, name, target):
             json.dump(scores, file)
 
 # %%% ===============================================================================================#
-# Load Llama 3.1 8B Pipeline:                                                                        #
+# Load Llama 3.1 8B RAG-E Pipeline:                                                                  #
 #====================================================================================================#
 
 import torch
 from src.Interpretable_RAG.generation import ExplainableAutoModelForGeneration
-from src.faithfullness.generation import AIPCForGeneration
+from src.faithfullness.generation import AIPCForGenerationFast
 
 generator = ExplainableAutoModelForGeneration.from_pretrained(
     pretrained_model_name_or_path='meta-llama/Llama-3.1-8B-Instruct',
     device_map='auto',
     dtype=torch.bfloat16
 )
-
 # %%
-aipc = AIPCForGeneration(generator)
+aipc = AIPCForGenerationFast(generator)
 # run faithfullness test:
 test(aipc, 'llama8b', 'context')
+
+# %%% ===============================================================================================#
+# Load Llama 3.1 8B ContextCite Pipeline:                                                            #
+#====================================================================================================#
+
+import torch
+from utils.context_cite import ContextCiteAutoModel
+from src.faithfullness.generation import AIPCForGeneration
+
+generator = ContextCiteAutoModel('meta-llama/Llama-3.1-8B-Instruct',
+    device_map='auto',
+    dtype=torch.bfloat16
+)
+
+# %%
+aipc = AIPCForGeneration(generator, generator.compare, ContextCite=generator.explain)
+# run faithfullness test (is_external=True keeps this from colliding with the Fast/SHAP results above):
+test(aipc, 'llama8b', 'context', is_external=True)
+
+# %%% ===============================================================================================#
+# Load Llama 3.1 8B MIRAGE Pipeline:                                                                 #
+#====================================================================================================#
+
+import torch
+from utils.mirage import MirageAutoModel
+from src.faithfullness.generation import AIPCForGeneration
+
+generator = MirageAutoModel('meta-llama/Llama-3.1-8B-Instruct',
+    device_map='auto',
+    dtype=torch.bfloat16
+)
+
+# %%
+aipc = AIPCForGeneration(generator, generator.compare, Mirage=generator.explain)
+# run faithfullness test (merges into the same `external` bucket as ContextCite above):
+test(aipc, 'llama8b', 'context', is_external=True)
 
 # %%% ===============================================================================================#
 # Plots:                                                                                             #
@@ -225,6 +281,10 @@ for target in ('query', 'context'):
 
         with open(os.path.join(RESULTS_PATH, f'scores_{model}_{target}_comp_no_mc.json'), 'r') as file:
             scores_comp_no_mc = json.load(file)
+
+        with open(os.path.join(RESULTS_PATH, f'scores_{model}_{target}_external.json'), 'r') as file:
+            scores_external = json.load(file)
+
     except FileNotFoundError: continue
 
     # get x values:
@@ -235,7 +295,19 @@ for target in ('query', 'context'):
     rnd = scores_uniform['Random']
     
     plt.axhline(prc[0], ls='--', c='red', label="Precise")
-    #plt.axhline(rnd[0], ls='--', c='grey', label="Random")
+    plt.axhline(rnd[0], ls='--', c='grey', label="Random")
+
+    # external methods:
+    cc  = np.array([scores_external['ContextCite']]*len(xs))
+    mi  = np.array([scores_external['Mirage']]*len(xs))
+    
+    plt.plot(xs, cc[:,0], label="ContextCite")
+    plt.plot(xs, mi[:,0], label="Mirage")
+
+    # lime:
+    li  = np.array([scores_uniform[f'LIME (n = {x:d})'] for x in xs])
+
+    plt.plot(xs, li[:,0], marker='o', label="LIME")
 
     # kernel methods:
     klu = np.array([scores_uniform[f'Kernel (n = {x:d})'] for x in xs])
@@ -263,6 +335,7 @@ for target in ('query', 'context'):
     plt.show()
 
 #%%
+import json
 import pandas as pd
 
 model = 'llama8b'
@@ -277,6 +350,10 @@ for target in ('query', 'context'):
 
         with open(os.path.join(RESULTS_PATH, f'scores_{model}_{target}_comp_no_mc.json'), 'r') as file:
             scores_comp_no_mc = json.load(file)
+
+        with open(os.path.join(RESULTS_PATH, f'scores_{model}_{target}_external.json'), 'r') as file:
+            scores_external = json.load(file)
+
     except FileNotFoundError: continue
 
     def _tostr(val, min , max):
@@ -290,6 +367,13 @@ for target in ('query', 'context'):
     prc = {f'n = {x:d}': _tostr(*scores_uniform['Precise']) for x in xs}
     rnd = {f'n = {x:d}': _tostr(*scores_uniform['Random']) for x in xs}
 
+    # lime:
+    li  = {f'n = {x:d}': _tostr(*scores_uniform[f'LIME (n = {x:d})']) for x in xs}
+
+    # external methods:
+    cc  = {f'n = {x:d}': _tostr(*scores_external['ContextCite']) for x in xs}
+    mi  = {f'n = {x:d}': _tostr(*scores_external['Mirage']) for x in xs}
+
     # kernel methods:
     klu = {f'n = {x:d}': _tostr(*scores_uniform[f'Kernel (n = {x:d})']) for x in xs}
     klc = {f'n = {x:d}': _tostr(*scores_complementary[f'Kernel (n = {x:d})']) for x in xs}
@@ -302,6 +386,9 @@ for target in ('query', 'context'):
     data = pd.DataFrame({
         'Precise': prc,
         'Random': rnd,
+        'ContextCite': cc,
+        'Mirage': mi,
+        'LIME':li,
         'Kernel-SHAP (unif.)': klu,
         'Kernel-SHAP (compl.)': klc,
         'Monte Carlo (unif.)': mcu,
@@ -310,3 +397,4 @@ for target in ('query', 'context'):
     }).T
 
     print(data.to_latex())
+# %%

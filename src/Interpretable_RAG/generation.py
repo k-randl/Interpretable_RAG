@@ -1,5 +1,6 @@
 import os
 import torch
+import warnings
 import inspect
 import numpy as np
 import transformers
@@ -550,7 +551,22 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             def __init__(self, config, *inputs, **kwargs):
                 super().__init__(config, *inputs, **kwargs)
                 self._tokenizer:transformers.PreTrainedTokenizer = transformers.AutoTokenizer.from_pretrained(config.name_or_path)
-                self._tokenizer.pad_token_id = self.tokenizer.eos_token_id
+                if self._tokenizer.pad_token_id is None:
+                    # fix for Llama (and other models with no native pad token): fall back to
+                    # EOS as the pad token:
+                    self._tokenizer.pad_token_id = self._tokenizer.eos_token_id
+                if self._tokenizer.padding_side != 'left':
+                    # right-padding silently corrupts batched causal-LM generation/comparison
+                    # for mixed-length inputs (new tokens get appended after the padded width
+                    # instead of after each row's real content) -- always force left-padding,
+                    # which is safe even when pad_token_id == eos_token_id since position ids
+                    # and attention are derived from `attention_mask`, never from token identity:
+                    warnings.warn(
+                        f'Tokenizer for "{config.name_or_path}" defaults to padding_side='
+                        f'"{self._tokenizer.padding_side}"; forcing "left" since right-padding '
+                        'produces incorrect results for batched generation/comparison.'
+                    )
+                    self._tokenizer.padding_side = 'left'
                 self._explain:bool = False
                 self._exp_logits:List[torch.Tensor] = []
                 self._exp_logits_buffer:List[torch.Tensor] = []
@@ -897,7 +913,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # return generated text:
                 return self.tokenizer.batch_decode(self._gen_output)
 
-            def compare(self, inputs:List[str], outputs:Optional[Union[List[str], torch.LongTensor, Literal['last']]]=None, batch_size:int=1, **kwargs) -> torch.LongTensor:
+            def compare(self, inputs:List[str], outputs:Optional[Union[List[str], torch.Tensor, Literal['last']]]=None, batch_size:int=1, *, fast:bool=True, **kwargs) -> torch.LongTensor:
                 """Calculates the probability `p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_n|t_0...t_(n-1))` of
                 a specific output `outputs = [t_0, t_1, ..., t_n]` to happen given an input prompt `inputs`.
 
@@ -906,9 +922,14 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                                 probability `p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_n|t_0...t_(n-1))` for each
                                 token in `outputs = [t_0, t_1, ..., t_n]` given ``. Otherwise, it calculates the
                                 unconditional probability (similar to `generate(...)`).
-                    outputs:    List of tokens `t_i` or (strings containing those) for which to compute the probability.
-                                If set to `'last'`, the last generated sequence will be used (optional).
+                    outputs:    2D list of strings or tensor of right-padded tokens `t_i` for which to compute the
+                                probability. If set to `'last'`, the last generated sequence will be used (optional).
                     batch_size: Batch size. Ignored if `len(inputs) > 1` or `outputs` not specified (optional).
+                    fast:       If `True` (default), scores `outputs` via a single forward pass over the whole
+                                (left-padded input + output) sequence(s) at once. If `False`, iteratively, one
+                                token at a time with a KV cache (the original implementation). Only affects the
+                                conditional (`outputs` is not `None`) path. The two are expected to agree closely
+                                but not necessarily bit-for-bit.
 
                 Returns:
                     Tensor of generated token ids .
@@ -922,11 +943,12 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                         print('WARNING: when outputs is not specified the parameter batch_size is ignored.')
 
                     return self.__compare_unconditional(inputs=inputs, **kwargs)
-                
+
                 else: return self.__compare_conditional(
                     inputs=inputs,
                     outputs=self._gen_output if outputs == 'last' else outputs,
                     batch_size=batch_size,
+                    fast=fast,
                     **kwargs
                 )
 
@@ -956,7 +978,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # return generated tokens:
                 return output
 
-            def __compare_conditional(self, inputs:List[str], outputs:Union[List[str], torch.Tensor], batch_size:int=1, **kwargs) -> torch.LongTensor:
+            def __compare_conditional(self, inputs:List[str], outputs:Union[List[str], torch.Tensor], batch_size:int=1, *, fast:bool=True, **kwargs) -> torch.LongTensor:
                 # get batch size:
                 single_input  = len(inputs) == 1
                 single_output = len(outputs) == 1
@@ -969,103 +991,173 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                 # reset token probabilities:
                 self._exp_logits_buffer = []
 
-                # convert string to Iterable of tokens:
-                if isinstance(outputs[0], str):
-                    outputs = self.tokenizer(outputs, add_special_tokens=False, return_attention_mask=False, return_tensors='pt').input_ids
-                outputs = outputs.to(self.device)
-
                 # tokenize input:
-                model_inputs = self.tokenizer(inputs, padding=True, truncation=True, return_tensors='pt')
-                input_ids = model_inputs.input_ids.to(self.device)
+                model_inputs   = self.tokenizer(inputs, padding=True, truncation=True, return_tensors='pt')
+                input_ids      = model_inputs.input_ids.to(self.device)
                 attention_mask = model_inputs.attention_mask.to(self.device)
 
-                # batch processing in case of single input:
-                if single_input:
+                # convert string to Iterable of tokens. Outputs are always right-padded
+                # (real content flush against position 0), independent of the tokenizer's
+                # (now left-padded) default for inputs -- this keeps every row's output
+                # starting at the same column, which both the vectorized `fast` branch and
+                # the column-by-column iterative loop below rely on:
+                if isinstance(outputs[0], str):
+                    outputs     = self.tokenizer(outputs, padding=True, padding_side='right', add_special_tokens=False, return_tensors='pt')
+                    output_ids  = outputs.input_ids.to(self.device)
+                    output_mask = outputs.attention_mask.to(self.device)
+                else:
+                    if not single_output: raise NotImplementedError()
+                    output_ids  = outputs.to(self.device)
+                    output_mask = torch.ones_like(output_ids)
+
+                if fast:
+                    # single forward pass over the whole (input + output) sequence(s) at once,
+                    # instead of the token-by-token KV-cache loop below. Inputs are always
+                    # left-padded (real content flush against the end, see __init__) and
+                    # outputs are always right-padded (real content flush against the start,
+                    # see the tokenizer call above); `full_ids`/`full_mask` are built to stay
+                    # left-padded too (real prompt+output packed contiguously against the end
+                    # of the row, all padding pushed to the front) so there's only ever one
+                    # layout to reason about, regardless of the tokenizer's native padding side:
+                    n_in, l_in = input_ids.shape
+                    _, l_out   = output_ids.shape
+
+                    full_ids  = torch.full((n_in, l_in+l_out), self.tokenizer.pad_token_id,
+                                            dtype=input_ids.dtype, device=self.device)
+                    full_mask = torch.zeros_like(full_ids)
+
+                    n = attention_mask.sum(dim=1)
                     if single_output:
-                        input_ids, outputs = _to_batch(
-                            input_ids, outputs, self.tokenizer.pad_token_id, batch_size
-                        )
-                        attention_mask, _ = _to_batch(
-                            attention_mask, torch.ones((1, batch_size)), 0, batch_size
-                        )
-
-                    else: raise NotImplementedError()
-
-                # prepare model_kwargs:
-                input_ids, _, model_kwargs = self._prepare_model_inputs(input_ids, self.tokenizer.bos_token_id, kwargs)
-
-                # Try to get initial cache position with signature inspection
-                if hasattr(self, '_get_initial_cache_position'):
-                    sig = inspect.signature(self._get_initial_cache_position)
-                    if 'seq_length' in sig.parameters:
-                        # Newer API
-                        model_kwargs = self._get_initial_cache_position(
-                            seq_length=input_ids.shape[1],
-                            device=input_ids.device,
-                            model_kwargs=model_kwargs,
-                        )
+                        m = torch.full((n_in,), l_out, dtype=torch.long)
+                        out_rows = output_ids.expand(n_in, -1)
                     else:
-                        # Older API
-                        model_kwargs = self._get_initial_cache_position(
-                            input_ids=input_ids, 
-                            model_kwargs=model_kwargs
-                        )
+                        m = output_mask.sum(dim=1)
+                        out_rows = output_ids
 
-                # check prepare_inputs_for_generation signature once for both calls:
-                _pifg_sig = inspect.signature(self.prepare_inputs_for_generation).parameters
-                _supports_next_seq_len = 'next_sequence_length' in _pifg_sig
-                _supports_first_iter   = 'is_first_iteration'   in _pifg_sig
+                    for row in range(n_in):
+                        ni, mi = int(n[row]), int(m[row])
+                        full_ids[row, -ni-mi:-mi] = input_ids[row, -ni:]   # real prompt (already left-padded)
+                        full_ids[row, -mi:]       = out_rows[row, :mi]     # real output (right-padded on its own)
+                        full_mask[row, -ni-mi:]   = 1
 
-                with torch.no_grad():
+                    with torch.no_grad():
+                        raw_logits = T.forward(self, input_ids=full_ids, attention_mask=full_mask, return_dict=True).logits
 
-                    # calculate p(t_0):
-                    _prefill_kwargs = {'is_first_iteration': True} if _supports_first_iter else {}
-                    model_inputs = self.prepare_inputs_for_generation(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        **_prefill_kwargs,
-                        **model_kwargs
-                    )
-                    model_inputs.setdefault('use_cache', True)
-                    model_outputs = self.forward(**model_inputs, return_dict=True)
-                    model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs)
-                    torch.cuda.empty_cache()
+                    # Fix for Gemma 3 which returns 4D logits [Batch, 1, Seq, Vocab]:
+                    if raw_logits.dim() == 4 and raw_logits.shape[1] == 1:
+                        raw_logits = raw_logits.squeeze(1)
 
-                    # update inputs:
-                    if single_input:    nxt = outputs[:,:batch_size].to(input_ids)
-                    elif single_output: nxt = torch.full((batch_size, 1), outputs[0,0], device=input_ids.device, dtype=input_ids.dtype)
-                    else:               nxt = torch.unsqueeze(outputs[:,0], dim=1).to(input_ids)
+                    # per row: gather the logits that predict that row's output tokens into a
+                    # common (n_in, l_out, vocab) tensor (rows with fewer real output tokens
+                    # than l_out are zero-padded). Since `full_ids` is left-padded, both prompt
+                    # and output are pushed against the end of the row, so the output always
+                    # starts at `l_in+l_out-mi`:
+                    exp_logits = torch.zeros((n_in, l_out, raw_logits.shape[-1]), dtype=raw_logits.dtype)
+                    for row in range(n_in):
+                        mi = int(m[row])
+                        start = (l_in + l_out) - mi - 1
+                        exp_logits[row, :mi] = raw_logits[row, start:start+mi, :].detach().cpu()
 
-                    input_ids = torch.concatenate((input_ids, nxt), dim=-1)
-                    attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, nxt.shape[1]), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
+                    self._exp_logits.append(exp_logits)
 
-                    # p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_1|t_0...t_(j-1)):
-                    step = batch_size if single_input else 1
-                    for i in tqdm.tqdm(range(1, outputs.shape[1], step),total=int(outputs.shape[1]/step), desc='Calculating probabilities'):
-                        _decode_kwargs = {'next_sequence_length': nxt.shape[1]} if _supports_next_seq_len else {}
+                else:
+                    # batch processing in case of single input:
+                    if single_input:
+                        if single_output:
+                            input_ids, output_ids = _to_batch(
+                                input_ids, output_ids, self.tokenizer.pad_token_id, batch_size
+                            )
+                            attention_mask, _ = _to_batch(
+                                attention_mask, torch.ones((1, batch_size)), 0, batch_size
+                            )
+
+                        else: raise NotImplementedError()
+
+                    # prepare model_kwargs:
+                    input_ids, _, model_kwargs = self._prepare_model_inputs(input_ids, self.tokenizer.bos_token_id, kwargs)
+
+                    # Try to get initial cache position with signature inspection
+                    if hasattr(self, '_get_initial_cache_position'):
+                        sig = inspect.signature(self._get_initial_cache_position)
+                        if 'seq_length' in sig.parameters:
+                            # Newer API
+                            model_kwargs = self._get_initial_cache_position(
+                                seq_length=input_ids.shape[1],
+                                device=input_ids.device,
+                                model_kwargs=model_kwargs,
+                            )
+                        else:
+                            # Older API
+                            model_kwargs = self._get_initial_cache_position(
+                                input_ids=input_ids,
+                                model_kwargs=model_kwargs
+                            )
+
+                    # check prepare_inputs_for_generation signature once for both calls:
+                    _pifg_sig = inspect.signature(self.prepare_inputs_for_generation).parameters
+                    _supports_next_seq_len = 'next_sequence_length' in _pifg_sig
+                    _supports_first_iter   = 'is_first_iteration'   in _pifg_sig
+
+                    with torch.no_grad():
+
+                        # calculate p(t_0):
+                        _prefill_kwargs = {'is_first_iteration': True} if _supports_first_iter else {}
                         model_inputs = self.prepare_inputs_for_generation(
                             input_ids=input_ids,
                             attention_mask=attention_mask,
-                            **_decode_kwargs,
+                            **_prefill_kwargs,
                             **model_kwargs
                         )
+                        model_inputs.setdefault('use_cache', True)
                         model_outputs = self.forward(**model_inputs, return_dict=True)
-                        model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs, num_new_tokens=nxt.shape[1])
+                        model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs)
                         torch.cuda.empty_cache()
 
                         # update inputs:
-                        if single_input:    nxt = outputs[:,(i*batch_size):((i+1)*batch_size)].to(input_ids)
-                        elif single_output: nxt = torch.full((batch_size, 1), outputs[0,i], device=input_ids.device, dtype=input_ids.dtype)
-                        else:               nxt = torch.unsqueeze(outputs[:,i], dim=1).to(input_ids)
+                        if single_input:    nxt = output_ids[:,:batch_size].to(input_ids)
+                        elif single_output: nxt = torch.full((batch_size, 1), output_ids[0,0], device=input_ids.device, dtype=input_ids.dtype)
+                        else:               nxt = torch.unsqueeze(output_ids[:,0], dim=1).to(input_ids)
 
                         input_ids = torch.concatenate((input_ids, nxt), dim=-1)
                         attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, nxt.shape[1]), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
 
-                # finalize probabilities:
-                if single_input and single_output:
-                    self._exp_logits.append(torch.concatenate(self._exp_logits_buffer, dim=0).transpose(0,1))
+                        # p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_1|t_0...t_(j-1)):
+                        step = batch_size if single_input else 1
+                        for i in tqdm.tqdm(range(1, output_ids.shape[1], step),total=int(output_ids.shape[1]/step), desc='Calculating probabilities'):
+                            _decode_kwargs = {'next_sequence_length': nxt.shape[1]} if _supports_next_seq_len else {}
+                            model_inputs = self.prepare_inputs_for_generation(
+                                input_ids=input_ids,
+                                attention_mask=attention_mask,
+                                **_decode_kwargs,
+                                **model_kwargs
+                            )
+                            model_outputs = self.forward(**model_inputs, return_dict=True)
+                            model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs, num_new_tokens=nxt.shape[1])
+                            torch.cuda.empty_cache()
 
-                else: self._exp_logits.append(torch.concatenate(self._exp_logits_buffer, dim=1))
+                            # update inputs:
+                            if single_input:    nxt = output_ids[:,(i*batch_size):((i+1)*batch_size)].to(input_ids)
+                            elif single_output: nxt = torch.full((batch_size, 1), output_ids[0,i], device=input_ids.device, dtype=input_ids.dtype)
+                            else:               nxt = torch.unsqueeze(output_ids[:,i], dim=1).to(input_ids)
+
+                            input_ids = torch.concatenate((input_ids, nxt), dim=-1)
+                            attention_mask = torch.concatenate((attention_mask, torch.full((batch_size, nxt.shape[1]), 1, device=input_ids.device, dtype=input_ids.dtype)), dim=-1)
+
+                    # finalize probabilities:
+                    if single_input and single_output:
+                        self._exp_logits.append(torch.concatenate(self._exp_logits_buffer, dim=0).transpose(0,1))
+
+                    else:
+                        result = torch.concatenate(self._exp_logits_buffer, dim=1)
+                        if not single_output:
+                            # rows whose real output is shorter than `l_out` were still fed
+                            # (right-)padding tokens for the remaining iterations to keep the
+                            # batched loop rectangular; zero those logits out, matching the
+                            # `fast` branch's convention of zero-padding beyond each row's
+                            # real output length:
+                            valid = torch.arange(result.shape[1]).unsqueeze(0) < output_mask.sum(dim=1, keepdim=True).cpu()
+                            result = result * valid.unsqueeze(-1)
+                        self._exp_logits.append(result)
 
                 # clear buffer:
                 self._exp_logits_buffer.clear()
@@ -1086,6 +1178,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     conditional:bool=True,
                     complementary:Union[bool,Literal['no_mc']]=True,
                     system:Optional[str]=None,
+                    fast:bool=True,
                     **kwargs
                 ) -> List[Dict[Literal['role','content'],str]]:
                 """Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
@@ -1104,8 +1197,11 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                                                 If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
                     max_document_size (int):    An optional size limit of context documents in characters.
                     conditional (bool):         Whether to compute the compared values conditioned on the original generation (default: `True`).
-                    complementary (bool):       If `True` is passed and kernel SHAP approximation is active, samples will be piered complements (default: `True`). 
+                    complementary (bool):       If `True` is passed and kernel SHAP approximation is active, samples will be piered complements (default: `True`).
                     system (str):               An optional system prompt.
+                    fast (bool):                Decoding strategy forwarded to `self.compare(...)`: if `True` (default), a single
+                                                forward pass per batch; if `False`, iterative decoding with a KV cache (the tokenizer
+                                                must already be left-padded for `fast=True`, see `compare(...)`).
 
                 Returns:
                     A list of generated chats.
@@ -1186,7 +1282,8 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                     # generate probabilities:
                     self.compare(
                         [self.tokenizer.apply_chat_template(prmpt, tokenize=False) for prmpt in prompts_batch],
-                        'last' if conditional else None
+                        'last' if conditional else None,
+                        fast=fast
                     )
 
                     # print empty line:
@@ -1629,7 +1726,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
         raise NotImplementedError('ExplainableAutoModelForGeneration objects must be instantiated using the `from_pretrained` method.')
     
     @abstractmethod
-    def compare(self, inputs:List[str], outputs:Optional[Union[List[str], torch.LongTensor, Literal['last']]]=None, batch_size:int=1, **kwargs) -> torch.LongTensor:
+    def compare(self, inputs:List[str], outputs:Optional[Union[List[str], torch.LongTensor, Literal['last']]]=None, batch_size:int=1, *, fast:bool=True, **kwargs) -> torch.LongTensor:
         """Calculates the probability `p(outputs) = p(t_0) * p(t_1|t_0) * ... * p(t_n|t_0...t_(n-1))` of
         a specific output `outputs = [t_0, t_1, ..., t_n]` to happen given an input prompt `inputs`.
 
@@ -1641,6 +1738,10 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             outputs:    List of tokens `t_i` or (strings containing those) for which to compute the probability.
                         If set to `'last'`, the last generated sequence will be used (optional).
             batch_size: Batch size. Ignored if `len(inputs) > 1` or `outputs` not specified (optional).
+            fast:       If `True` (default), scores `outputs` via a single forward pass over the whole
+                        (left-padded input + output) sequence(s) at once. If `False`, iteratively, one
+                        token at a time with a KV cache (the original implementation). The two are
+                        expected to agree closely but not necessarily bit-for-bit.
 
         Returns:
             Tensor of generated token ids .
@@ -1655,6 +1756,7 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
             conditional:bool=True,
             complementary:Union[bool,Literal['no_mc']]=True,
             system:Optional[str]=None,
+            fast:bool=True,
             **kwargs
         ) -> List[Dict[Literal['role','content'],str]]:
         """Generates continuations of the passed input prompt(s) as well as perturbations for all retrieved documents.
@@ -1672,8 +1774,11 @@ class ExplainableAutoModelForGeneration(GeneratorExplanationBase, metaclass=ABCM
                                         If `inf` is passed, always computes the precise SHAP values.
                                         If `auto` is passed, `max_samples` get's the same value as `batch_size` (default: `auto`).
             conditional (bool):         Whether to compute the compared values conditioned on the original generation (default: `True`).
-            complementary (bool):       If `True` is passed and kernel SHAP approximation is active, samples will be piered complements (default: `True`). 
+            complementary (bool):       If `True` is passed and kernel SHAP approximation is active, samples will be piered complements (default: `True`).
             system (str):               An optional system prompt.
+            fast (bool):                Decoding strategy forwarded to `self.compare(...)`: if `True` (default), a single
+                                        forward pass per batch; if `False`, iterative decoding with a KV cache (the tokenizer
+                                        must already be left-padded for `fast=True`, see `compare(...)`).
 
         Returns:
             A list of generated chats.
