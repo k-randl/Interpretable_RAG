@@ -1,8 +1,12 @@
 # RAG-E
 
-[![Deploy PyPI](https://github.com/k-randl/Interpretable_RAG/actions/workflows/python-publish.yml/badge.svg?branch=main)](https://github.com/k-randl/Interpretable_RAG/actions/workflows/python-publish.yml)
+[![Deploy PyPI](https://github.com/k-randl/Interpretable_RAG/actions/workflows/python-publish.yml/badge.svg)](https://github.com/k-randl/Interpretable_RAG/actions/workflows/python-publish.yml)
 
 This project provides a framework for building and evaluating interpretable Retrieval-Augmented Generation (RAG) pipelines. The core of the project is the ability to explain the contribution of retrieved documents and query parts to the final generated output, using Shapley values.
+
+&emsp;&emsp;&emsp;![](https://github.com/k-randl/Interpretable_RAG/blob/main/.figures/example.svg)
+<br/>
+&emsp;&emsp;&emsp;<span><small>Example explanation.</small></span>
 
 ## Features
 
@@ -14,9 +18,19 @@ This project provides a framework for building and evaluating interpretable Retr
 
 ## Installation
 
-### Install source code fom GitHub
-This option is mainly useful for development or replication our experiments. First clone this repository.
-After cloning or downloading the repository, run the Linux shell script `./setup.sh`.
+### Option 1: install packet from PyPI
+This option is the recommended way to install RAG-E and suitable for most users. Simply run the following command:
+```bash
+pip install rag-exp
+```
+Enjoy!
+
+### Option 2: install source code fom GitHub
+This option is mainly useful for development or replication our experiments. First clone this repository using the following command:
+```bash
+git clone https://github.com/k-randl/Interpretable_RAG
+```
+After cloning or downloading the repository, run the Linux shell script [`./setup.sh`](https://github.com/k-randl/self-explaining_llms/blob/main/setup.sh).
 It will initialize the workspace by performing the following steps:
 
 1. It will install the required Python modules by running `pip install -r "./requirements.txt"`
@@ -27,7 +41,7 @@ It will initialize the workspace by performing the following steps:
 
 ### How to use RAG-E:
 
-The classes `ExplainableAutoModelForRetrieval` and `ExplainableAutoModelForGeneration` wrap Hugging Face [`transformers`](https://github.com/huggingface/transformers) models and provide the functionality to compute attribution scores.
+The classes [`ExplainableAutoModelForRetrieval`](https://github.com/k-randl/self-explaining_llms/blob/main/src/Interpretable_RAG/retrieval_online.py) and [`ExplainableAutoModelForGeneration`](https://github.com/k-randl/self-explaining_llms/blob/main/src/Interpretable_RAG/generation.py) wrap Hugging Face [`transformers`](https://github.com/huggingface/transformers) models and provide the functionality to compute attribution scores.
 For **retrieval**, RAG-E supports the following token attribution methods:
 
 - `.grad(...)`: Raw gradients towards the inputs of the last batch 
@@ -37,8 +51,8 @@ For **retrieval**, RAG-E supports the following token attribution methods:
   
 For **generation** RAG-E supports precise and Kernel-SHAP approximated Shapley Values for document attribution.
 
-The `ExplainableAutoModelForRAG` class combines these models to create the full interpretable RAG pipeline.
-Here is an Example with Llama 3.1 8B and Snowflake Arctic Embed v2 (*more examples in `scripts/demos`*):
+The [`ExplainableAutoModelForRAG`](https://github.com/k-randl/self-explaining_llms/blob/main/src/Interpretable_RAG/rag.py) class combines these models to create the full interpretable RAG pipeline.
+Here is an Example with Llama 3.1 8B and Snowflake Arctic Embed v2 (*more examples in [`scripts/demos`](https://github.com/k-randl/self-explaining_llms/blob/main/scripts/demos)*):
 ```python
 from src.Interpretable_RAG.rag import ExplainableAutoModelForRAG
 
@@ -116,7 +130,7 @@ plot_document_importance_rag(model, show:bool=True)
 ```
 
 ### Replicating our experiments:
-Replication our experiments requires installation **Option 2**. The main entry point for running experiments is the `scripts/run_pipeline.py` script. Here is an example of how to run it:
+Replication our experiments requires installation **Option 2**. The main entry point for running experiments is the [`scripts/run_pipeline.py`](https://github.com/k-randl/Interpretable_RAG/blob/main/scripts/run_pipeline.py) script. Here is an example of how to run it:
 
 ```bash
 python scripts/run_pipeline.py \
@@ -161,4 +175,4 @@ Contributions are welcome! Please feel free to submit a pull request or open an 
 
 ## License
 
-This project is licensed under the **GPL v3 License**. See the `LICENSE` file for details.
+This project is licensed under the **GPL v3 License**. See the [`LICENSE`](https://github.com/k-randl/Interpretable_RAG/blob/main/LICENSE) file for details.
